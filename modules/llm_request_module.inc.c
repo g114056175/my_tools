@@ -1524,6 +1524,51 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
             }
         }
     }
+    if (provider.kind == PROVIDER_ANTHROPIC) {
+        size_t body_cap;
+        free(body);
+        body = NULL;
+        if (image_path && image_path[0] && !img_b64) {
+            img_b64 = ReadFileBase64(image_path);
+            if (!img_b64) return DupPrintf("Failed to read screenshot: %s", image_path);
+        }
+        body_cap = strlen(model) + strlen(sys_esc ? sys_esc : "") + strlen(user_esc ? user_esc : "") +
+                   (img_b64 ? strlen(img_b64) : 0) + 640;
+        body = (char *)malloc(body_cap);
+        if (!body) {
+            free(img_b64);
+            free(sys_esc);
+            free(user_esc);
+            return NULL;
+        }
+        if (img_b64 && img_b64[0]) {
+            if (sys_esc) {
+                snprintf(body, body_cap,
+                         "{\"model\":\"%s\",\"max_tokens\":1024,\"temperature\":0.2,\"system\":\"%s\","
+                         "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
+                         "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"%s\"}}]}]}",
+                         model, sys_esc, user_esc, img_b64);
+            } else {
+                snprintf(body, body_cap,
+                         "{\"model\":\"%s\",\"max_tokens\":1024,\"temperature\":0.2,"
+                         "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
+                         "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"%s\"}}]}]}",
+                         model, user_esc, img_b64);
+            }
+        } else {
+            if (sys_esc) {
+                snprintf(body, body_cap,
+                         "{\"model\":\"%s\",\"max_tokens\":1024,\"temperature\":0.2,\"system\":\"%s\","
+                         "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+                         model, sys_esc, user_esc);
+            } else {
+                snprintf(body, body_cap,
+                         "{\"model\":\"%s\",\"max_tokens\":1024,\"temperature\":0.2,"
+                         "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+                         model, user_esc);
+            }
+        }
+    }
     free(sys_esc);
     free(user_esc);
     if (timing && body) timing->request_body_bytes += (ULONGLONG)strlen(body);
@@ -1614,6 +1659,12 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
         WCHAR header_api_w[512];
         snprintf(header_api, sizeof(header_api), "x-goog-api-key: %s", api_key);
         MultiByteToWideChar(CP_UTF8, 0, header_api, -1, header_api_w, 512);
+        WinHttpAddRequestHeaders(hRequest, header_api_w, -1, WINHTTP_ADDREQ_FLAG_ADD);
+    } else if (api_key[0] && provider.kind == PROVIDER_ANTHROPIC) {
+        char header_api[768];
+        WCHAR header_api_w[768];
+        snprintf(header_api, sizeof(header_api), "x-api-key: %s\r\nanthropic-version: 2023-06-01", api_key);
+        MultiByteToWideChar(CP_UTF8, 0, header_api, -1, header_api_w, 768);
         WinHttpAddRequestHeaders(hRequest, header_api_w, -1, WINHTTP_ADDREQ_FLAG_ADD);
     }
     BOOL ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, (LPVOID)body, (DWORD)strlen(body), (DWORD)strlen(body), 0);

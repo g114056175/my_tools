@@ -379,6 +379,8 @@ static int TinyWcsicmp(const wchar_t *a, const wchar_t *b) {
 #define ID_EDIT_ROUTE_HOTKEY 337
 #define ID_BTN_ROUTE_ADD 338
 #define ID_BTN_ROUTE_REMOVE 339
+#define ID_BTN_API_AUTO 340
+#define ID_BTN_ROUTE_API_AUTO 341
 
 #define WM_APP_RESPONSE (WM_APP + 1)
 #define WM_APP_TRAY (WM_APP + 2)
@@ -499,7 +501,8 @@ typedef struct StreamPayload {
 
 typedef enum ProviderKind {
     PROVIDER_OPENAI_COMPAT = 0,
-    PROVIDER_GOOGLE_GEMINI = 1
+    PROVIDER_GOOGLE_GEMINI = 1,
+    PROVIDER_ANTHROPIC = 2
 } ProviderKind;
 
 typedef struct ProviderRequestInfo {

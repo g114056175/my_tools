@@ -1,4 +1,8 @@
 static ProviderKind DetectProviderKind(const char *endpoint, const char *api_key) {
+    if ((api_key && strncmp(api_key, "sk-ant-", 7) == 0) ||
+        (endpoint && strstr(endpoint, "api.anthropic.com") != NULL)) {
+        return PROVIDER_ANTHROPIC;
+    }
     return ((api_key && strncmp(api_key, "AIza", 4) == 0) ||
             (endpoint && strstr(endpoint, "generativelanguage.googleapis.com") != NULL))
                ? PROVIDER_GOOGLE_GEMINI
@@ -21,6 +25,9 @@ static void ResolveProviderRequestInfo(ProviderRequestInfo *info, const char *en
     NormalizeEndpoint(info->endpoint);
     if (info->kind == PROVIDER_GOOGLE_GEMINI) {
         BuildGoogleEndpoint(info->endpoint, sizeof(info->endpoint), model);
+    } else if (info->kind == PROVIDER_ANTHROPIC) {
+        strncpy(info->endpoint, "https://api.anthropic.com/v1/messages", sizeof(info->endpoint) - 1);
+        info->endpoint[sizeof(info->endpoint) - 1] = 0;
     }
 }
 
@@ -41,6 +48,8 @@ static void NormalizeFriendlyEndpointAlias(char *s, int s_size) {
         strncpy(s, "https://openrouter.ai/api/v1/chat/completions", s_size - 1);
     } else if (_stricmp(buf + start, "google") == 0) {
         strncpy(s, "https://generativelanguage.googleapis.com", s_size - 1);
+    } else if (_stricmp(buf + start, "anthropic") == 0 || _stricmp(buf + start, "claude") == 0) {
+        strncpy(s, "https://api.anthropic.com/v1/messages", s_size - 1);
     }
     s[s_size - 1] = 0;
     NormalizeEndpoint(s);
@@ -93,6 +102,9 @@ static char *ExtractJsonStringByKey(const char *json, const char *key) {
 
 static char *ExtractProviderText(const ProviderRequestInfo *info, const char *json) {
     if (info && info->kind == PROVIDER_GOOGLE_GEMINI) {
+        return ExtractJsonStringByKey(json, "\"text\"");
+    }
+    if (info && info->kind == PROVIDER_ANTHROPIC) {
         return ExtractJsonStringByKey(json, "\"text\"");
     }
     return ExtractJsonStringByKey(json, "\"content\"");

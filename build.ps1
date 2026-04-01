@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $source = "main.cpp"
 $exe = $Output
 $libs = @(
-  "winhttp.lib", "user32.lib", "gdi32.lib", "advapi32.lib", "comdlg32.lib",
+  "winhttp.lib", "user32.lib", "gdi32.lib",
   "shell32.lib", "ole32.lib", "gdiplus.lib"
 )
 
@@ -56,10 +56,17 @@ function Show-BinarySize {
   }
 }
 
+function Remove-IntermediateFiles {
+  $obj = [IO.Path]::ChangeExtension($source, ".obj")
+  if (Test-Path $obj) {
+    Remove-Item -LiteralPath $obj -Force
+  }
+}
+
 function Compile-Msvc($clPath) {
   $flags = Get-MsvcFlags $Profile
   & $clPath @($flags.Cl) $source "/Fe:$exe" /link @($flags.Link) @($libs)
-  if ($LASTEXITCODE -eq 0) { Show-BinarySize }
+  if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize }
 }
 
 function Find-Tool($name) {
@@ -82,9 +89,9 @@ if (Test-Path $vswhere) {
     if (Test-Path $vcvars) {
       $flags = Get-MsvcFlags $Profile
       $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
-      $cmd = "`"$vcvars`" && cl $clPart"
-      & cmd.exe /c $cmd
-      if ($LASTEXITCODE -eq 0) { Show-BinarySize; exit 0 }
+    $cmd = "`"$vcvars`" && cl $clPart"
+    & cmd.exe /c $cmd
+      if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize; exit 0 }
     }
   }
 }
@@ -103,7 +110,7 @@ foreach ($vcvars in $fallbacks) {
     $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
     $cmd = "`"$vcvars`" && cl $clPart"
     & cmd.exe /c $cmd
-    if ($LASTEXITCODE -eq 0) { Show-BinarySize; exit 0 }
+    if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize; exit 0 }
   }
 }
 

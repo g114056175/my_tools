@@ -142,14 +142,14 @@ static void ShowWaitingOverlay(POINT anchor) {
 }
 
 static int StepOpacityTier(int current, int direction) {
-    static const int tiers[4] = {30, 100, 180, 255};
+    static const int tiers[6] = {5, 10, 30, 100, 180, 255};
     if (direction > 0) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 6; ++i) {
             if (tiers[i] > current) return tiers[i];
         }
-        return tiers[3];
+        return tiers[5];
     }
-    for (int i = 3; i >= 0; --i) {
+    for (int i = 5; i >= 0; --i) {
         if (tiers[i] < current) return tiers[i];
     }
     return tiers[0];

@@ -6,6 +6,449 @@ static const char *k_rag_validation_message =
     "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.";
 static const char *k_rag_validation_title = "Reference Data Validation";
 
+static void SaveModelRouteEditor(HWND hwnd);
+
+typedef enum ApiPresetKind {
+    API_PRESET_UNKNOWN = 0,
+    API_PRESET_GOOGLE,
+    API_PRESET_OPENROUTER,
+    API_PRESET_OPENAI,
+    API_PRESET_ANTHROPIC
+} ApiPresetKind;
+
+static int g_model_combo_refreshing = 0;
+static char g_basic_model_cache[160][128];
+static int g_basic_model_count = 0;
+static ApiPresetKind g_basic_model_kind = API_PRESET_UNKNOWN;
+static char g_route_model_cache[160][128];
+static int g_route_model_count = 0;
+static ApiPresetKind g_route_model_kind = API_PRESET_UNKNOWN;
+
+static ApiPresetKind GuessApiPreset(const char *endpoint, const char *api_key) {
+    if ((api_key && strncmp(api_key, "AIza", 4) == 0) ||
+        (endpoint && strstr(endpoint, "generativelanguage.googleapis.com"))) return API_PRESET_GOOGLE;
+    if ((api_key && strncmp(api_key, "sk-or-", 6) == 0) ||
+        (endpoint && strstr(endpoint, "openrouter.ai"))) return API_PRESET_OPENROUTER;
+    if ((api_key && strncmp(api_key, "sk-ant-", 7) == 0) ||
+        (endpoint && strstr(endpoint, "api.anthropic.com"))) return API_PRESET_ANTHROPIC;
+    if ((api_key && strncmp(api_key, "sk-", 3) == 0) ||
+        (endpoint && strstr(endpoint, "api.openai.com"))) return API_PRESET_OPENAI;
+    return API_PRESET_UNKNOWN;
+}
+
+static const char *PresetEndpoint(ApiPresetKind kind) {
+    switch (kind) {
+    case API_PRESET_GOOGLE: return "https://generativelanguage.googleapis.com";
+    case API_PRESET_OPENROUTER: return "https://openrouter.ai/api/v1/chat/completions";
+    case API_PRESET_OPENAI: return "https://api.openai.com/v1/chat/completions";
+    case API_PRESET_ANTHROPIC: return "https://api.anthropic.com/v1/messages";
+    default: return "";
+    }
+}
+
+static const char *PresetName(ApiPresetKind kind) {
+    switch (kind) {
+    case API_PRESET_GOOGLE: return "Google Gemini";
+    case API_PRESET_OPENROUTER: return "OpenRouter";
+    case API_PRESET_OPENAI: return "OpenAI";
+    case API_PRESET_ANTHROPIC: return "Anthropic Claude";
+    default: return "Unknown";
+    }
+}
+
+static int ContainsTextNoCase(const char *haystack, const char *needle) {
+    size_t nlen;
+    if (!needle || !needle[0]) return 1;
+    if (!haystack) return 0;
+    nlen = strlen(needle);
+    for (const char *p = haystack; *p; ++p) {
+        if (_strnicmp(p, needle, nlen) == 0) return 1;
+    }
+    return 0;
+}
+
+static void AddCachedModel(char models[][128], int *count, const char *model) {
+    char clean[128];
+    const char *src = model;
+    if (!models || !count || !model || !model[0] || *count >= 160) return;
+    if (strncmp(src, "models/", 7) == 0) src += 7;
+    strncpy(clean, src, sizeof(clean) - 1);
+    clean[sizeof(clean) - 1] = 0;
+    for (char *p = clean; *p; ++p) {
+        if (*p == '"' || *p == '\r' || *p == '\n') {
+            *p = 0;
+            break;
+        }
+    }
+    if (!clean[0] || strlen(clean) >= 127) return;
+    for (int i = 0; i < *count; ++i) {
+        if (_stricmp(models[i], clean) == 0) return;
+    }
+    strcpy(models[*count], clean);
+    (*count)++;
+}
+
+static char *ExtractJsonStringValue(const char *start, const char *end, const char *key, char *out, int out_size) {
+    const char *p = start;
+    size_t key_len;
+    if (!start || !key || !out || out_size <= 0) return NULL;
+    out[0] = 0;
+    key_len = strlen(key);
+    while ((p = strstr(p, key)) != NULL && (!end || p < end)) {
+        const char *colon = strchr(p + key_len, ':');
+        const char *q;
+        int n = 0;
+        if (!colon || (end && colon >= end)) return NULL;
+        q = colon + 1;
+        while ((!end || q < end) && (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')) q++;
+        if (!end || q < end) {
+            if (*q == '"') {
+                q++;
+                while ((!end || q < end) && *q && *q != '"' && n + 1 < out_size) {
+                    if (*q == '\\' && q[1]) q++;
+                    out[n++] = *q++;
+                }
+                out[n] = 0;
+                return out;
+            }
+        }
+        p += key_len;
+    }
+    return NULL;
+}
+
+static char *HttpGetUtf8(const char *url_utf8, const char *headers_utf8) {
+    WCHAR url_w[1024];
+    URL_COMPONENTS url;
+    WCHAR host_w[256];
+    WCHAR path_w[1024];
+    WCHAR extra_w[512];
+    WCHAR full_path_w[1536];
+    HINTERNET hSession = NULL;
+    HINTERNET hConnect = NULL;
+    HINTERNET hRequest = NULL;
+    DWORD flags;
+    DWORD status = 0;
+    DWORD status_size = sizeof(status);
+    char *resp = NULL;
+    size_t total = 0;
+    if (!url_utf8 || !url_utf8[0]) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, url_utf8, -1, url_w, (int)(sizeof(url_w) / sizeof(url_w[0]))) == 0) return NULL;
+    ZeroMemory(&url, sizeof(url));
+    url.dwStructSize = sizeof(url);
+    url.lpszHostName = host_w;
+    url.dwHostNameLength = sizeof(host_w) / sizeof(host_w[0]);
+    url.lpszUrlPath = path_w;
+    url.dwUrlPathLength = sizeof(path_w) / sizeof(path_w[0]);
+    url.lpszExtraInfo = extra_w;
+    url.dwExtraInfoLength = sizeof(extra_w) / sizeof(extra_w[0]);
+    if (!WinHttpCrackUrl(url_w, 0, 0, &url)) return NULL;
+    host_w[url.dwHostNameLength] = 0;
+    path_w[url.dwUrlPathLength] = 0;
+    extra_w[url.dwExtraInfoLength] = 0;
+    wcscpy(full_path_w, path_w);
+    if (extra_w[0]) wcsncat(full_path_w, extra_w, (sizeof(full_path_w) / sizeof(full_path_w[0])) - wcslen(full_path_w) - 1);
+    hSession = WinHttpOpen(L"LLMOverlay/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return NULL;
+    WinHttpSetTimeouts(hSession, 8000, 8000, 12000, 25000);
+    hConnect = WinHttpConnect(hSession, host_w, url.nPort, 0);
+    if (!hConnect) goto done;
+    flags = (url.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    hRequest = WinHttpOpenRequest(hConnect, L"GET", full_path_w, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) goto done;
+    WinHttpAddRequestHeaders(hRequest, L"Accept: application/json", -1, WINHTTP_ADDREQ_FLAG_ADD);
+    if (headers_utf8 && headers_utf8[0]) {
+        WCHAR headers_w[1024];
+        if (MultiByteToWideChar(CP_UTF8, 0, headers_utf8, -1, headers_w, (int)(sizeof(headers_w) / sizeof(headers_w[0]))) > 0) {
+            WinHttpAddRequestHeaders(hRequest, headers_w, -1, WINHTTP_ADDREQ_FLAG_ADD);
+        }
+    }
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0)) goto done;
+    if (!WinHttpReceiveResponse(hRequest, NULL)) goto done;
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+    resp = (char *)malloc(1);
+    if (!resp) goto done;
+    resp[0] = 0;
+    for (;;) {
+        char read_buf[4096];
+        DWORD read = 0;
+        char *n;
+        if (!WinHttpReadData(hRequest, read_buf, sizeof(read_buf) - 1, &read) || read == 0) break;
+        if (total + read > 512 * 1024) break;
+        n = (char *)realloc(resp, total + read + 1);
+        if (!n) break;
+        resp = n;
+        memcpy(resp + total, read_buf, read);
+        total += read;
+        resp[total] = 0;
+    }
+    if (status >= 400 || !resp || !resp[0]) {
+        free(resp);
+        resp = NULL;
+    }
+done:
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+    return resp;
+}
+
+static int ParseOpenRouterModels(const char *json, char models[][128], int *count) {
+    const char *p = json;
+    char id[128];
+    int before = count ? *count : 0;
+    if (!json || !models || !count) return 0;
+    while ((p = strchr(p, '{')) != NULL) {
+        const char *obj_start = p;
+        const char *q = p;
+        int depth = 0;
+        do {
+            if (*q == '{') depth++;
+            else if (*q == '}') depth--;
+            q++;
+        } while (*q && depth > 0);
+        if (depth == 0 && ExtractJsonStringValue(obj_start, q, "\"id\"", id, sizeof(id))) {
+            int prompt_free = strstr(obj_start, "\"prompt\":\"0\"") || strstr(obj_start, "\"prompt\":0");
+            int completion_free = strstr(obj_start, "\"completion\":\"0\"") || strstr(obj_start, "\"completion\":0");
+            if (strstr(id, ":free") ||
+                (prompt_free && completion_free)) {
+                AddCachedModel(models, count, id);
+            }
+        }
+        p = q;
+    }
+    return *count - before;
+}
+
+static int ParseGoogleModels(const char *json, char models[][128], int *count) {
+    const char *p = json;
+    char name[128];
+    int before = count ? *count : 0;
+    if (!json || !models || !count) return 0;
+    while ((p = strstr(p, "\"name\"")) != NULL) {
+        const char *next = strstr(p + 6, "\"name\"");
+        const char *method = strstr(p, "generateContent");
+        if (ExtractJsonStringValue(p, next, "\"name\"", name, sizeof(name)) &&
+            (strstr(name, "gemini") || strstr(name, "gemma")) &&
+            method && (!next || method < next)) {
+            AddCachedModel(models, count, name);
+        }
+        p += 6;
+    }
+    return *count - before;
+}
+
+static int ParseGenericIdModels(const char *json, char models[][128], int *count) {
+    const char *p = json;
+    char id[128];
+    int before = count ? *count : 0;
+    if (!json || !models || !count) return 0;
+    while ((p = strstr(p, "\"id\"")) != NULL) {
+        if (!ExtractJsonStringValue(p, NULL, "\"id\"", id, sizeof(id))) break;
+        AddCachedModel(models, count, id);
+        p += 4;
+    }
+    return *count - before;
+}
+
+static void AddComboItem(HWND combo, const char *text) {
+    if (combo && text && text[0]) SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+}
+
+static int FetchModelList(ApiPresetKind kind, const char *api_key, char models[][128], int *count) {
+    char *json = NULL;
+    char headers[640];
+    char url[768];
+    int added = 0;
+    if (!models || !count) return 0;
+    *count = 0;
+    switch (kind) {
+    case API_PRESET_OPENROUTER:
+        json = HttpGetUtf8("https://openrouter.ai/api/v1/models", NULL);
+        if (json) added = ParseOpenRouterModels(json, models, count);
+        break;
+    case API_PRESET_GOOGLE:
+        if (api_key && api_key[0]) snprintf(url, sizeof(url), "https://generativelanguage.googleapis.com/v1beta/models?key=%s&pageSize=1000", api_key);
+        else strcpy(url, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000");
+        json = HttpGetUtf8(url, NULL);
+        if (json) added = ParseGoogleModels(json, models, count);
+        break;
+    case API_PRESET_OPENAI:
+        if (!api_key || !api_key[0]) break;
+        snprintf(headers, sizeof(headers), "Authorization: Bearer %s", api_key);
+        json = HttpGetUtf8("https://api.openai.com/v1/models", headers);
+        if (json) added = ParseGenericIdModels(json, models, count);
+        break;
+    case API_PRESET_ANTHROPIC:
+        if (!api_key || !api_key[0]) break;
+        snprintf(headers, sizeof(headers), "x-api-key: %s\r\nanthropic-version: 2023-06-01", api_key);
+        json = HttpGetUtf8("https://api.anthropic.com/v1/models", headers);
+        if (json) added = ParseGenericIdModels(json, models, count);
+        break;
+    default:
+        break;
+    }
+    free(json);
+    return added;
+}
+
+static void PopulateFallbackModels(ApiPresetKind kind, char models[][128], int *count) {
+    if (!models || !count) return;
+    *count = 0;
+    switch (kind) {
+    case API_PRESET_GOOGLE:
+        AddCachedModel(models, count, "gemini-3.1-flash");
+        AddCachedModel(models, count, "gemini-3.1-flash-lite-preview");
+        AddCachedModel(models, count, "gemini-3-flash-preview");
+        AddCachedModel(models, count, "gemini-2.5-flash");
+        AddCachedModel(models, count, "gemini-2.5-flash-lite");
+        AddCachedModel(models, count, "gemini-2.0-flash");
+        AddCachedModel(models, count, "gemini-2.0-flash-lite");
+        AddCachedModel(models, count, "gemma-3-27b-it");
+        AddCachedModel(models, count, "gemma-3-12b-it");
+        break;
+    case API_PRESET_OPENROUTER:
+        AddCachedModel(models, count, "google/gemma-3-27b-it:free");
+        AddCachedModel(models, count, "google/gemma-3-12b-it:free");
+        AddCachedModel(models, count, "google/gemini-2.0-flash-exp:free");
+        AddCachedModel(models, count, "qwen/qwen3-coder:free");
+        AddCachedModel(models, count, "deepseek/deepseek-chat-v3-0324:free");
+        break;
+    case API_PRESET_OPENAI:
+        AddCachedModel(models, count, "gpt-5-mini");
+        AddCachedModel(models, count, "gpt-5-nano");
+        AddCachedModel(models, count, "gpt-4.1-mini");
+        AddCachedModel(models, count, "gpt-4.1-nano");
+        break;
+    case API_PRESET_ANTHROPIC:
+        AddCachedModel(models, count, "claude-sonnet-4-5");
+        AddCachedModel(models, count, "claude-haiku-4-5");
+        AddCachedModel(models, count, "claude-3-5-haiku-latest");
+        break;
+    default:
+        AddCachedModel(models, count, "gemini-2.5-flash");
+        AddCachedModel(models, count, "google/gemma-3-27b-it:free");
+        AddCachedModel(models, count, "qwen/qwen3-coder:free");
+        break;
+    }
+}
+
+static void MergeFallbackModels(ApiPresetKind kind, char models[][128], int *count) {
+    char fallback[160][128];
+    int fallback_count = 0;
+    PopulateFallbackModels(kind, fallback, &fallback_count);
+    for (int i = 0; i < fallback_count; ++i) {
+        AddCachedModel(models, count, fallback[i]);
+    }
+}
+
+static void PopulateModelCombo(HWND combo, char models[][128], int count, const char *filter, const char *current_model) {
+    DWORD edit_sel;
+    int sel_start;
+    int sel_end;
+    int text_len;
+    if (!combo) return;
+    edit_sel = (DWORD)SendMessageA(combo, CB_GETEDITSEL, 0, 0);
+    sel_start = LOWORD(edit_sel);
+    sel_end = HIWORD(edit_sel);
+    g_model_combo_refreshing = 1;
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < count; ++i) {
+        if (ContainsTextNoCase(models[i], filter)) AddComboItem(combo, models[i]);
+    }
+    if (current_model && current_model[0]) {
+        SetWindowTextA(combo, current_model);
+        text_len = (int)strlen(current_model);
+        if (sel_start < 0 || sel_start > text_len) sel_start = text_len;
+        if (sel_end < 0 || sel_end > text_len) sel_end = text_len;
+        if (sel_start == 0 && sel_end == 0) {
+            sel_start = text_len;
+            sel_end = text_len;
+        }
+        SendMessageA(combo, CB_SETEDITSEL, 0, MAKELPARAM(sel_start, sel_end));
+    }
+    g_model_combo_refreshing = 0;
+}
+
+static void PopulateModelComboFor(HWND hwnd, int model_id, const char *filter, const char *current_model) {
+    if (model_id == ID_EDIT_ROUTE_MODEL) {
+        PopulateModelCombo(GetDlgItem(hwnd, model_id), g_route_model_cache, g_route_model_count, filter, current_model);
+    } else {
+        PopulateModelCombo(GetDlgItem(hwnd, model_id), g_basic_model_cache, g_basic_model_count, filter, current_model);
+    }
+}
+
+static void RefreshModelSuggestionsFor(HWND hwnd, int endpoint_id, int key_id, int model_id) {
+    char endpoint[512];
+    char api_key[256];
+    char model[128];
+    ApiPresetKind kind;
+    endpoint[0] = 0;
+    api_key[0] = 0;
+    model[0] = 0;
+    GetDlgItemTextUtf8(hwnd, endpoint_id, endpoint, sizeof(endpoint));
+    GetDlgItemTextUtf8(hwnd, key_id, api_key, sizeof(api_key));
+    GetDlgItemTextUtf8(hwnd, model_id, model, sizeof(model));
+    kind = GuessApiPreset(endpoint, api_key);
+    if (model_id == ID_EDIT_ROUTE_MODEL) {
+        if (kind != g_route_model_kind || g_route_model_count == 0) {
+            g_route_model_kind = kind;
+            PopulateFallbackModels(kind, g_route_model_cache, &g_route_model_count);
+        }
+    } else {
+        if (kind != g_basic_model_kind || g_basic_model_count == 0) {
+            g_basic_model_kind = kind;
+            PopulateFallbackModels(kind, g_basic_model_cache, &g_basic_model_count);
+        }
+    }
+    PopulateModelComboFor(hwnd, model_id, "", model);
+}
+
+static void AutoFillApiFor(HWND hwnd, int endpoint_id, int key_id, int model_id, int is_route) {
+    char endpoint[512];
+    char api_key[256];
+    char model[128];
+    ApiPresetKind kind;
+    endpoint[0] = 0;
+    api_key[0] = 0;
+    model[0] = 0;
+    GetDlgItemTextUtf8(hwnd, endpoint_id, endpoint, sizeof(endpoint));
+    GetDlgItemTextUtf8(hwnd, key_id, api_key, sizeof(api_key));
+    GetDlgItemTextUtf8(hwnd, model_id, model, sizeof(model));
+    NormalizeFriendlyEndpointAlias(endpoint, sizeof(endpoint));
+    kind = GuessApiPreset(endpoint, api_key);
+    if (kind != API_PRESET_UNKNOWN && PresetEndpoint(kind)[0]) {
+        strncpy(endpoint, PresetEndpoint(kind), sizeof(endpoint) - 1);
+        endpoint[sizeof(endpoint) - 1] = 0;
+    }
+    SetDlgItemTextUtf8(hwnd, endpoint_id, endpoint);
+    {
+        char (*cache)[128] = is_route ? g_route_model_cache : g_basic_model_cache;
+        int *count = is_route ? &g_route_model_count : &g_basic_model_count;
+        ApiPresetKind *cache_kind = is_route ? &g_route_model_kind : &g_basic_model_kind;
+        *cache_kind = kind;
+        if (!FetchModelList(kind, api_key, cache, count)) {
+            PopulateFallbackModels(kind, cache, count);
+        } else if (kind == API_PRESET_GOOGLE && *count < 4) {
+            MergeFallbackModels(kind, cache, count);
+        }
+    }
+    PopulateModelComboFor(hwnd, model_id, "", model);
+    if (!model[0] && SendMessageA(GetDlgItem(hwnd, model_id), CB_GETCOUNT, 0, 0) > 0) {
+        SendMessageA(GetDlgItem(hwnd, model_id), CB_SETCURSEL, 0, 0);
+    }
+    ApplyRuntimeConfigFromControls(hwnd);
+    if (is_route) SaveModelRouteEditor(hwnd);
+    g_settings_dirty = 1;
+    if (kind == API_PRESET_UNKNOWN) {
+        MessageBoxA(hwnd, "Could not infer provider from this key yet. Endpoint aliases still work: google, openrouter, openai, anthropic.", "Auto API", MB_OK | MB_ICONINFORMATION);
+    } else {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "Detected %s. Online model suggestions were refreshed.", PresetName(kind));
+        MessageBoxA(hwnd, msg, "Auto API", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
 static void SetDlgItemTextUtf8(HWND hwnd, int id, const char *utf8) {
     HWND ctrl = GetDlgItem(hwnd, id);
     if (!ctrl) return;
@@ -176,6 +619,7 @@ static void LoadModelRouteEditor(HWND hwnd) {
         if (GetDlgItem(hwnd, ID_EDIT_ROUTE_EP)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_EP), FALSE);
         if (GetDlgItem(hwnd, ID_EDIT_ROUTE_KEY)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_KEY), FALSE);
         if (GetDlgItem(hwnd, ID_EDIT_ROUTE_MODEL)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_MODEL), FALSE);
+        if (GetDlgItem(hwnd, ID_BTN_ROUTE_API_AUTO)) EnableWindow(GetDlgItem(hwnd, ID_BTN_ROUTE_API_AUTO), FALSE);
         if (GetDlgItem(hwnd, ID_EDIT_ROUTE_PROMPT)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_PROMPT), FALSE);
         if (GetDlgItem(hwnd, ID_EDIT_ROUTE_HOTKEY)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_HOTKEY), FALSE);
         if (GetDlgItem(hwnd, ID_BTN_ROUTE_ADD)) EnableWindow(GetDlgItem(hwnd, ID_BTN_ROUTE_ADD), TRUE);
@@ -194,6 +638,7 @@ static void LoadModelRouteEditor(HWND hwnd) {
     SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_EP, g_cfg.model_route_endpoint[g_route_index]);
     SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_KEY, g_cfg.model_route_api_key[g_route_index]);
     SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_MODEL, g_cfg.model_route_model[g_route_index]);
+    RefreshModelSuggestionsFor(hwnd, ID_EDIT_ROUTE_EP, ID_EDIT_ROUTE_KEY, ID_EDIT_ROUTE_MODEL);
     SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_PROMPT, g_cfg.model_route_prompt[g_route_index]);
     SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_HOTKEY, g_cfg.model_route_hotkey[g_route_index]);
 
@@ -202,6 +647,7 @@ static void LoadModelRouteEditor(HWND hwnd) {
     if (GetDlgItem(hwnd, ID_EDIT_ROUTE_EP)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_EP), TRUE);
     if (GetDlgItem(hwnd, ID_EDIT_ROUTE_KEY)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_KEY), TRUE);
     if (GetDlgItem(hwnd, ID_EDIT_ROUTE_MODEL)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_MODEL), TRUE);
+    if (GetDlgItem(hwnd, ID_BTN_ROUTE_API_AUTO)) EnableWindow(GetDlgItem(hwnd, ID_BTN_ROUTE_API_AUTO), TRUE);
     if (GetDlgItem(hwnd, ID_EDIT_ROUTE_PROMPT)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_PROMPT), TRUE);
     if (GetDlgItem(hwnd, ID_EDIT_ROUTE_HOTKEY)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_ROUTE_HOTKEY), TRUE);
     if (GetDlgItem(hwnd, ID_BTN_ROUTE_ADD)) EnableWindow(GetDlgItem(hwnd, ID_BTN_ROUTE_ADD), TRUE);
@@ -438,6 +884,7 @@ static void ApplyConfigToSettingsControls(HWND hwnd, const AppConfig *cfg) {
     SetDlgItemTextUtf8(hwnd, 101, cfg->endpoint);
     SetDlgItemTextUtf8(hwnd, 102, cfg->api_key);
     SetDlgItemTextUtf8(hwnd, 103, cfg->model);
+    RefreshModelSuggestionsFor(hwnd, 101, 102, 103);
     SetDlgItemTextUtf8(hwnd, 104, cfg->system_prompt);
 
     if (GetDlgItem(hwnd, ID_CHK_RAG_ENABLED)) CheckDlgButton(hwnd, ID_CHK_RAG_ENABLED, cfg->rag_enabled ? BST_CHECKED : BST_UNCHECKED);
@@ -513,7 +960,7 @@ static void ApplyRuntimeConfigFromControls(HWND hwnd) {
         GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
         {
             int op = ParsePositiveIntAscii(obuf);
-            g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+            g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 5, 255);
         }
         if (g_hwnd_overlay) SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA);
     }
@@ -668,7 +1115,8 @@ static void ApplyBasicResponsiveLayout(HWND hwnd) {
     if (full_w < 420) full_w = 420;
     MoveCtrl(hwnd, 101, field_x, 40, full_w, 22);
     MoveCtrl(hwnd, 102, field_x, 72, full_w, 22);
-    MoveCtrl(hwnd, 103, field_x, 104, full_w, 22);
+    MoveCtrl(hwnd, 103, field_x, 104, full_w - 62, 140);
+    MoveCtrl(hwnd, ID_BTN_API_AUTO, field_x + full_w - 56, 104, 56, 24);
     MoveCtrl(hwnd, 104, field_x, 136, full_w, 66);
 
     ask_x = cw - margin - ask_w;
@@ -765,7 +1213,8 @@ static void CreateBasicPageControls(HWND hwnd) {
     CreateWindowA("STATIC", "API Key:", WS_CHILD | WS_VISIBLE, left_x, 72, 100, 20, hwnd, (HMENU)ID_LBL_APIKEY, GetModuleHandle(NULL), NULL);
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x, 72, 500, 22, hwnd, (HMENU)102, GetModuleHandle(NULL), NULL);
     CreateWindowA("STATIC", "Model:", WS_CHILD | WS_VISIBLE, left_x, 104, 100, 20, hwnd, (HMENU)ID_LBL_MODEL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x, 104, 500, 22, hwnd, (HMENU)103, GetModuleHandle(NULL), NULL);
+    CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | WS_VSCROLL, field_x, 104, 438, 140, hwnd, (HMENU)103, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Auto", WS_CHILD | WS_VISIBLE, field_x + 444, 104, 56, 24, hwnd, (HMENU)ID_BTN_API_AUTO, GetModuleHandle(NULL), NULL);
 
     CreateWindowA("STATIC", "Prompt:", WS_CHILD | WS_VISIBLE, left_x, 136, 120, 20, hwnd, (HMENU)ID_LBL_SYSTEM, GetModuleHandle(NULL), NULL);
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, field_x, 136, 500, 66, hwnd, (HMENU)104, GetModuleHandle(NULL), NULL);
@@ -836,7 +1285,8 @@ static void CreateAdvancedPageControls(HWND hwnd) {
     CreateWindowA("STATIC", "API Key:", WS_CHILD | WS_VISIBLE, 20, 244, 100, 20, hwnd, (HMENU)ID_LBL_ROUTE_KEY, GetModuleHandle(NULL), NULL);
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 242, 470, 22, hwnd, (HMENU)ID_EDIT_ROUTE_KEY, GetModuleHandle(NULL), NULL);
     CreateWindowA("STATIC", "Model Name:", WS_CHILD | WS_VISIBLE, 20, 272, 100, 20, hwnd, (HMENU)ID_LBL_ROUTE_MODEL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 270, 470, 22, hwnd, (HMENU)ID_EDIT_ROUTE_MODEL, GetModuleHandle(NULL), NULL);
+    CreateWindowA("COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | WS_VSCROLL, 130, 270, 408, 140, hwnd, (HMENU)ID_EDIT_ROUTE_MODEL, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Auto", WS_CHILD | WS_VISIBLE, 544, 270, 56, 24, hwnd, (HMENU)ID_BTN_ROUTE_API_AUTO, GetModuleHandle(NULL), NULL);
     CreateWindowA("STATIC", "Prompt:", WS_CHILD | WS_VISIBLE, 20, 300, 100, 20, hwnd, (HMENU)ID_LBL_ROUTE_PROMPT, GetModuleHandle(NULL), NULL);
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 130, 298, 470, 56, hwnd, (HMENU)ID_EDIT_ROUTE_PROMPT, GetModuleHandle(NULL), NULL);
     CreateWindowA("BUTTON", "Quick Test", WS_CHILD | WS_VISIBLE, 130, 362, 90, 24, hwnd, (HMENU)ID_BTN_TEST_ROUTE, GetModuleHandle(NULL), NULL);
@@ -875,7 +1325,7 @@ static int IsAdvancedOnlyId(int id) {
            id == ID_LBL_ROUTE_KIND || id == ID_CMB_ROUTE_KIND || id == ID_LBL_ROUTE_SLOT || id == ID_CMB_ROUTE_SLOT ||
            id == ID_EDIT_ROUTE_HOTKEY || id == ID_BTN_ROUTE_ADD || id == ID_BTN_ROUTE_REMOVE || id == ID_LBL_ROUTE_EP || id == ID_EDIT_ROUTE_EP ||
            id == ID_LBL_ROUTE_KEY || id == ID_EDIT_ROUTE_KEY || id == ID_LBL_ROUTE_MODEL || id == ID_EDIT_ROUTE_MODEL ||
-           id == ID_LBL_ROUTE_PROMPT || id == ID_EDIT_ROUTE_PROMPT || id == ID_BTN_TEST_ROUTE;
+           id == ID_BTN_ROUTE_API_AUTO || id == ID_LBL_ROUTE_PROMPT || id == ID_EDIT_ROUTE_PROMPT || id == ID_BTN_TEST_ROUTE;
 }
 
 static void BuildSettingsLayout(HWND hwnd) {
@@ -921,6 +1371,14 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (id == ID_CHK_STREAM && HIWORD(wparam) == BN_CLICKED) { g_cfg.stream = (IsDlgButtonChecked(hwnd, ID_CHK_STREAM) == BST_CHECKED); g_settings_dirty = 1; return 0; }
         if (id == ID_CHK_RAG_ENABLED && HIWORD(wparam) == BN_CLICKED) { g_cfg.rag_enabled = (IsDlgButtonChecked(hwnd, ID_CHK_RAG_ENABLED) == BST_CHECKED); UpdateRagControlsEnabled(hwnd); g_settings_dirty = 1; return 0; }
         if (id == ID_BTN_BROWSE_RAG && HIWORD(wparam) == BN_CLICKED) { BrowseRagSourcePath(hwnd); return 0; }
+        if (id == ID_BTN_API_AUTO && HIWORD(wparam) == BN_CLICKED) {
+            AutoFillApiFor(hwnd, 101, 102, 103, 0);
+            return 0;
+        }
+        if (id == ID_BTN_ROUTE_API_AUTO && HIWORD(wparam) == BN_CLICKED) {
+            AutoFillApiFor(hwnd, ID_EDIT_ROUTE_EP, ID_EDIT_ROUTE_KEY, ID_EDIT_ROUTE_MODEL, 1);
+            return 0;
+        }
 
         if (id == ID_BTN_ROUTE_ADD && HIWORD(wparam) == BN_CLICKED) {
             SaveModelRouteEditor(hwnd);
@@ -1005,7 +1463,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
             {
                 int op = ParsePositiveIntAscii(obuf);
-                g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+                g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 5, 255);
             }
             if (g_hwnd_overlay) { SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA); InvalidateRect(g_hwnd_overlay, NULL, TRUE); }
             g_settings_dirty = 1;
@@ -1021,10 +1479,39 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 SetDlgItemTextUtf8(hwnd, 101, endpoint);
                 strncpy(g_cfg.endpoint, endpoint, sizeof(g_cfg.endpoint) - 1);
                 g_cfg.endpoint[sizeof(g_cfg.endpoint) - 1] = 0;
+                RefreshModelSuggestionsFor(hwnd, 101, 102, 103);
             } else {
                 SetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_EP, endpoint);
+                RefreshModelSuggestionsFor(hwnd, ID_EDIT_ROUTE_EP, ID_EDIT_ROUTE_KEY, ID_EDIT_ROUTE_MODEL);
                 SaveModelRouteEditor(hwnd);
             }
+            return 0;
+        }
+
+        if ((id == 102 || id == ID_EDIT_ROUTE_KEY) && HIWORD(wparam) == EN_KILLFOCUS) {
+            if (id == 102) RefreshModelSuggestionsFor(hwnd, 101, 102, 103);
+            else {
+                RefreshModelSuggestionsFor(hwnd, ID_EDIT_ROUTE_EP, ID_EDIT_ROUTE_KEY, ID_EDIT_ROUTE_MODEL);
+                SaveModelRouteEditor(hwnd);
+            }
+            return 0;
+        }
+
+        if ((id == 103 || id == ID_EDIT_ROUTE_MODEL) && HIWORD(wparam) == CBN_EDITCHANGE) {
+            char filter[128];
+            if (g_model_combo_refreshing) return 0;
+            GetDlgItemTextUtf8(hwnd, id, filter, sizeof(filter));
+            PopulateModelComboFor(hwnd, id, filter, filter);
+            ApplyRuntimeConfigFromControls(hwnd);
+            if (id == ID_EDIT_ROUTE_MODEL) SaveModelRouteEditor(hwnd);
+            g_settings_dirty = 1;
+            return 0;
+        }
+
+        if ((id == 103 || id == ID_EDIT_ROUTE_MODEL) && HIWORD(wparam) == CBN_SELCHANGE) {
+            ApplyRuntimeConfigFromControls(hwnd);
+            if (id == ID_EDIT_ROUTE_MODEL) SaveModelRouteEditor(hwnd);
+            g_settings_dirty = 1;
             return 0;
         }
 

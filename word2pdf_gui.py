@@ -3,7 +3,19 @@ import os
 import queue
 import threading
 from pathlib import Path
-from tkinter import BooleanVar, END, LEFT, RIGHT, BOTH, DISABLED, NORMAL, StringVar, filedialog, messagebox, ttk
+from tkinter import (
+    BooleanVar,
+    END,
+    LEFT,
+    RIGHT,
+    BOTH,
+    DISABLED,
+    NORMAL,
+    StringVar,
+    filedialog,
+    messagebox,
+    ttk,
+)
 import tkinter as tk
 
 try:
@@ -26,7 +38,11 @@ WD_EXPORT_OPTIMIZE_FOR_PRINT = 0
 
 
 def is_word_file(path: Path) -> bool:
-    return path.is_file() and not path.name.startswith("~$") and path.suffix.lower() in WORD_EXTENSIONS
+    return (
+        path.is_file()
+        and not path.name.startswith("~$")
+        and path.suffix.lower() in WORD_EXTENSIONS
+    )
 
 
 def collect_word_files(paths):
@@ -56,6 +72,7 @@ def collect_word_files(paths):
 def unique_pdf_path(pdf_path: Path, overwrite: bool) -> Path:
     if overwrite or not pdf_path.exists():
         return pdf_path
+
     index = 1
     while True:
         candidate = pdf_path.with_name(f"{pdf_path.stem}_{index}{pdf_path.suffix}")
@@ -128,108 +145,6 @@ def convert_files_to_pdf(files, output_folder, overwrite, log_callback, progress
         pythoncom.CoUninitialize()
 
 
-class FileFolderPicker(tk.Toplevel):
-    def __init__(self, parent, start_dir):
-        super().__init__(parent)
-        self.title("選擇檔案")
-        self.geometry("760x520")
-        self.minsize(680, 440)
-        self.transient(parent)
-        self.grab_set()
-        self.selected_paths = None
-        self.current_dir = Path(start_dir).expanduser().resolve()
-
-        self.path_var = StringVar(value=str(self.current_dir))
-        self._build_ui()
-        self._load_dir()
-
-    def _build_ui(self):
-        top = ttk.Frame(self, padding=10)
-        top.pack(fill="x")
-        ttk.Button(top, text="上一層", command=self._go_parent).pack(side=LEFT)
-        self.path_entry = ttk.Entry(top, textvariable=self.path_var)
-        self.path_entry.pack(side=LEFT, fill="x", expand=True, padx=8)
-        ttk.Button(top, text="前往", command=self._go_to_path).pack(side=RIGHT)
-
-        frame = ttk.Frame(self, padding=(10, 0, 10, 10))
-        frame.pack(fill=BOTH, expand=True)
-        columns = ("type", "name")
-        self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="extended")
-        self.tree.heading("type", text="類型")
-        self.tree.heading("name", text="名稱")
-        self.tree.column("type", width=80, anchor="center", stretch=False)
-        self.tree.column("name", width=560, anchor="w")
-        self.tree.pack(side=LEFT, fill=BOTH, expand=True)
-        self.tree.bind("<Double-1>", self._handle_double_click)
-
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        scrollbar.pack(side=RIGHT, fill="y")
-        self.tree.configure(yscrollcommand=scrollbar.set)
-
-        bottom = ttk.Frame(self, padding=(10, 0, 10, 10))
-        bottom.pack(fill="x")
-        ttk.Label(bottom, text="可選取 Word 檔案；選取資料夾時會加入該層 Word 檔，不會遞迴。").pack(side=LEFT)
-        ttk.Button(bottom, text="取消", command=self._cancel).pack(side=RIGHT)
-        ttk.Button(bottom, text="選取", command=self._confirm).pack(side=RIGHT, padx=(0, 8))
-
-    def _load_dir(self):
-        self.path_var.set(str(self.current_dir))
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        rows = []
-        try:
-            for item in self.current_dir.iterdir():
-                if item.is_dir():
-                    rows.append(("資料夾", item.name, item))
-                elif is_word_file(item):
-                    rows.append(("Word", item.name, item))
-        except OSError as exc:
-            messagebox.showerror("無法開啟資料夾", str(exc), parent=self)
-            return
-
-        rows.sort(key=lambda row: (row[0] != "資料夾", row[1].lower()))
-        for file_type, name, path in rows:
-            self.tree.insert("", END, iid=str(path), values=(file_type, name))
-
-    def _go_parent(self):
-        parent = self.current_dir.parent
-        if parent != self.current_dir:
-            self.current_dir = parent
-            self._load_dir()
-
-    def _go_to_path(self):
-        path = Path(self.path_var.get()).expanduser()
-        if path.is_dir():
-            self.current_dir = path.resolve()
-            self._load_dir()
-        elif path.exists():
-            self.selected_paths = [path.resolve()]
-            self.destroy()
-        else:
-            messagebox.showinfo("路徑不存在", "請輸入有效的檔案或資料夾路徑。", parent=self)
-
-    def _handle_double_click(self, _event):
-        row = self.tree.focus()
-        if not row:
-            return
-        path = Path(row)
-        if path.is_dir():
-            self.current_dir = path.resolve()
-            self._load_dir()
-
-    def _confirm(self):
-        selection = self.tree.selection()
-        if not selection:
-            return
-        self.selected_paths = [Path(item).resolve() for item in selection]
-        self.destroy()
-
-    def _cancel(self):
-        self.selected_paths = None
-        self.destroy()
-
-
 class WordToPdfApp:
     def __init__(self, root):
         self.root = root
@@ -265,36 +180,73 @@ class WordToPdfApp:
         header = ttk.Frame(container)
         header.pack(fill="x")
         ttk.Label(header, text="Word 批次轉 PDF", style="Title.TLabel").pack(side=LEFT)
-        ttk.Label(header, text="使用 Microsoft Word 原生匯出，優先保留文字編碼與版面。", style="Hint.TLabel").pack(side=RIGHT)
+        ttk.Label(
+            header,
+            text="使用 Microsoft Word 原生匯出，優先保留文字編碼與版面。",
+            style="Hint.TLabel",
+        ).pack(side=RIGHT)
 
         controls = ttk.Frame(container)
         controls.pack(fill="x", pady=(14, 8))
 
-        self.select_button = ttk.Button(controls, text="選擇檔案", command=self.open_picker)
-        self.select_button.pack(side=LEFT)
-        ttk.Button(controls, text="清空全部", command=self.clear_files).pack(side=LEFT, padx=(8, 0))
-        ttk.Checkbutton(controls, text="覆蓋同名 PDF", variable=self.overwrite_existing).pack(side=LEFT, padx=(18, 0))
-        self.status_label = ttk.Label(controls, text="已處理: 0/0")
+        self.select_file_button = ttk.Button(
+            controls, text="選擇檔案", command=self.add_files
+        )
+        self.select_file_button.pack(side=LEFT)
+        self.select_folder_button = ttk.Button(
+            controls, text="選擇資料夾", command=self.add_folder
+        )
+        self.select_folder_button.pack(side=LEFT, padx=(8, 0))
+        ttk.Button(controls, text="清空全部", command=self.clear_files).pack(
+            side=LEFT, padx=(8, 0)
+        )
+        ttk.Checkbutton(
+            controls,
+            text="覆蓋同名 PDF",
+            variable=self.overwrite_existing,
+        ).pack(side=LEFT, padx=(18, 0))
+        self.status_label = ttk.Label(controls, text="已處理: 0/0    待處理: 0")
         self.status_label.pack(side=LEFT, padx=(18, 0))
-        self.start_button = ttk.Button(controls, text="開始轉換", command=self.start_conversion)
+        self.start_button = ttk.Button(
+            controls, text="開始轉換", command=self.start_conversion
+        )
         self.start_button.pack(side=RIGHT)
 
         output_frame = ttk.LabelFrame(container, text="輸出位置")
         output_frame.pack(fill="x", pady=(0, 10))
-        ttk.Radiobutton(output_frame, text="輸出到每個 Word 檔同一個資料夾", value="same", variable=self.output_mode, command=self.refresh_output_controls).pack(side=LEFT, padx=(8, 12), pady=8)
-        ttk.Radiobutton(output_frame, text="輸出到指定資料夾", value="custom", variable=self.output_mode, command=self.refresh_output_controls).pack(side=LEFT, padx=(0, 8), pady=8)
+
+        ttk.Radiobutton(
+            output_frame,
+            text="輸出到每個 Word 檔同一個資料夾",
+            value="same",
+            variable=self.output_mode,
+            command=self.refresh_output_controls,
+        ).pack(side=LEFT, padx=(8, 12), pady=8)
+        ttk.Radiobutton(
+            output_frame,
+            text="輸出到指定資料夾",
+            value="custom",
+            variable=self.output_mode,
+            command=self.refresh_output_controls,
+        ).pack(side=LEFT, padx=(0, 8), pady=8)
+
         self.output_entry = ttk.Entry(output_frame, textvariable=self.custom_output_dir)
         self.output_entry.pack(side=LEFT, fill="x", expand=True, padx=(0, 8), pady=8)
-        self.output_button = ttk.Button(output_frame, text="選擇", command=self.choose_output_folder)
+        self.output_button = ttk.Button(
+            output_frame, text="選擇", command=self.choose_output_folder
+        )
         self.output_button.pack(side=RIGHT, padx=(0, 8), pady=8)
 
         self.drop_frame = ttk.LabelFrame(container, text="待處理 Word 檔案")
         self.drop_frame.pack(fill=BOTH, expand=True)
+
         list_frame = ttk.Frame(self.drop_frame, padding=8)
         list_frame.pack(fill=BOTH, expand=True)
 
         columns = ("remove", "name", "folder")
-        self.file_list = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        self.file_list = ttk.Treeview(
+            list_frame, columns=columns, show="headings", selectmode="extended"
+        )
         self.file_list.heading("remove", text="移除")
         self.file_list.heading("name", text="檔案名稱")
         self.file_list.heading("folder", text="所在資料夾")
@@ -304,6 +256,7 @@ class WordToPdfApp:
         self.file_list.pack(side=LEFT, fill=BOTH, expand=True)
         self.file_list.bind("<ButtonRelease-1>", self.handle_list_click)
         self.file_list.bind("<Delete>", lambda _event: self.remove_selected_files())
+
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_list.yview)
         scrollbar.pack(side=RIGHT, fill="y")
         self.file_list.configure(yscrollcommand=scrollbar.set)
@@ -313,6 +266,7 @@ class WordToPdfApp:
         self.log_text = tk.Text(log_frame, height=7, wrap="word")
         self.log_text.pack(fill=BOTH, expand=True, padx=8, pady=8)
         self.log_text.configure(state=DISABLED)
+
         self.refresh_output_controls()
 
     def setup_drop_target(self):
@@ -323,13 +277,25 @@ class WordToPdfApp:
         self.drop_frame.drop_target_register(DND_FILES)
         self.drop_frame.dnd_bind("<<Drop>>", self.handle_drop)
 
-    def open_picker(self):
+    def add_files(self):
         if self.worker and self.worker.is_alive():
             return
-        picker = FileFolderPicker(self.root, Path.home())
-        self.root.wait_window(picker)
-        if picker.selected_paths:
-            self.add_paths(picker.selected_paths)
+        paths = filedialog.askopenfilenames(
+            title="選擇 Word 檔案",
+            filetypes=[
+                ("Word files", "*.doc *.docx"),
+                ("All files", "*.*"),
+            ],
+        )
+        if paths:
+            self.add_paths(paths)
+
+    def add_folder(self):
+        if self.worker and self.worker.is_alive():
+            return
+        folder = filedialog.askdirectory(title="選擇包含 Word 檔案的資料夾")
+        if folder:
+            self.add_paths([folder])
 
     def choose_output_folder(self):
         folder = filedialog.askdirectory(title="選擇 PDF 輸出資料夾")
@@ -358,14 +324,18 @@ class WordToPdfApp:
         new_files = collect_word_files(paths)
         existing = {str(path).lower() for path in self.files}
         added = 0
+
         for path in new_files:
             key = str(path).lower()
             if key in existing:
                 continue
             self.files.append(path)
-            self.file_list.insert("", END, iid=str(path), values=("X", path.name, str(path.parent)))
+            self.file_list.insert(
+                "", END, iid=str(path), values=("X", path.name, str(path.parent))
+            )
             existing.add(key)
             added += 1
+
         if added:
             self.log(f"已加入 {added} 個 Word 檔。")
         else:
@@ -422,6 +392,7 @@ class WordToPdfApp:
             return
         if self.worker and self.worker.is_alive():
             return
+
         output_folder = self.get_selected_output_folder()
         if output_folder is False:
             return
@@ -435,7 +406,11 @@ class WordToPdfApp:
         target_text = "原檔同資料夾" if output_folder is None else str(output_folder)
         self.log(f"開始轉換 {len(files)} 個檔案。輸出位置：{target_text}")
 
-        self.worker = threading.Thread(target=self.run_conversion, args=(files, output_folder, overwrite), daemon=True)
+        self.worker = threading.Thread(
+            target=self.run_conversion,
+            args=(files, output_folder, overwrite),
+            daemon=True,
+        )
         self.worker.start()
 
     def run_conversion(self, files, output_folder, overwrite):
@@ -445,7 +420,9 @@ class WordToPdfApp:
                 output_folder,
                 overwrite,
                 lambda message: self.events.put(("log", message)),
-                lambda current, total, word_path: self.events.put(("progress", current, total, word_path)),
+                lambda current, total, word_path: self.events.put(
+                    ("progress", current, total, word_path)
+                ),
             )
             self.events.put(("done", None))
         except Exception as exc:
@@ -476,13 +453,15 @@ class WordToPdfApp:
 
     def update_status(self):
         if self.worker and self.worker.is_alive():
-            self.status_label.configure(text=f"已處理: {self.processed_count}/{self.total_count}")
+            text = f"已處理: {self.processed_count}/{self.total_count}"
         else:
-            self.status_label.configure(text=f"已處理: {self.processed_count}/{self.total_count}    待處理: {len(self.files)}")
+            text = f"已處理: {self.processed_count}/{self.total_count}    待處理: {len(self.files)}"
+        self.status_label.configure(text=text)
 
     def set_controls_enabled(self, enabled):
         state = NORMAL if enabled else DISABLED
-        self.select_button.configure(state=state)
+        self.select_file_button.configure(state=state)
+        self.select_folder_button.configure(state=state)
         self.start_button.configure(state=state)
 
     def log(self, message):

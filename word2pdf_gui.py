@@ -207,10 +207,6 @@ class WordToPdfApp:
         ).pack(side=LEFT, padx=(18, 0))
         self.status_label = ttk.Label(controls, text="已處理: 0/0    待處理: 0")
         self.status_label.pack(side=LEFT, padx=(18, 0))
-        self.start_button = ttk.Button(
-            controls, text="開始轉換", command=self.start_conversion
-        )
-        self.start_button.pack(side=RIGHT)
 
         output_frame = ttk.LabelFrame(container, text="輸出位置")
         output_frame.pack(fill="x", pady=(0, 10))
@@ -266,6 +262,13 @@ class WordToPdfApp:
         self.log_text = tk.Text(log_frame, height=7, wrap="word")
         self.log_text.pack(fill=BOTH, expand=True, padx=8, pady=8)
         self.log_text.configure(state=DISABLED)
+
+        action_frame = ttk.Frame(container)
+        action_frame.pack(fill="x", pady=(10, 0))
+        self.start_button = ttk.Button(
+            action_frame, text="開始轉換", command=self.start_conversion
+        )
+        self.start_button.pack(side=RIGHT)
 
         self.refresh_output_controls()
 

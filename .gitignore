@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
+*.spec
 
-dist/Word2PDF-Batch-Folder/
+dist/*
+!dist/Word2PDF-Batch.exe

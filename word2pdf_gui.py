@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import ctypes
 import os
 import queue
 import threading
@@ -17,6 +18,7 @@ from tkinter import (
     ttk,
 )
 import tkinter as tk
+from ctypes import wintypes
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -35,6 +37,41 @@ except ImportError:
 WORD_EXTENSIONS = {".doc", ".docx"}
 WD_EXPORT_FORMAT_PDF = 17
 WD_EXPORT_OPTIMIZE_FOR_PRINT = 0
+OFN_ALLOWMULTISELECT = 0x00000200
+OFN_EXPLORER = 0x00080000
+OFN_ENABLESIZING = 0x00800000
+OFN_HIDEREADONLY = 0x00000004
+OFN_NOVALIDATE = 0x00000100
+OFN_PATHMUSTEXIST = 0x00000800
+SELECT_FOLDER_PLACEHOLDER = "選擇此資料夾"
+
+
+class OPENFILENAMEW(ctypes.Structure):
+    _fields_ = [
+        ("lStructSize", wintypes.DWORD),
+        ("hwndOwner", wintypes.HWND),
+        ("hInstance", wintypes.HINSTANCE),
+        ("lpstrFilter", wintypes.LPCWSTR),
+        ("lpstrCustomFilter", wintypes.LPWSTR),
+        ("nMaxCustFilter", wintypes.DWORD),
+        ("nFilterIndex", wintypes.DWORD),
+        ("lpstrFile", wintypes.LPWSTR),
+        ("nMaxFile", wintypes.DWORD),
+        ("lpstrFileTitle", wintypes.LPWSTR),
+        ("nMaxFileTitle", wintypes.DWORD),
+        ("lpstrInitialDir", wintypes.LPCWSTR),
+        ("lpstrTitle", wintypes.LPCWSTR),
+        ("Flags", wintypes.DWORD),
+        ("nFileOffset", wintypes.WORD),
+        ("nFileExtension", wintypes.WORD),
+        ("lpstrDefExt", wintypes.LPCWSTR),
+        ("lCustData", wintypes.LPARAM),
+        ("lpfnHook", wintypes.LPVOID),
+        ("lpTemplateName", wintypes.LPCWSTR),
+        ("pvReserved", wintypes.LPVOID),
+        ("dwReserved", wintypes.DWORD),
+        ("FlagsEx", wintypes.DWORD),
+    ]
 
 
 def is_word_file(path: Path) -> bool:
@@ -67,6 +104,56 @@ def collect_word_files(paths):
                 seen.add(key)
                 found.append(resolved)
     return found
+
+
+def parse_open_file_buffer(buffer_value):
+    parts = buffer_value.split("\0")
+    parts = [part for part in parts if part]
+    if not parts:
+        return []
+    if len(parts) == 1:
+        path = Path(parts[0])
+        if path.name == SELECT_FOLDER_PLACEHOLDER and path.parent.is_dir():
+            return [path.parent]
+        return [path]
+    base_dir = Path(parts[0])
+    paths = [base_dir / name for name in parts[1:]]
+    if (
+        len(paths) == 1
+        and paths[0].name == SELECT_FOLDER_PLACEHOLDER
+        and paths[0].parent.is_dir()
+    ):
+        return [paths[0].parent]
+    return paths
+
+
+def native_select_files_or_folder(owner):
+    buffer_size = 65536
+    file_buffer = ctypes.create_unicode_buffer(buffer_size)
+    file_buffer.value = SELECT_FOLDER_PLACEHOLDER
+    filter_text = "Word files (*.doc;*.docx)\0*.doc;*.docx\0All files (*.*)\0*.*\0\0"
+
+    dialog = OPENFILENAMEW()
+    dialog.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+    dialog.hwndOwner = owner.winfo_id()
+    dialog.lpstrFilter = filter_text
+    dialog.nFilterIndex = 1
+    dialog.lpstrFile = ctypes.cast(file_buffer, wintypes.LPWSTR)
+    dialog.nMaxFile = buffer_size
+    dialog.lpstrTitle = "選擇 Word 檔案或資料夾"
+    dialog.Flags = (
+        OFN_EXPLORER
+        | OFN_ALLOWMULTISELECT
+        | OFN_ENABLESIZING
+        | OFN_HIDEREADONLY
+        | OFN_NOVALIDATE
+        | OFN_PATHMUSTEXIST
+    )
+
+    ok = ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(dialog))
+    if not ok:
+        return []
+    return [path.resolve() for path in parse_open_file_buffer(file_buffer.value)]
 
 
 def unique_pdf_path(pdf_path: Path, overwrite: bool) -> Path:
@@ -193,10 +280,6 @@ class WordToPdfApp:
             controls, text="選擇檔案", command=self.add_files
         )
         self.select_file_button.pack(side=LEFT)
-        self.select_folder_button = ttk.Button(
-            controls, text="選擇資料夾", command=self.add_folder
-        )
-        self.select_folder_button.pack(side=LEFT, padx=(8, 0))
         ttk.Button(controls, text="清空全部", command=self.clear_files).pack(
             side=LEFT, padx=(8, 0)
         )
@@ -205,7 +288,7 @@ class WordToPdfApp:
             text="覆蓋同名 PDF",
             variable=self.overwrite_existing,
         ).pack(side=LEFT, padx=(18, 0))
-        self.status_label = ttk.Label(controls, text="已處理: 0/0    待處理: 0")
+        self.status_label = ttk.Label(controls, text="待處理: 0")
         self.status_label.pack(side=LEFT, padx=(18, 0))
 
         output_frame = ttk.LabelFrame(container, text="輸出位置")
@@ -283,22 +366,9 @@ class WordToPdfApp:
     def add_files(self):
         if self.worker and self.worker.is_alive():
             return
-        paths = filedialog.askopenfilenames(
-            title="選擇 Word 檔案",
-            filetypes=[
-                ("Word files", "*.doc *.docx"),
-                ("All files", "*.*"),
-            ],
-        )
+        paths = native_select_files_or_folder(self.root)
         if paths:
-            self.add_paths(paths)
-
-    def add_folder(self):
-        if self.worker and self.worker.is_alive():
-            return
-        folder = filedialog.askdirectory(title="選擇包含 Word 檔案的資料夾")
-        if folder:
-            self.add_paths([folder])
+            self.add_selected_paths(paths)
 
     def choose_output_folder(self):
         folder = filedialog.askdirectory(title="選擇 PDF 輸出資料夾")
@@ -344,6 +414,23 @@ class WordToPdfApp:
         else:
             self.log("沒有找到新的 .doc 或 .docx 檔。")
         self.update_status()
+
+    def add_selected_paths(self, paths):
+        folders = [path for path in paths if Path(path).is_dir()]
+        files = [path for path in paths if Path(path).is_file()]
+        if folders and files:
+            self.log("不可同時選擇資料夾與 Word 檔案，請分開加入。")
+            return
+        if len(folders) > 1:
+            self.log("一次請選擇一個資料夾。")
+            return
+        if folders:
+            before = len(self.files)
+            self.add_paths(folders)
+            if len(self.files) == before:
+                self.log(f"資料夾內沒有 doc/docx 檔案：{folders[0]}")
+            return
+        self.add_paths(files)
 
     def clear_files(self):
         if self.worker and self.worker.is_alive():
@@ -455,16 +542,11 @@ class WordToPdfApp:
         self.root.after(100, self.process_events)
 
     def update_status(self):
-        if self.worker and self.worker.is_alive():
-            text = f"已處理: {self.processed_count}/{self.total_count}"
-        else:
-            text = f"已處理: {self.processed_count}/{self.total_count}    待處理: {len(self.files)}"
-        self.status_label.configure(text=text)
+        self.status_label.configure(text=f"待處理: {len(self.files)}")
 
     def set_controls_enabled(self, enabled):
         state = NORMAL if enabled else DISABLED
         self.select_file_button.configure(state=state)
-        self.select_folder_button.configure(state=state)
         self.start_button.configure(state=state)
 
     def log(self, message):

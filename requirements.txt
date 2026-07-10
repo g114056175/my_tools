@@ -1,0 +1,3 @@
+pywin32>=306
+tkinterdnd2>=0.4.3
+pyinstaller>=6.0

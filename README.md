@@ -13,6 +13,7 @@
 | 兩版一起下載 | [整合 ZIP](https://github.com/g114056175/VoiceCapture/releases/download/v3.0.2/VoiceCaptureLite-Windows-v3.0.2-2.2.1.zip) | 約 58.91 MiB |
 
 適用 Windows 10／11 x64，需有可用播放裝置與 Windows 媒體元件。ZIP 先解壓再執行；EXE 尚未簽章，請只從本儲存庫的 Release 下載，不需停用防毒或系統保護。
+下載後可用 [SHA-256 校驗檔](https://github.com/g114056175/VoiceCapture/releases/download/v3.0.2/VoiceCaptureLite-RELEASE-SHA256SUMS.txt) 核對檔案。
 
 ## 畫面
 

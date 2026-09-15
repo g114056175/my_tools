@@ -1,4 +1,5 @@
 #include "Audio.hpp"
+#include "EditSession.hpp"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -21,7 +22,7 @@ namespace {
 constexpr COLORREF bg=RGB(18,26,38), card=RGB(13,29,46), waveBg=RGB(7,17,31), outline=RGB(36,67,91);
 constexpr COLORREF text=RGB(226,238,250), muted=RGB(146,165,187), cyan=RGB(56,189,248), orange=RGB(245,158,11);
 constexpr COLORREF gray=RGB(72,91,113), green=RGB(35,131,93), red=RGB(163,55,69), blue=RGB(24,86,124), amber=RGB(136,89,26);
-constexpr int ID_SOURCE=100, ID_WINDOW=101, ID_FORMAT=102, ID_QUALITY=103, ID_START=104, ID_END=105;
+constexpr int ID_SOURCE=100, ID_WINDOW=101, ID_FORMAT=102, ID_QUALITY=103, ID_START=104, ID_END=105, ID_GAIN=106;
 constexpr UINT WM_JOB_DONE=WM_APP+1, WM_TRIM_EDIT=WM_APP+2;
 struct R { int l=0,t=0,r=0,b=0; int w()const{return r-l;} int h()const{return b-t;} bool hit(int x,int y)const{return x>=l&&x<r&&y>=t&&y<b;} };
 R box(int x,int y,int w,int h){return {x,y,x+w,y+h};}
@@ -34,6 +35,15 @@ std::wstring timeText(double sec,int precision=2){
     if(precision)s<<L"."<<std::setw(precision)<<fraction; return s.str();
 }
 std::wstring number(double n,int decimals=2){std::wostringstream s;s<<std::fixed<<std::setprecision(decimals)<<n;return s.str();}
+bool parseTime(const std::wstring& value,double& seconds){
+    const auto colon=value.find(L':');wchar_t* end=nullptr;
+    if(colon==std::wstring::npos){seconds=wcstod(value.c_str(),&end);return end!=value.c_str()&&!*end&&std::isfinite(seconds)&&seconds>=0;}
+    const auto minutes=value.substr(0,colon),tail=value.substr(colon+1);
+    if(minutes.empty()||tail.empty()||minutes.find_first_not_of(L"0123456789")!=std::wstring::npos)return false;
+    double m=wcstod(minutes.c_str(),&end);if(*end||!std::isfinite(m))return false;
+    double s=wcstod(tail.c_str(),&end);if(end==tail.c_str()||*end||!std::isfinite(s)||s<0||s>=60)return false;
+    seconds=m*60+s;return std::isfinite(seconds);
+}
 std::wstring errorWide(const std::exception& e){int n=MultiByteToWideChar(CP_UTF8,0,e.what(),-1,nullptr,0); if(n<=0)return L"操作失敗";std::wstring w(size_t(n),0);MultiByteToWideChar(CP_UTF8,0,e.what(),-1,w.data(),n);w.pop_back();return w;}
 std::wstring tempPath(){wchar_t buf[MAX_PATH];GetTempPathW(MAX_PATH,buf);return (std::filesystem::path(buf)/L"VoiceCaptureLiteNative"/L"capture.wav").wstring();}
 void clearFile(const std::wstring& path){std::error_code ec;std::filesystem::remove(std::filesystem::path(path),ec);}
@@ -64,7 +74,9 @@ BOOL CALLBACK enumerate(HWND hwnd,LPARAM opaque){
     out.push_back({hwnd,pid,title,process});return TRUE;
 }
 class App {
+    friend struct AppLayoutTest;
     HWND hwnd_=nullptr,source_=nullptr,window_=nullptr,format_=nullptr,quality_=nullptr,startEdit_=nullptr,endEdit_=nullptr;
+    HWND gainEdit_=nullptr;
     HBRUSH controlBrush_=CreateSolidBrush(RGB(27,42,59)); HFONT font_=nullptr,mono_=nullptr;
     int W_=920,H_=480;double dpi_=1;
     bool processCap_=false,trim_=false,recording_=false,stopping_=false,busy_=false,closing_=false,updatingEdits_=false,navVisible_=false;
@@ -72,15 +84,17 @@ class App {
     double duration_=0,viewStart_=0,viewLength_=0,selectionStart_=0,selectionEnd_=0,position_=0;
     std::vector<float> peaks_;float peakMax_=1;
     audio::Wave wave_;audio::Player player_;audio::Recorder recorder_;
+    EditSession editSession_;
     std::wstring temp_=tempPath(),fileLabel_=L"錄音",jobLabel_,status_=L"就緒",focusKey_;
     std::vector<WindowEntry> windows_;std::vector<Button> buttons_;
     R card_,waveRect_,navRect_,playRect_,trimRow_,exportRow_;
     std::thread job_; std::function<void()> jobApply_;std::wstring jobError_;
     int jobKind_=0;std::wstring pending_,exportTarget_;audio::Wave jobWave_;std::vector<float> jobPeaks_;
+    bool jobPreserveSelection_=false;
     double recordTime_=0;
     uint64_t recordStartMs_=0,pauseStartMs_=0,pausedMs_=0;
     static LRESULT CALLBACK proc(HWND h,UINT m,WPARAM w,LPARAM l){App* a=(App*)GetWindowLongPtrW(h,GWLP_USERDATA);if(m==WM_NCCREATE){a=(App*)((CREATESTRUCTW*)l)->lpCreateParams;a->hwnd_=h;SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)a);}return a?a->message(m,w,l):DefWindowProcW(h,m,w,l);}
-    static LRESULT CALLBACK editProc(HWND h,UINT m,WPARAM w,LPARAM l){if(m==WM_KEYDOWN&&w==VK_RETURN){PostMessageW(GetParent(h),WM_TRIM_EDIT,0,0);SetFocus(GetParent(h));return 0;}return CallWindowProcW((WNDPROC)GetPropW(h,L"oldproc"),h,m,w,l);}
+    static LRESULT CALLBACK editProc(HWND h,UINT m,WPARAM w,LPARAM l){if(m==WM_KEYDOWN&&w==VK_RETURN){PostMessageW(GetParent(h),WM_TRIM_EDIT,GetDlgCtrlID(h),0);SetFocus(GetParent(h));return 0;}return CallWindowProcW((WNDPROC)GetPropW(h,L"oldproc"),h,m,w,l);}
     static LRESULT CALLBACK comboProc(HWND h,UINT m,WPARAM w,LPARAM l){
         auto old=(WNDPROC)GetPropW(h,L"oldproc");LRESULT result=CallWindowProcW(old,h,m,w,l);
         if(m==WM_PAINT||m==WM_PRINTCLIENT){
@@ -109,7 +123,7 @@ class App {
     void button(const wchar_t* key,const wchar_t* title,R r,COLORREF c=blue,COLORREF edge=outline,bool enabled=true){buttons_.push_back({key,title,r,c,edge,enabled});}
     void layout();void paint();void paintWave(HDC dc);void paintNav(HDC dc);
     void refreshWindows();void controls();void loadWave(const std::wstring& label,std::vector<float> known={});
-    void setView(double start,double length);void updateSelection();void updateEdits();double rangeStart()const{return trim_?selectionStart_:0;}double rangeEnd()const{return trim_?selectionEnd_:duration_;}
+    void setView(double start,double length);bool updateSelection();void updateEdits();bool finishEdit(bool keep);double rangeStart()const{return trim_?selectionStart_:0;}double rangeEnd()const{return trim_?selectionEnd_:duration_;}
     double xTime(double x)const{return std::clamp(viewStart_+(x-waveRect_.l-12)/std::max(1,waveRect_.w()-24)*viewLength_,0.0,duration_);}
     double timeX(double t)const{return waveRect_.l+12+(t-viewStart_)/std::max(.001,viewLength_)*(waveRect_.w()-24);}
     void seek(double t);void click(const std::wstring& key);void beginJob(int kind,const std::wstring& pending,const std::wstring& target,std::function<void()> work);
@@ -131,25 +145,33 @@ void App::layout(){
         move(source_,box(72,20,180,31));move(window_,box(328,20,W_-455,31));
         button(L"refresh",L"↻  重新整理",box(W_-116,20,96,31),RGB(27,42,59),outline,!recording_&&!busy_);
     }
-    button(L"record",recording_?L"■  結束錄製":L"●  開始錄製",box(20,57,126,35),recording_?red:green,recording_?RGB(239,123,135):RGB(70,186,141),!busy_);
+    button(L"record",recording_?L"■  結束錄製":L"●  開始錄製",box(20,57,126,35),recording_?red:green,recording_?RGB(239,123,135):RGB(70,186,141),!busy_&&!trim_);
     button(L"recordPause",recorder_.paused()?L"▶  繼續錄製":L"Ⅱ  暫停錄製",box(154,57,109,35),!recording_?RGB(28,44,64):recorder_.paused()?green:amber,!recording_?RGB(48,70,94):recorder_.paused()?RGB(70,186,141):RGB(223,168,73),recording_&&!stopping_);
-    button(L"import",L"匯入音檔",box(W_-168,57,91,35),RGB(27,42,59),outline,!recording_&&!busy_);
-    button(L"delete",L"清除",box(W_-69,57,49,35),RGB(27,42,59),outline,!recording_&&!busy_&&duration_>0);
+    button(L"import",L"匯入音檔",box(W_-168,57,91,35),RGB(27,42,59),outline,!recording_&&!busy_&&!trim_);
+    button(L"delete",L"清除",box(W_-69,57,49,35),RGB(27,42,59),outline,!recording_&&!busy_&&!trim_&&duration_>0);
     int bottomReserve=trim_?213:174;
     card_=box(20,110,W_-40,std::max(170,H_-110-bottomReserve));
     button(L"fit",L"全部",box(card_.r-278,card_.t+11,49,30),RGB(27,42,59),outline,duration_>0&&!recording_&&!busy_);
     button(L"suggested",L"建議 · 30 秒",box(card_.r-223,card_.t+11,106,30),RGB(27,42,59),outline,duration_>0&&!recording_&&!busy_);
     navVisible_=duration_>0&&!recording_&&viewLength_<duration_-.000001;
-    waveRect_=box(card_.l+12,card_.t+47,card_.w()-24,card_.b-card_.t-(navVisible_?86:59));
-    navRect_=box(card_.l+21,card_.b-28,card_.w()-42,16);
+    // Reserve the navigator lane even when hidden, keeping the ruler stationary.
+    waveRect_=box(card_.l+12,card_.t+47,card_.w()-24,card_.h()-81);
+    navRect_=box(card_.l+21,card_.b-23,card_.w()-42,11);
     playRect_=box(20,card_.b+16,100,36);
     button(L"play",player_.playing()?L"Ⅱ  暫停":L"▶  播放",playRect_,player_.playing()?amber:blue,player_.playing()?RGB(223,168,73):RGB(50,134,181),duration_>0&&!recording_&&!busy_);
     if(trim_){
-        button(L"cancelTrim",L"取消裁切",box(128,card_.b+16,83,36),RGB(27,42,59),outline,duration_>0&&!busy_);
-        button(L"confirmTrim",L"確定裁切",box(219,card_.b+16,89,36),blue,RGB(50,134,181),duration_>0&&!busy_);
-    }else button(L"trim",L"裁切",box(128,card_.b+16,70,36),RGB(27,42,59),outline,duration_>0&&!busy_);
+        button(L"keepEdit",L"保留編輯",box(128,card_.b+16,89,36),blue,RGB(50,134,181),duration_>0&&!busy_);
+        button(L"cancelTrim",L"取消編輯",box(225,card_.b+16,89,36),RGB(27,42,59),outline,duration_>0&&!busy_);
+    }else button(L"trim",L"編輯",box(128,card_.b+16,70,36),RGB(27,42,59),outline,duration_>0&&!recording_&&!busy_);
     trimRow_=box(20,card_.b+62,W_-40,29);exportRow_=box(20,card_.b+(trim_?107:68),W_-40,36);
-    move(startEdit_,box(92,trimRow_.t,84,27),trim_);move(endEdit_,box(264,trimRow_.t,84,27),trim_);
+    move(startEdit_,box(370,card_.b+20,100,27),trim_);move(endEdit_,box(526,card_.b+20,100,27),trim_);
+    move(gainEdit_,box(154,trimRow_.t,70,29),trim_);
+    if(trim_){
+        button(L"remove",L"移除",box(20,trimRow_.t,70,29),RGB(27,42,59),outline,!busy_);
+        button(L"gain",L"套用音量",box(232,trimRow_.t,89,29),blue,outline,!busy_);
+        button(L"mute",L"靜音",box(329,trimRow_.t,70,29),RGB(27,42,59),outline,!busy_);
+        button(L"confirmTrim",L"裁切保留",box(407,trimRow_.t,89,29),blue,RGB(50,134,181),!busy_);
+    }
     move(format_,box(57,exportRow_.t,91,35));move(quality_,box(196,exportRow_.t,146,35),SendMessageW(format_,CB_GETCURSEL,0,0)==1);
     button(L"export",trim_?L"匯出選取片段  ↗":L"匯出音檔  ↗",box(W_-(trim_?180:148),exportRow_.t,trim_?160:128,36),blue,RGB(50,134,181),duration_>0&&!recording_&&!busy_);
     InvalidateRect(hwnd_,nullptr,FALSE);
@@ -157,7 +179,7 @@ void App::layout(){
 void App::paintWave(HDC dc){
     roundRect(dc,waveRect_,11,waveBg);int innerL=waveRect_.l+12,innerR=waveRect_.r-12;
     int plotH=std::max(30,waveRect_.h()-30),plotT=waveRect_.t,plotB=plotT+plotH,mid=(plotT+plotB)/2;
-    if(peaks_.empty()){label(dc,L"錄製或匯入音檔後，即可預覽與裁切",box(waveRect_.l+18,mid-18,waveRect_.w()-40,28),muted);return;}
+    if(peaks_.empty()){label(dc,L"錄製或匯入音檔後，即可預覽與編輯",box(waveRect_.l+18,mid-18,waveRect_.w()-40,28),muted);return;}
     HRGN clip=CreateRectRgn(innerL,plotT,innerR,plotB);SelectClipRgn(dc,clip);DeleteObject(clip);
     int bars=std::max(1,(innerR-innerL)/5);size_t count=peaks_.size();
     for(int i=0;i<bars;i++){
@@ -204,9 +226,10 @@ void App::paint(){
     std::wstring meta=duration_>0?(recording_?L"錄製中":fileLabel_)+L" · "+number(duration_,2)+L" 秒 · "+number((recording_?recorder_.rate():wave_.rate)/1000.0,1)+L" kHz":L"拖入 MP3 / WAV，或開始錄製";
     label(dc,meta,box(card_.l+13,card_.t+12,card_.w()-310,29),muted);
     if(duration_>0)label(dc,L"顯示 "+number(viewLength_,viewLength_>=100?0:2)+L" 秒",box(card_.r-111,card_.t+12,99,29),muted,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);
-    SelectObject(dc,mono_);label(dc,timeText(position_)+L" / "+timeText(duration_),box(W_-225,card_.b+17,205,34),muted,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);SelectObject(dc,font_);
-    if(trim_){label(dc,L"開始（秒）",box(20,trimRow_.t,70,27),muted);label(dc,L"結束（秒）",box(192,trimRow_.t,70,27),muted);
-        label(dc,L"選取 "+number(selectionEnd_-selectionStart_)+L" 秒",box(366,trimRow_.t,160,27),RGB(125,211,252));}
+    SelectObject(dc,mono_);label(dc,timeText(position_)+L" / "+timeText(duration_),box(W_-225,trim_?trimRow_.t:card_.b+17,205,trim_?29:34),muted,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);SelectObject(dc,font_);
+    if(trim_){label(dc,L"開始",box(330,card_.b+20,38,27),muted);label(dc,L"結束",box(486,card_.b+20,38,27),muted);
+        label(dc,L"選取 "+timeText(selectionEnd_-selectionStart_),box(638,card_.b+20,W_-658,27),RGB(125,211,252));
+        label(dc,L"± dB",box(104,trimRow_.t,48,29),muted);}
     label(dc,L"輸出",box(20,exportRow_.t,32,35),muted);label(dc,L"音質",box(160,exportRow_.t,32,35),muted);
     bool mp3=SendMessageW(format_,CB_GETCURSEL,0,0)==1;
     if(!mp3)label(dc,wave_.format==3?L"Float 32-bit · 不壓縮":L"PCM 16-bit · 不壓縮",box(195,exportRow_.t,153,35),muted);
@@ -235,6 +258,7 @@ void App::controls(){
     if(quality_)EnableWindow(quality_,edit&&SendMessageW(format_,CB_GETCURSEL,0,0)==1);
     if(startEdit_)EnableWindow(startEdit_,edit&&trim_);
     if(endEdit_)EnableWindow(endEdit_,edit&&trim_);
+    if(gainEdit_)EnableWindow(gainEdit_,edit&&trim_);
     layout();
 }
 void App::setView(double start,double length){
@@ -246,23 +270,40 @@ void App::setView(double start,double length){
 }
 void App::updateEdits(){
     if(!trim_||updatingEdits_)return;updatingEdits_=true;
-    if(GetFocus()!=startEdit_)SetWindowTextW(startEdit_,number(selectionStart_).c_str());
-    if(GetFocus()!=endEdit_)SetWindowTextW(endEdit_,number(selectionEnd_).c_str());
+    if(GetFocus()!=startEdit_)SetWindowTextW(startEdit_,timeText(selectionStart_).c_str());
+    if(GetFocus()!=endEdit_)SetWindowTextW(endEdit_,timeText(selectionEnd_).c_str());
     updatingEdits_=false;
 }
-void App::updateSelection(){
-    if(!trim_||duration_<=0)return;
+bool App::updateSelection(){
+    if(!trim_||duration_<=0||busy_)return false;
     wchar_t a[100]{},b[100]{};GetWindowTextW(startEdit_,a,100);GetWindowTextW(endEdit_,b,100);
-    wchar_t *ea=nullptr,*eb=nullptr;double start=wcstod(a,&ea),end=wcstod(b,&eb);
-    if(ea==a||eb==b||*ea||*eb||!std::isfinite(start)||!std::isfinite(end)||start<0||end<=start||end>duration_+.0005){status_=L"請輸入有效秒數：開始需早於結束，且不得超過音檔長度。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
+    double start=0,end=0;bool valid=parseTime(a,start)&&parseTime(b,end);
+    // Display rounding must not silently change sample-accurate handle positions.
+    if(a==timeText(selectionStart_))start=selectionStart_;
+    if(b==timeText(selectionEnd_))end=selectionEnd_;
+    if(!valid||start<0||end<=start||end>duration_+.0005){status_=L"請輸入有效時間（分:秒，例如 01:23.45）：開始需早於結束，且不得超過音檔長度。";InvalidateRect(hwnd_,nullptr,FALSE);return false;}
+    if(start==selectionStart_&&end==selectionEnd_)return true;
     player_.pause();selectionStart_=start;selectionEnd_=std::min(duration_,end);position_=std::clamp(position_,selectionStart_,selectionEnd_);
-    player_.seek(position_,selectionEnd_);status_=L"已更新裁切範圍";InvalidateRect(hwnd_,nullptr,FALSE);
+    player_.seek(position_,selectionEnd_);status_=L"已更新編輯範圍";updateEdits();InvalidateRect(hwnd_,nullptr,FALSE);return true;
 }
 void App::loadWave(const std::wstring& label,std::vector<float> known){
-    wave_=audio::openWave(temp_);if(!wave_.frames())throw std::runtime_error("Working WAV has no samples");
+    wave_=audio::openWave(editSession_.active()?editSession_.path():temp_);if(!wave_.frames())throw std::runtime_error("Working WAV has no samples");
     peaks_=known.empty()?audio::peaks(wave_):std::move(known);peakMax_=std::max(0.01f,*std::max_element(peaks_.begin(),peaks_.end()));
-    player_.open(wave_);duration_=wave_.duration();viewStart_=0;viewLength_=std::min(duration_,30.0);
-    trim_=false;selectionStart_=0;selectionEnd_=duration_;position_=0;fileLabel_=label;recordTime_=duration_;controls();
+    duration_=wave_.duration();viewStart_=0;viewLength_=std::min(duration_,30.0);
+    trim_=editSession_.active();selectionStart_=0;selectionEnd_=duration_;position_=0;fileLabel_=label;recordTime_=duration_;
+    player_.open(wave_);controls();updateEdits();
+}
+bool App::finishEdit(bool keep){
+    if(!trim_||busy_||recording_)return false;
+    player_.pause();controls();
+    if(!confirm(keep?L"保留編輯":L"取消編輯",keep?
+        L"確定保留本次所有編輯，並更新工作音檔？\n\n會保留完整編輯結果，不會只儲存目前選取範圍。匯入的來源檔案不受影響。":
+        L"確定捨棄本次所有編輯，回到開始編輯前的音檔？"))return false;
+    player_.close();
+    try{if(keep)editSession_.commit();else editSession_.cancel();}
+    catch(...){try{player_.open(wave_);}catch(...){}throw;}
+    trim_=false;loadWave(fileLabel_,keep?std::move(peaks_):std::vector<float>{});
+    status_=keep?L"已保留編輯":L"已取消編輯，回復編輯前的音檔";controls();return true;
 }
 std::wstring App::openDialog(){
     wchar_t file[32768]{};OPENFILENAMEW dialog{};dialog.lStructSize=sizeof dialog;dialog.hwndOwner=hwnd_;dialog.lpstrFile=file;dialog.nMaxFile=32768;
@@ -285,9 +326,16 @@ void App::finishJob(){
     if(job_.joinable())job_.join();busy_=false;
     try{
         if(!jobError_.empty())throw std::runtime_error("Audio job failed");
-        if(jobKind_==1||jobKind_==2){
-            player_.close();replaceFile(pending_,temp_);loadWave(jobKind_==1?jobLabel_:fileLabel_,std::move(jobPeaks_));
-            status_=jobKind_==1?L"匯入完成":L"裁切完成";
+        if(jobKind_==1){
+            player_.close();replaceFile(pending_,temp_);loadWave(jobLabel_,std::move(jobPeaks_));status_=L"匯入完成";
+        }else if(jobKind_==2){
+            double first=selectionStart_,last=selectionEnd_,start=viewStart_,length=viewLength_;
+            player_.close();editSession_.apply(pending_);loadWave(fileLabel_,std::move(jobPeaks_));
+            if(jobPreserveSelection_){selectionStart_=first;selectionEnd_=last;position_=first;player_.seek(first,last);setView(start,length);updateEdits();}
+            status_=L"已套用到編輯副本；可繼續操作，完成後按「保留編輯」或「取消編輯」。";
+        }else if(jobKind_==4){
+            loadWave(fileLabel_,std::move(peaks_));setView(0,duration_);
+            status_=L"選取範圍後可直接移除、調整音量、靜音或裁切；保留編輯前不會更動工作音檔。";
         }else if(jobKind_==3){replaceFile(pending_,exportTarget_);status_=L"已匯出："+exportTarget_;}
     }catch(const std::exception& e){
         if(jobError_.empty())jobError_=errorWide(e);
@@ -295,7 +343,7 @@ void App::finishJob(){
         error(jobError_);
     }
     clearFile(pending_);jobKind_=0;jobPeaks_.clear();controls();
-    if(closing_)DestroyWindow(hwnd_);
+    if(closing_){closing_=false;SendMessageW(hwnd_,WM_CLOSE,0,0);}
 }
 void App::finishRecording(){
     recorder_.finish();recording_=false;stopping_=false;std::wstring err=recorder_.error();
@@ -311,6 +359,7 @@ void App::finishRecording(){
     clearFile(pending_);controls();if(closing_)DestroyWindow(hwnd_);
 }
 void App::importFile(const std::wstring& path){
+    if(trim_){status_=L"請先保留或取消編輯，再匯入音檔。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
     if(recording_||busy_)return;auto ext=extLower(path);if(ext!=L".wav"&&ext!=L".mp3"){status_=L"請選擇 MP3 或 WAV 音檔。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
     if(_wcsicmp(path.c_str(),temp_.c_str())==0)return;
     if((duration_>0||std::filesystem::exists(std::filesystem::path(temp_)))&&!confirm(L"匯入音檔",L"匯入新的音檔會取代目前的工作音檔，未匯出的內容將無法復原。\n\n匯入的原始檔案不受影響。是否確定繼續？"))return;
@@ -320,8 +369,9 @@ void App::importFile(const std::wstring& path){
 }
 void App::exportFile(){
     if(duration_<=0||busy_||recording_)return;bool mp3=SendMessageW(format_,CB_GETCURSEL,0,0)==1;
+    if(trim_&&!updateSelection())return;
     std::wstring target=saveDialog(mp3);if(target.empty())return;
-    if(_wcsicmp(target.c_str(),temp_.c_str())==0){status_=L"請另選匯出位置。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
+    if(_wcsicmp(target.c_str(),temp_.c_str())==0||(editSession_.active()&&_wcsicmp(target.c_str(),editSession_.path().c_str())==0)){status_=L"請另選匯出位置。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
     std::wstring pending=(std::filesystem::path(target).parent_path()/(L".vcl-"+std::to_wstring(GetTickCount64())+(mp3?L".mp3":L".wav"))).wstring();
     clearFile(pending);auto wave=wave_;double start=rangeStart(),end=rangeEnd();int q=int(SendMessageW(quality_,CB_GETCURSEL,0,0)),kbps=q==2?320:q==0?128:192;
     status_=L"正在匯出…";beginJob(3,pending,target,[wave,start,end,pending,mp3,kbps]{if(mp3)audio::exportMp3(wave,start,end,pending,kbps);else audio::exportWave(wave,start,end,pending);});
@@ -337,7 +387,7 @@ void App::tabFocus(bool backward){
     if(source_&&IsWindowVisible(source_))order.push_back({source_,L""});
     if(window_&&IsWindowEnabled(window_))order.push_back({window_,L""});
     for(const auto& b:buttons_)if(b.enabled&&b.key!=L"export")order.push_back({nullptr,b.key});
-    if(trim_){order.push_back({startEdit_,L""});order.push_back({endEdit_,L""});}
+    if(trim_){order.push_back({startEdit_,L""});order.push_back({endEdit_,L""});order.push_back({gainEdit_,L""});}
     if(format_&&IsWindowEnabled(format_))order.push_back({format_,L""});
     if(quality_&&IsWindowEnabled(quality_)&&IsWindowVisible(quality_))order.push_back({quality_,L""});
     for(const auto& b:buttons_)if(b.enabled&&b.key==L"export")order.push_back({nullptr,b.key});
@@ -354,6 +404,7 @@ void App::seek(double t){
 void App::click(const std::wstring& key){
     if(key==L"refresh"){refreshWindows();status_=L"已重新整理視窗";}
     else if(key==L"record"){
+        if(trim_){status_=L"請先保留或取消編輯，再開始錄製。";InvalidateRect(hwnd_,nullptr,FALSE);return;}
         if(recording_){stopping_=true;recorder_.stop();status_=L"正在完成錄音…";controls();return;}
         if(busy_)return;
         bool process=processCap_&&SendMessageW(source_,CB_GETCURSEL,0,0)==1;DWORD pid=0;
@@ -368,30 +419,43 @@ void App::click(const std::wstring& key){
         if(now)pauseStartMs_=GetTickCount64();else {pausedMs_+=GetTickCount64()-pauseStartMs_;pauseStartMs_=0;}
         status_=now?L"錄製已暫停 · 暫停期間的聲音不會寫入":L"錄製中";controls();
     }
-    else if(key==L"import"){auto path=openDialog();if(!path.empty())importFile(path);}
+    else if(key==L"import"){if(busy_||recording_||trim_)return;auto path=openDialog();if(!path.empty())importFile(path);}
     else if(key==L"delete"){
-        if(duration_<=0||busy_||recording_)return;
+        if(duration_<=0||busy_||recording_||trim_)return;
         if(!confirm(L"清除工作音檔",L"確定清除目前的工作音檔？未匯出的內容將無法復原。\n\n只刪除本工具的暫存副本，匯入的原始檔案不受影響。"))return;
         player_.close();clearFile(temp_);wave_={};peaks_.clear();duration_=position_=viewStart_=viewLength_=0;trim_=false;status_=L"工作音檔已清除";controls();
     }
     else if(key==L"play"){
         if(duration_<=0||recording_||busy_)return;
+        if(trim_&&!updateSelection())return;
         if(player_.playing())player_.pause();else {double start=position_;if(start<rangeStart()||start>=rangeEnd()-.001)start=rangeStart();player_.play(start,rangeEnd());position_=start;}
         controls();
     }
     else if(key==L"trim"){
-        if(duration_<=0||busy_)return;player_.pause();trim_=true;selectionStart_=0;selectionEnd_=duration_;
-        setView(0,duration_);status_=L"拖曳波形左右把手調整範圍；播放只涵蓋選取部分。";controls();updateEdits();
+        if(duration_<=0||busy_||recording_||trim_)return;
+        status_=L"正在準備編輯副本…";
+        beginJob(4,L"",L"",[this]{editSession_.begin(temp_);});
     }
+    else if(key==L"keepEdit")finishEdit(true);
     else if(key==L"cancelTrim"){
-        player_.pause();trim_=false;selectionStart_=0;selectionEnd_=duration_;status_=L"已取消裁切選取";controls();
+        finishEdit(false);
     }
-    else if(key==L"confirmTrim"){
-        if(!trim_||busy_||duration_<=0)return;
-        double first=selectionStart_,last=selectionEnd_;
-        if(!confirm(L"確定裁切",L"保留 "+timeText(first)+L" 到 "+timeText(last)+L"，共 "+number(last-first)+L" 秒？\n\n確定後會取代工作音檔，框外內容將無法復原。若只想匯出選取部分，可直接按「匯出選取片段」。"))return;
-        auto w=wave_;std::wstring pending=temp_+L".pending.wav";clearFile(pending);status_=L"正在裁切…";
-        beginJob(2,pending,L"",[this,w,first,last,pending]{audio::exportWave(w,first,last,pending);jobPeaks_=audio::peaks(audio::openWave(pending));});
+    else if(key==L"remove"||key==L"mute"||key==L"gain"||key==L"confirmTrim"){
+        if(!trim_||busy_||recording_||duration_<=0||!updateSelection())return;
+        double first=selectionStart_,last=selectionEnd_,db=0;
+        if(key==L"remove"&&first<=0&&last>=duration_){error(L"無法移除整段音檔，請縮小選取範圍。若要清空音檔，請先保留或取消編輯，再使用「清除」。");return;}
+        if(key==L"gain"){
+            wchar_t value[100]{},*end=nullptr;GetWindowTextW(gainEdit_,value,100);db=wcstod(value,&end);
+            if(end==value||*end||!std::isfinite(db)||db< -60||db>24){error(L"請輸入 −60 到 +24 dB。負值降低音量、正值提高音量；完全無聲請按「靜音」。");return;}
+        }
+        auto w=wave_;std::wstring pending=editSession_.path()+L".pending.wav";clearFile(pending);status_=L"正在編輯…";
+        jobPreserveSelection_=key==L"gain"||key==L"mute";
+        beginJob(2,pending,L"",[this,w,first,last,pending,key,db]{
+            if(key==L"remove")audio::removeRegion(w,first,last,pending);
+            else if(key==L"confirmTrim")audio::exportWave(w,first,last,pending);
+            else audio::adjustGain(w,first,last,pending,db,key==L"mute");
+            jobPeaks_=audio::peaks(audio::openWave(pending));
+        });
     }
     else if(key==L"fit")setView(0,duration_);
     else if(key==L"suggested")setView(position_,std::min(30.0,duration_));
@@ -418,7 +482,7 @@ void App::mouseDown(int x,int y,int clicks){
 void App::mouseMove(int x,int y){
     if(drag_==0){
         bool resize=(waveRect_.hit(x,y)&&y>=waveRect_.b-30)||(trim_&&waveRect_.hit(x,y)&&std::min(std::abs(x-timeX(selectionStart_)),std::abs(x-timeX(selectionEnd_)))<=13);
-        SetCursor(LoadCursorW(nullptr,resize?IDC_SIZEWE:waveRect_.hit(x,y)||navRect_.hit(x,y)?IDC_HAND:IDC_ARROW));return;
+        SetCursor(LoadCursorW(nullptr,resize?IDC_SIZEWE:waveRect_.hit(x,y)||(navVisible_&&navRect_.hit(x,y))?IDC_HAND:IDC_ARROW));return;
     }
     if(drag_==1)seek(xTime(x));
     else if(drag_==2||drag_==3){
@@ -449,6 +513,7 @@ LRESULT App::message(UINT m,WPARAM w,LPARAM l){
             combo(format_,ID_FORMAT);combo(quality_,ID_QUALITY);SendMessageW(format_,CB_ADDSTRING,0,(LPARAM)L"WAV");SendMessageW(format_,CB_ADDSTRING,0,(LPARAM)L"MP3");SendMessageW(format_,CB_SETCURSEL,0,0);
             for(const wchar_t* item:{L"標準 · 128 kbps",L"中 · 192 kbps",L"高 · 320 kbps"})SendMessageW(quality_,CB_ADDSTRING,0,(LPARAM)item);
             SendMessageW(quality_,CB_SETCURSEL,1,0);edit(startEdit_,ID_START);edit(endEdit_,ID_END);
+            edit(gainEdit_,ID_GAIN);SetWindowTextW(gainEdit_,L"-6");
             SetTimer(hwnd_,1,33,nullptr);DragAcceptFiles(hwnd_,TRUE);controls();
             int dark=1;DwmSetWindowAttribute(hwnd_,20,&dark,sizeof dark);
             if(std::filesystem::exists(std::filesystem::path(temp_))){try{loadWave(L"上次工作音檔");}catch(...){}}
@@ -471,7 +536,7 @@ LRESULT App::message(UINT m,WPARAM w,LPARAM l){
             if(code==1&&l==0){switch(id){case 201:click(L"record");break;case 202:click(L"import");break;case 203:click(L"export");break;case 204:click(trim_?L"cancelTrim":L"trim");break;case 205:pasteFile();break;case 206:click(L"fit");break;case 207:click(L"suggested");break;}return 0;}
             if(code==CBN_SELCHANGE){if(id==ID_SOURCE||id==ID_FORMAT){controls();}else InvalidateRect(hwnd_,nullptr,FALSE);return 0;}
             if(code==EN_KILLFOCUS&&(id==ID_START||id==ID_END)&&!updatingEdits_){updateSelection();return 0;}break;}
-        case WM_TRIM_EDIT:updateSelection();return 0;
+        case WM_TRIM_EDIT:if(w==ID_GAIN)click(L"gain");else updateSelection();return 0;
         case WM_LBUTTONDOWN:mouseDown(int(GET_X_LPARAM(l)/dpi_),int(GET_Y_LPARAM(l)/dpi_),1);return 0;
         case WM_LBUTTONDBLCLK:mouseDown(int(GET_X_LPARAM(l)/dpi_),int(GET_Y_LPARAM(l)/dpi_),2);return 0;
         case WM_MOUSEMOVE:mouseMove(int(GET_X_LPARAM(l)/dpi_),int(GET_Y_LPARAM(l)/dpi_));return 0;
@@ -500,7 +565,9 @@ LRESULT App::message(UINT m,WPARAM w,LPARAM l){
             break;
         }
         case WM_CLOSE:{if(recording_){closing_=true;stopping_=true;recorder_.stop();status_=L"正在停止錄製；完成後會關閉。";controls();return 0;}
-            if(busy_){closing_=true;status_=L"完成目前操作後會關閉。";return 0;}DestroyWindow(hwnd_);return 0;}
+            if(busy_){closing_=true;status_=L"完成目前操作後會關閉。";return 0;}
+            if(trim_&&!finishEdit(false))return 0;
+            DestroyWindow(hwnd_);return 0;}
         case WM_DESTROY:KillTimer(hwnd_,1);PostQuitMessage(0);return 0;
         }
     }catch(const std::exception& e){error(errorWide(e));}
@@ -519,7 +586,7 @@ int App::run(HINSTANCE inst,int show,const std::wstring& file){
     HACCEL accelerator=CreateAcceleratorTableW(keys,UINT(std::size(keys)));
     MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){
         if(msg.message==WM_KEYDOWN&&msg.wParam==VK_TAB){tabFocus((GetKeyState(VK_SHIFT)&0x8000)!=0);continue;}
-        bool editing=GetFocus()==startEdit_||GetFocus()==endEdit_;
+        bool editing=GetFocus()==startEdit_||GetFocus()==endEdit_||GetFocus()==gainEdit_;
         if(editing||!TranslateAcceleratorW(hwnd_,accelerator,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}
     }
     DestroyAcceleratorTable(accelerator);return int(msg.wParam);

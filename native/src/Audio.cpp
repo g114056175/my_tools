@@ -42,9 +42,9 @@ uint32_t u32(FILE* f) { uint8_t b[4]; readExact(f,b,4); return uint32_t(b[0] | b
 void put16(FILE* f, uint16_t v) { uint8_t b[2] = {uint8_t(v),uint8_t(v>>8)}; writeExact(f,b,2); }
 void put32(FILE* f, uint32_t v) { uint8_t b[4] = {uint8_t(v),uint8_t(v>>8),uint8_t(v>>16),uint8_t(v>>24)}; writeExact(f,b,4); }
 class Writer {
-    FILE* f_ = nullptr; uint32_t bytes_ = 0; uint32_t rate_; uint16_t channels_,format_,bits_;
+    FILE* f_ = nullptr; uint32_t bytes_ = 0; uint32_t rate_; uint16_t channels_,format_,bits_; bool finished_ = false;
     void header() {
-        fseek(f_,0,SEEK_SET); writeExact(f_,"RIFF",4); put32(f_,(format_==3?48u:36u)+bytes_); writeExact(f_,"WAVEfmt ",8);
+        if(fseek(f_,0,SEEK_SET)) throw std::runtime_error("WAV seek failed"); writeExact(f_,"RIFF",4); put32(f_,(format_==3?48u:36u)+bytes_); writeExact(f_,"WAVEfmt ",8);
         put32(f_,16); put16(f_,format_); put16(f_,channels_); put32(f_,rate_); put32(f_,rate_*channels_*bits_/8);
         put16(f_,channels_*bits_/8); put16(f_,bits_);
         if(format_==3){writeExact(f_,"fact",4);put32(f_,4);put32(f_,bytes_/(channels_*bits_/8));}
@@ -53,9 +53,15 @@ class Writer {
 public:
     Writer(const std::wstring& path, uint32_t rate, uint16_t channels,uint16_t format=1,uint16_t bits=16) : rate_(rate),channels_(channels),format_(format),bits_(bits) {
         std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-        f_=fileOpen(path,L"wb+"); header();
+        f_=fileOpen(path,L"wb+"); try { header(); } catch(...) { fclose(f_); f_=nullptr; throw; }
     }
-    ~Writer() { if(f_) { header(); fclose(f_); } }
+    ~Writer() { if(f_) { try { finish(); } catch(...) { if(f_) fclose(f_); f_=nullptr; } } }
+    void finish() {
+        if(finished_) return;
+        if(!f_) throw std::runtime_error("WAV writer is closed");
+        header(); if(fclose(f_)!=0) { f_=nullptr; throw std::runtime_error("Audio close failed"); }
+        f_=nullptr; finished_=true;
+    }
     void append(const void* p, size_t n) {
         if (n > UINT32_MAX-(format_==3?48u:36u)-bytes_) throw std::runtime_error("WAV 4 GiB limit reached");
         writeExact(f_,p,n); bytes_+=uint32_t(n);
@@ -136,6 +142,65 @@ void exportWave(const Wave& w,double begin,double end,const std::wstring& path) 
         throw std::runtime_error("Cannot overwrite working WAV while reading it");
     uint64_t first=frameAt(w,begin),last=frameAt(w,end); if(last<=first) throw std::runtime_error("Select at least one sample");
     Writer out(path,w.rate,w.channels,w.format,w.bits); copyFrames(w,first,last-first,out);
+}
+namespace {
+void rejectSamePath(const Wave& w, const std::wstring& path) {
+    if(_wcsicmp(std::filesystem::absolute(std::filesystem::path(w.path)).lexically_normal().c_str(),
+                std::filesystem::absolute(std::filesystem::path(path)).lexically_normal().c_str())==0)
+        throw std::runtime_error("Cannot overwrite working WAV while reading it");
+    if(!w.frameBytes() || w.dataBytes % w.frameBytes()) throw std::runtime_error("Invalid WAV frame data");
+}
+std::pair<uint64_t,uint64_t> editRange(const Wave& w, double begin, double end) {
+    if(!std::isfinite(begin) || !std::isfinite(end) || end<=begin || begin<0 || end>w.duration()+0.0005)
+        throw std::runtime_error("Invalid edit range");
+    uint64_t first=frameAt(w,begin), last=frameAt(w,end);
+    if(last<=first) throw std::runtime_error("Select at least one sample");
+    return {first,last};
+}
+}
+void removeRegion(const Wave& w,double begin,double end,const std::wstring& path) {
+    rejectSamePath(w,path); auto [first,last]=editRange(w,begin,end);
+    if(first==0 && last==w.frames()) throw std::runtime_error("Cannot remove the entire WAV");
+    Writer out(path,w.rate,w.channels,w.format,w.bits);
+    copyFrames(w,0,first,out); copyFrames(w,last,w.frames()-last,out); out.finish();
+}
+void adjustGain(const Wave& w,double begin,double end,const std::wstring& path,double db,bool mute) {
+    rejectSamePath(w,path); auto [first,last]=editRange(w,begin,end);
+    if(!mute && (!std::isfinite(db) || db < -60.0 || db > 24.0))
+        throw std::runtime_error("Gain must be between -60 and 24 dB");
+    if(!mute && db==0.0) { Writer out(path,w.rate,w.channels,w.format,w.bits); copyFrames(w,0,w.frames(),out); out.finish(); return; }
+    const double gain=mute?0.0:std::pow(10.0,db/20.0);
+    Writer out(path,w.rate,w.channels,w.format,w.bits);
+    std::unique_ptr<FILE,decltype(&fclose)> f(fileOpen(w.path,L"rb"),fclose);
+    if(_fseeki64(f.get(),static_cast<long long>(w.dataOffset),SEEK_SET)) throw std::runtime_error("WAV seek failed");
+    const size_t bytesPerFrame=w.frameBytes();
+    std::vector<char> buffer(std::max<size_t>(bytesPerFrame,65536/bytesPerFrame*bytesPerFrame));
+    uint64_t frame=0, remaining=w.frames();
+    while(remaining) {
+        size_t count=std::min<uint64_t>(remaining,buffer.size()/bytesPerFrame);
+        readExact(f.get(),buffer.data(),count*bytesPerFrame);
+        uint64_t regionBegin=frame, regionEnd=frame+count;
+        if(regionEnd>first && regionBegin<last) {
+            size_t beginIn=size_t(std::max<uint64_t>(first,regionBegin)-regionBegin);
+            size_t endIn=size_t(std::min<uint64_t>(last,regionEnd)-regionBegin);
+            size_t samples= (endIn-beginIn)*w.channels;
+            if(w.format==1) {
+                auto* p=reinterpret_cast<int16_t*>(buffer.data()) + beginIn*w.channels;
+                for(size_t i=0;i<samples;i++) {
+                    long v=mute?0L:std::lround(double(p[i])*gain);
+                    p[i]=int16_t(std::clamp(v,-32768L,32767L));
+                }
+            } else {
+                auto* p=reinterpret_cast<float*>(buffer.data()) + beginIn*w.channels;
+                for(size_t i=0;i<samples;i++) {
+                    double v=mute?0.0:(std::isfinite(p[i])?double(p[i])*gain:0.0);
+                    p[i]=float(std::clamp(v,-1.0,1.0));
+                }
+            }
+        }
+        out.append(buffer.data(),count*bytesPerFrame); frame+=count; remaining-=count;
+    }
+    out.finish();
 }
 void importAudio(const std::wstring& source,const std::wstring& target,bool preserveNativeWav) {
     if(_wcsicmp(std::filesystem::absolute(std::filesystem::path(source)).lexically_normal().c_str(),std::filesystem::absolute(std::filesystem::path(target)).lexically_normal().c_str())==0)

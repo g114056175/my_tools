@@ -25,6 +25,11 @@ struct Wave {
 Wave openWave(const std::wstring& path);
 std::vector<float> peaks(const Wave& wave);
 void exportWave(const Wave& wave, double begin, double end, const std::wstring& path);
+// Remove the selected sample range and join the remaining audio.  The entire
+// source cannot be removed.
+void removeRegion(const Wave& wave, double begin, double end, const std::wstring& path);
+// Apply gain (in dB) or silence to the selected sample range.
+void adjustGain(const Wave& wave, double begin, double end, const std::wstring& path, double db, bool mute = false);
 void importAudio(const std::wstring& source, const std::wstring& target, bool preserveNativeWav = true);
 void exportMp3(const Wave& wave, double begin, double end, const std::wstring& path, int kbps);
 bool processCaptureAvailable();

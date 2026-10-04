@@ -4,7 +4,7 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 
 ## 下載
 
-**v1.0.1 暫停下載**：Windows Defender 偵測為 `Trojan:Win32/Wacatac.C!ml`，正在覆核發布產物。確認前請保留隔離狀態。
+**正式下載暫停**：[v1.0.1 預覽版本](https://github.com/g114056175/my_tools/releases/tag/cursor-effects-v1.0.1) 供下載偵測測試。檔案尚未改寫，2026-10-05 本機重測仍被 Windows Defender 偵測為 `Trojan:Win32/Wacatac.C!ml`；若再次攔截，請保留隔離狀態。尚未取得微軟覆核結果。
 
 適用 **Windows 10（1703 以上）／Windows 11 x64**，需 .NET Framework 4.8 與支援 Direct3D 11 的顯示驅動；已在 Windows 10 22H2 測試。
 

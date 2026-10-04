@@ -1,0 +1,8 @@
+{
+  "version": "20260616",
+  "clangVersion": "22.1.8",
+  "directory": "llvm-mingw-20260616-ucrt-x86_64",
+  "archive": "llvm-mingw-20260616-ucrt-x86_64.zip",
+  "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-x86_64.zip",
+  "sha256": "b9b68a4d276e16fa25802aaba458e4638f64b3884c290aaccdc2d87083b6ca35"
+}

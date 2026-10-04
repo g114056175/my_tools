@@ -1,0 +1,10 @@
+.build/
+.tools/
+dist/
+release/
+test-results/
+.vs/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini

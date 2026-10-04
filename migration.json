@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-04",
+  "method": "git subtree add without squash; preserve source refs as namespaced tags",
+  "originalRepositoriesRetained": true,
+  "sources": [
+    {
+      "source": "https://github.com/g114056175/word2pdf",
+      "branch": "main",
+      "path": "word2pdf",
+      "sourceCommit": "11edf834c0838d6606f25169d1e04390c70ef9cb",
+      "sourceTree": "9d6517852d8f0643315812d6aeaafbe22aec0b8a",
+      "importCommit": "8266ef4cdcb39653e592032cf80a3d1ff417b6df",
+      "importedTree": "9d6517852d8f0643315812d6aeaafbe22aec0b8a",
+      "exactTreeMatch": true,
+      "sourceHistoryReachable": true,
+      "sourceRefSnapshots": [
+        {
+          "tag": "source/word2pdf/branches/main",
+          "object": "11edf834c0838d6606f25169d1e04390c70ef9cb"
+        }
+      ]
+    },
+    {
+      "source": "https://github.com/g114056175/test_examAssistant",
+      "branch": "main",
+      "path": "test_examAssistant",
+      "sourceCommit": "b98aa921ccab5ca11c58ce050068f7a050a8795d",
+      "sourceTree": "bc96bd8c896ac9f9ae3fb8b92c275b0af0b100fa",
+      "importCommit": "d63c2e397f5c71d97281e6cec3ac0e56e26a7c56",
+      "importedTree": "bc96bd8c896ac9f9ae3fb8b92c275b0af0b100fa",
+      "exactTreeMatch": true,
+      "sourceHistoryReachable": true,
+      "sourceRefSnapshots": [
+        {
+          "tag": "source/test_examAssistant/branches/main",
+          "object": "b98aa921ccab5ca11c58ce050068f7a050a8795d"
+        },
+        {
+          "tag": "source/test_examAssistant/branches/v3-dev",
+          "object": "0118988ad0dcbca7ca5b52a698fdf2b03ac3cde4"
+        },
+        {
+          "tag": "source/test_examAssistant/other/pull/1/head",
+          "object": "0118988ad0dcbca7ca5b52a698fdf2b03ac3cde4"
+        }
+      ]
+    },
+    {
+      "source": "https://github.com/g114056175/VoiceCapture",
+      "branch": "main",
+      "path": "VoiceCapture",
+      "sourceCommit": "59617ccd1fac4d2badbeeea2931d648a11a7773c",
+      "sourceTree": "4193c926ab0c1d83a8c3b80ed68592d1ed4df81b",
+      "importCommit": "944c83d5ee5c762b6cdc45c4348faf365242bb61",
+      "importedTree": "4193c926ab0c1d83a8c3b80ed68592d1ed4df81b",
+      "exactTreeMatch": true,
+      "sourceHistoryReachable": true,
+      "sourceRefSnapshots": [
+        {
+          "tag": "source/VoiceCapture/branches/main",
+          "object": "59617ccd1fac4d2badbeeea2931d648a11a7773c"
+        },
+        {
+          "tag": "source/VoiceCapture/tags/v3.0.2",
+          "object": "59617ccd1fac4d2badbeeea2931d648a11a7773c"
+        }
+      ]
+    }
+  ],
+  "adjustments": [
+    "Root navigation README and per-project clone/download links",
+    "Runtime binaries published as GitHub Release assets; original binary blobs remain in source history",
+    "Build helper supports relocation and LLVM-MinGW UUID linking",
+    "Word2PDF packaging explicitly includes tkinterdnd2 resources"
+  ],
+  "localSource": {
+    "path": "cursor-effects-native",
+    "source": "VTuberLLM/cursor-effects-native",
+    "filesVerifiedBeforeReadmeUpdate": 29,
+    "history": "Local source had no commits; imported as a source snapshot"
+  }
+}

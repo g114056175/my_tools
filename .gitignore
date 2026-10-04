@@ -12,3 +12,10 @@
 *.user
 Thumbs.db
 Desktop.ini
+word2pdf/dist/
+word2pdf/build/
+word2pdf/*.spec
+test_examAssistant/*.exe
+test_examAssistant/*.obj
+test_examAssistant/*.pdb
+test_examAssistant/*.ilk

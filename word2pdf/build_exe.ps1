@@ -15,15 +15,19 @@ if (-not (Test-Path ".venv")) {
 }
 
 & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
 
 & ".\.venv\Scripts\python.exe" -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
     --onefile `
+    --collect-data tkinterdnd2 `
     --name Word2PDF-Batch `
     word2pdf_gui.py
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
 Write-Host ""
 Write-Host "Done: $ProjectRoot\dist\Word2PDF-Batch.exe"

@@ -6,7 +6,7 @@
 
 ## 下載
 
-[下載 EXE](https://github.com/g114056175/VoiceCapture/releases/download/v3.0.2/VoiceCaptureLiteNative-edit-session.exe) · [原始碼 ZIP](https://github.com/g114056175/VoiceCapture/archive/refs/tags/v3.0.2.zip) · [SHA-256](https://github.com/g114056175/VoiceCapture/releases/download/v3.0.2/VoiceCaptureLiteNative-edit-session-SHA256SUMS.txt)
+[下載 EXE](https://github.com/g114056175/my_tools/releases/download/VoiceCapture-v3.0.2/VoiceCaptureLiteNative-edit-session.exe) · [原始碼](https://github.com/g114056175/my_tools/tree/main/VoiceCapture) · [SHA-256](https://github.com/g114056175/my_tools/releases/download/VoiceCapture-v3.0.2/VoiceCaptureLiteNative-edit-session-SHA256SUMS.txt)
 
 適用 Windows 10／11 x64，需可用的播放裝置與 Windows 媒體元件。EXE 尚未簽章。
 

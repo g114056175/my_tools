@@ -6,11 +6,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$source = "main.cpp"
-$exe = $Output
+$projectRoot = $PSScriptRoot
+$source = Join-Path $projectRoot "main.cpp"
+$exe = if ([IO.Path]::IsPathRooted($Output)) { $Output } else { Join-Path $projectRoot $Output }
+$exeDirectory = Split-Path -Parent $exe
+if ($exeDirectory) { New-Item -ItemType Directory -Path $exeDirectory -Force | Out-Null }
 $libs = @(
   "winhttp.lib", "user32.lib", "gdi32.lib",
-  "shell32.lib", "ole32.lib", "gdiplus.lib"
+  "shell32.lib", "ole32.lib", "gdiplus.lib", "uuid.lib"
 )
 
 function Get-MsvcFlags($profile) {
@@ -57,7 +60,7 @@ function Show-BinarySize {
 }
 
 function Remove-IntermediateFiles {
-  $obj = [IO.Path]::ChangeExtension($source, ".obj")
+  $obj = Join-Path $projectRoot ([IO.Path]::GetFileNameWithoutExtension($source) + ".obj")
   if (Test-Path $obj) {
     Remove-Item -LiteralPath $obj -Force
   }
@@ -65,8 +68,45 @@ function Remove-IntermediateFiles {
 
 function Compile-Msvc($clPath) {
   $flags = Get-MsvcFlags $Profile
-  & $clPath @($flags.Cl) $source "/Fe:$exe" /link @($flags.Link) @($libs)
-  if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize }
+  & $clPath @($flags.Cl) $source "/Fe:$exe" "/Fo:$projectRoot/main.obj" /link @($flags.Link) @($libs) | Out-Host
+  if ($LASTEXITCODE -ne 0) { return $false }
+  Remove-IntermediateFiles
+  Show-BinarySize
+  return $true
+}
+
+function Quote-CmdArg([string]$value) {
+  return '"' + $value.Replace('"', '\"') + '"'
+}
+
+function Compile-MsvcViaVcvars([string]$vcvars) {
+  $flags = Get-MsvcFlags $Profile
+  $parts = @($flags.Cl + @((Quote-CmdArg $source), ("/Fe:" + (Quote-CmdArg $exe)), ("/Fo:" + (Quote-CmdArg (Join-Path $projectRoot 'main.obj'))), "/link") + $flags.Link + $libs)
+  $cmd = (Quote-CmdArg $vcvars) + " && cl " + ($parts -join " ")
+  & cmd.exe /d /c $cmd | Out-Host
+  if ($LASTEXITCODE -ne 0) { return $false }
+  Remove-IntermediateFiles
+  Show-BinarySize
+  return $true
+}
+
+function Compile-Gnu([string]$compiler) {
+  & $compiler -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe `
+    -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luuid | Out-Host
+  if ($LASTEXITCODE -ne 0) { return $false }
+  Show-BinarySize
+  return $true
+}
+
+function Compile-Clang([string]$compiler) {
+  if ($Profile -ne "portable") {
+    Write-Warning "LLVM-MinGW fallback uses portable static runtime flags; profile '$Profile' is mapped to portable semantics."
+  }
+  & $compiler -Os -s -static -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe `
+    -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luuid | Out-Host
+  if ($LASTEXITCODE -ne 0) { return $false }
+  Show-BinarySize
+  return $true
 }
 
 function Find-Tool($name) {
@@ -77,8 +117,8 @@ function Find-Tool($name) {
 
 $cl = Find-Tool "cl.exe"
 if ($cl) {
-  Compile-Msvc $cl
-  exit 0
+  if (Compile-Msvc $cl) { exit 0 }
+  Write-Warning "MSVC compilation failed; trying other available toolchains."
 }
 
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -87,11 +127,8 @@ if (Test-Path $vswhere) {
   if ($installPath) {
     $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvars64.bat"
     if (Test-Path $vcvars) {
-      $flags = Get-MsvcFlags $Profile
-      $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
-    $cmd = "`"$vcvars`" && cl $clPart"
-    & cmd.exe /c $cmd
-      if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize; exit 0 }
+      if (Compile-MsvcViaVcvars $vcvars) { exit 0 }
+      Write-Warning "MSVC vcvars compilation failed; trying other available toolchains."
     }
   }
 }
@@ -106,19 +143,21 @@ $fallbacks = @(
 )
 foreach ($vcvars in $fallbacks) {
   if (Test-Path $vcvars) {
-    $flags = Get-MsvcFlags $Profile
-    $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
-    $cmd = "`"$vcvars`" && cl $clPart"
-    & cmd.exe /c $cmd
-    if ($LASTEXITCODE -eq 0) { Remove-IntermediateFiles; Show-BinarySize; exit 0 }
+    if (Compile-MsvcViaVcvars $vcvars) { exit 0 }
+    Write-Warning "MSVC fallback compilation failed for $vcvars; trying other available toolchains."
   }
 }
 
 $gxx = Find-Tool "g++.exe"
 if ($gxx) {
-  & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus
-  if ($LASTEXITCODE -eq 0) { Show-BinarySize }
-  exit 0
+  if (Compile-Gnu $gxx) { exit 0 }
+  Write-Warning "g++ compilation failed; trying LLVM-MinGW clang++."
 }
 
-Write-Error "No C compiler found. Install MSVC Build Tools or MinGW."
+$clang = Find-Tool "clang++.exe"
+if ($clang) {
+  if (Compile-Clang $clang) { exit 0 }
+  Write-Error "LLVM-MinGW clang++ compilation failed."
+}
+
+Write-Error "No working C compiler found. Install MSVC Build Tools, MinGW, or LLVM-MinGW."

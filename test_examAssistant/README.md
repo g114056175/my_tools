@@ -22,6 +22,8 @@ Build profiles:
 
 ## Run
 
+[Download llm_overlay.exe](https://github.com/g114056175/my_tools/releases/download/test_examAssistant-migrated-2026-10-04/llm_overlay.exe).
+
 ```powershell
 .\llm_overlay.exe
 ```

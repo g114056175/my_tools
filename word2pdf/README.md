@@ -4,12 +4,12 @@ Windows Word 批次轉 PDF 小工具。
 
 ## 直接下載
 
-[下載 Word2PDF-Batch.exe](https://github.com/g114056175/word2pdf/raw/main/dist/Word2PDF-Batch.exe)
+[下載 Word2PDF-Batch.exe](https://github.com/g114056175/my_tools/releases/download/word2pdf-migrated-2026-10-04/Word2PDF-Batch.exe)
 
 下載後請執行：
 
 ```text
-dist\Word2PDF-Batch.exe
+Word2PDF-Batch.exe
 ```
 
 只需要開這個 EXE。`build_exe.ps1` 是給開發者重新打包用的，不是日常執行入口。

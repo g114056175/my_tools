@@ -14,7 +14,7 @@ sealed class CursorEffects {
     public readonly List<DrawCommand> Commands=new List<DrawCommand>(1600);
     readonly Func<double> random;Item last;double trailEmission;
     public bool Trail=true,Click=true,Dirty;public double Size=1,Strength=1,Density=.5,Opacity=1;public int Fps=60;
-    public double TrailWidth=.8,RippleSize=1,TrailFragmentSize=1,ClickFragmentSize=1,TrailOpacity=1,ClickOpacity=1;double particleSpeed=1,trailSpread=1,trailLifetime=.16;
+    public double TrailWidth=.8,RippleSize=1,TrailFragmentSize=1,ClickFragmentSize=1,TrailOpacity=1,ClickOpacity=1;double particleSpeed=1,trailSpread=1,trailLifetime=.18;
     public Rectangle Viewport=System.Windows.Forms.SystemInformation.VirtualScreen;
     public CursorEffects(Func<double> value=null){var rng=new Random();random=value??rng.NextDouble;}
     public int Alive {get{return Points.Count+Particles.Count+Rings.Count;}}

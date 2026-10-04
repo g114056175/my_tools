@@ -125,7 +125,7 @@ sealed class ControlsWindow : Form {
     readonly CursorHost host;
     public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),Strength=AppTheme.Number(0,300,100),EffectSize=AppTheme.Number(25,300,100),ParticleStrength=AppTheme.Number(0,300,100);
     public readonly NumberField TrailFragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100),ClickFragmentSize=AppTheme.Number(25,300,100),ClickOpacity=AppTheme.Number(0,100,100);
-    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,160);
+    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,180);
     public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(196,252,255));
     public readonly OnOffSwitch VisibleValue=new OnOffSwitch{Checked=true};
     public readonly PaletteField Palette=new PaletteField();bool synchronizingPalette;

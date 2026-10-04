@@ -146,11 +146,15 @@ sealed partial class CursorHost : ApplicationContext {
             controls.TrailFade.Value=180;number("trailFadeMs",controls.TrailFade);
             Action<string,ColorField> color=(key,input)=>{if(data.TryGetValue(key,out value)&&value is string){string hex=((string)value).TrimStart('#');int rgb;if(hex.Length==6&&int.TryParse(hex,System.Globalization.NumberStyles.HexNumber,System.Globalization.CultureInfo.InvariantCulture,out rgb))input.Value=Color.FromArgb(255,(rgb>>16)&255,(rgb>>8)&255,rgb&255);}};
             color("trailColor",controls.TrailColor);color("rippleColor",controls.RippleColor);color("fragmentColor",controls.FragmentColor);
+            int settingsVersion=data.TryGetValue("version",out value)?Convert.ToInt32(value):0;
+            if(settingsVersion<7&&controls.TrailColor.Text=="#EF83AD"&&controls.RippleColor.Text=="#DB5A91"&&controls.FragmentColor.Text=="#FFE1EC"){
+                var sakura=ColorPalette.All[2];controls.TrailColor.Value=sakura.Trail;controls.RippleColor.Value=sakura.Ripple;controls.FragmentColor.Value=sakura.Fragment;
+            }
             if(data.ContainsKey("enabled"))check("enabled",controls.VisibleValue);else check("visible",controls.VisibleValue);
         }catch(Exception e){Log("設定載入失敗："+e.Message);}finally{controls.Updating=false;controls.SyncPalette();}
     }
     void SaveControls(bool force=false){if(Test&&!force||controls.Updating)return;try{
-        var data=new{version=6,trailFadeMs=controls.TrailFade.Value,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,trailFragmentSize=controls.TrailFragmentSize.Value,clickFragmentSize=controls.ClickFragmentSize.Value,trailOpacity=controls.OpacityValue.Value,clickOpacity=controls.ClickOpacity.Value,particles=controls.ParticleStrength.Value,particleSpeed=controls.ParticleSpeed.Value,trailSpread=controls.TrailSpread.Value,glow=controls.Strength.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
+        var data=new{version=7,trailFadeMs=controls.TrailFade.Value,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,trailFragmentSize=controls.TrailFragmentSize.Value,clickFragmentSize=controls.ClickFragmentSize.Value,trailOpacity=controls.OpacityValue.Value,clickOpacity=controls.ClickOpacity.Value,particles=controls.ParticleStrength.Value,particleSpeed=controls.ParticleSpeed.Value,trailSpread=controls.TrailSpread.Value,glow=controls.Strength.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
         var temp=ControlsPath+".tmp";File.WriteAllText(temp,Json.Serialize(data),Encoding.UTF8);if(File.Exists(ControlsPath))File.Replace(temp,ControlsPath,null);else File.Move(temp,ControlsPath);
     }catch(Exception e){Log("設定儲存失敗："+e.Message);}}
     public void ApplyPalette(ColorPalette palette){controls.Updating=true;try{controls.TrailColor.Value=palette.Trail;controls.RippleColor.Value=palette.Ripple;controls.FragmentColor.Value=palette.Fragment;}finally{controls.Updating=false;}controls.SyncPalette();Configure();}

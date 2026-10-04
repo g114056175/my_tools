@@ -61,21 +61,23 @@ sealed partial class CursorHost {
         Require(normal.Particles.Count==narrow.Particles.Count&&normal.Particles.Count==wide.Particles.Count,"Spread changes particle density");
         Require(narrow.Particles.All(p=>p.Y==200&&p.Vy==0),"Zero spread leaves the path");
         Require(normal.Particles.Count(p=>p.Y<200)>=3&&normal.Particles.Count(p=>p.Y>200)>=3,"Fragments do not occupy both sides of the path");
-        Require(normal.Particles.Average(p=>Math.Abs(p.Y-200))>12,"Default fragments still hug the path");
+        Require(normal.Particles.All(p=>Math.Abs(p.Y-200)<=3),"Fragments start in an artificial distant band");
+        Require(normal.Particles.Count(p=>p.Vx<0)>=2&&normal.Particles.Count(p=>p.Vx>0)>=2,"Scatter lacks random tangential directions");
+        Require(normal.Particles.Any(p=>(p.Y-200)*p.Vy<0),"Scatter always forces fragments outward from their initial offset");
         for(int i=0;i<normal.Particles.Count;i++){
             var a=normal.Particles[i];var b=wide.Particles[i];var v=vertical.Particles[i];
             Require(Math.Abs((b.Y-200)-2*(a.Y-200))<.00001&&Math.Abs(b.Vy-2*a.Vy)<.00001,"Spread does not scale distance independently");
-            Require(a.X==b.X&&a.Life==b.Life&&a.Size==b.Size,"Spread changes speed lifetime, density or size");
+            Require(Math.Abs((b.X-narrow.Particles[i].X)-2*(a.X-narrow.Particles[i].X))<.00001&&Math.Abs(b.Vx-2*a.Vx)<.00001&&a.Life==b.Life&&a.Size==b.Size&&a.Light==b.Light,"Spread changes lifetime, brightness, density or size");
             Require(Math.Abs(v.X-200+a.Y-200)<.00001&&Math.Abs(v.Y-a.X)<.00001,"Scatter is not perpendicular to a vertical path");
-            Require((a.Y-200)*a.Vy>0,"Fragments drift back toward the path");
         }
+        normal.Draw(.1);normal.Draw(.1);Require(normal.Particles.Average(p=>Math.Abs(p.Y-200))>5,"Random trajectories do not visibly disperse over time");
         var clickA=SpreadSample(0);var clickB=SpreadSample(3);clickA.Clear();clickB.Clear();clickA.Click=clickB.Click=true;clickA.Input(200,200,true,true);clickB.Input(200,200,true,true);
         Require(clickA.Particles.SelectMany(p=>new[]{p.X,p.Y,p.Vx,p.Vy,p.Life,p.Size}).SequenceEqual(clickB.Particles.SelectMany(p=>new[]{p.X,p.Y,p.Vx,p.Vy,p.Life,p.Size})),"Trail spread changes click bursts");
-        renderer.Appearance(Color.FromArgb(239,131,173),Color.FromArgb(219,90,145),Color.FromArgb(255,225,236));
+        var sakura=ColorPalette.All[2];renderer.Appearance(sakura.Trail,sakura.Ripple,sakura.Fragment);
         using(var sheet=new Bitmap(640,540))using(var g=Graphics.FromImage(sheet))using(var title=new Font("Microsoft JhengHei UI",13)){
             g.Clear(Color.FromArgb(16,19,23));
             for(int row=0;row<3;row++){
-                var fx=SpreadSample(row);fx.Viewport=new Rectangle(0,0,640,400);fx.Draw(.08);
+                var fx=SpreadSample(row);fx.Viewport=new Rectangle(0,0,640,400);fx.Draw(.1);fx.Draw(.02);
                 string path=Path.Combine(profile,"trail-spread-"+row+".png");SaveBackground(renderer.Capture(fx,640,400),Color.FromArgb(16,19,23),path);
                 g.DrawString("拖曳分散 "+(row*100)+"%"+(row==1?"（預設）":""),title,Brushes.White,20,row*180+10);
                 using(var rendered=new Bitmap(path))g.DrawImage(rendered,new Rectangle(0,row*180+36,640,140),new Rectangle(0,130,640,140),GraphicsUnit.Pixel);
@@ -122,6 +124,38 @@ sealed partial class CursorHost {
         foreach(var p in new[]{new Point(320,300),new Point(430,220),new Point(390,300),new Point(500,240)})curves.Input(p.X,p.Y,p.X==320,true);
         curves.Draw(.02);SaveBackground(renderer.Capture(curves,640,400),Color.FromArgb(16,19,23),Path.Combine(profile,"trail-joints.png"));
     }
+    static double LargestTurn(IEnumerable<PointF> points){
+        var p=points.ToArray();double largest=0;
+        for(int i=1;i<p.Length-1;i++){double ax=p[i].X-p[i-1].X,ay=p[i].Y-p[i-1].Y,bx=p[i+1].X-p[i].X,by=p[i+1].Y-p[i].Y;double norm=Math.Sqrt((ax*ax+ay*ay)*(bx*bx+by*by));if(norm>0)largest=Math.Max(largest,Math.Acos(Math.Max(-1,Math.Min(1,(ax*bx+ay*by)/norm))));}return largest;
+    }
+    void TestCurvesAndLight(){
+        var fx=new CursorEffects(()=>.5){Viewport=new Rectangle(0,0,640,400)};fx.Configure(true,false,1,1,0,1,60);
+        var sample=new[]{new Point(100,220),new Point(140,140),new Point(240,100),new Point(340,140),new Point(400,220),new Point(340,300),new Point(240,340),new Point(140,300),new Point(100,220)};
+        for(int i=0;i<sample.Length;i++)fx.Input(sample[i].X,sample[i].Y,i==0,true);fx.Draw(0);
+        Require(fx.SmoothTrail.Count>sample.Length&&fx.SmoothTrail.Count<=CursorEffects.MaxTrailVertices,"Sparse loop was not smoothed within a fixed budget");
+        Require(LargestTurn(fx.SmoothTrail.Select(p=>new PointF((float)p.X,(float)p.Y)))<LargestTurn(sample.Select(p=>new PointF(p.X,p.Y)))*.6,"Sparse loop still has pronounced angular joints");
+        Require(fx.SmoothTrail.All(p=>p.X>=100&&p.X<=400&&p.Y>=100&&p.Y<=340),"Curve overshoots input bounds");
+        Require(fx.SmoothTrail.First().X==100&&fx.SmoothTrail.Last().X==100&&fx.SmoothTrail.Last().Y==220,"Smoothing delays/drops the cursor endpoint");
+        var blue=ColorPalette.All[0];renderer.Appearance(blue.Trail,blue.Ripple,blue.Fragment);
+        SaveBackground(renderer.Capture(fx,640,400),Color.FromArgb(16,19,23),Path.Combine(profile,"curve-smooth.png"));
+        var legacy=new CursorEffects();for(int i=1;i<sample.Length;i++)legacy.Commands.Add(new DrawCommand(0,sample[i-1].X,sample[i-1].Y,sample[i].X,sample[i].Y,2.5,0,.9));
+        SaveBackground(renderer.Capture(legacy,640,400),Color.FromArgb(16,19,23),Path.Combine(profile,"curve-linear.png"));
+        using(var sheet=new Bitmap(1280,432))using(var g=Graphics.FromImage(sheet))using(var title=new Font("Microsoft JhengHei UI",13)){
+            g.Clear(Color.FromArgb(16,19,23));g.DrawString("相同稀疏取樣 · 原始折線",title,Brushes.White,20,8);g.DrawString("相同稀疏取樣 · 曲線補間",title,Brushes.White,660,8);
+            using(var a=new Bitmap(Path.Combine(profile,"curve-linear.png")))g.DrawImageUnscaled(a,0,32);using(var b=new Bitmap(Path.Combine(profile,"curve-smooth.png")))g.DrawImageUnscaled(b,640,32);sheet.Save(Path.Combine(profile,"curve-comparison.png"));
+        }
+        var lights=SpreadSample(1);lights.Draw(0);var before=lights.Commands.Where(c=>c.Kind==2).ToArray();
+        Require(before.Max(c=>c.Alpha)-before.Min(c=>c.Alpha)>.25,"Same-age fragments lack independent brightness");
+        var birth=lights.Particles.Select(p=>p.Light).ToArray();lights.Draw(0);Require(before.SequenceEqual(lights.Commands.Where(c=>c.Kind==2)),"Zero-time draw resamples randomness");
+        lights.Strength=0;lights.Draw(0);Require(!lights.Commands.Any(c=>c.Kind>=3)&&before.SequenceEqual(lights.Commands.Where(c=>c.Kind==2)),"Glow zero changes the particle body");
+        lights.Strength=3;lights.Draw(0);Require(before.SequenceEqual(lights.Commands.Where(c=>c.Kind==2)),"Glow strength changes body brightness");
+        lights.Draw(.1);Require(lights.Particles.Select(p=>p.Light).SequenceEqual(birth)&&lights.Commands.Where(c=>c.Kind==2).Zip(before,(a,b)=>a.Alpha<b.Alpha).All(v=>v),"Particle brightness flickers instead of fading");
+        // Worst-case 1s zigzags, maximum particles/rings/glow, same native ABI cap.
+        var stress=new CursorEffects(()=>.5){Viewport=new Rectangle(0,0,1920,1080)};stress.Configure(true,true,3,3,3,1,60);stress.SetTrailLifetime(1);
+        for(int i=0;i<16;i++)stress.Input(300,300,true,true);for(int i=0;i<128;i++)stress.Input(i%2==0?100:1800,100+i*5,false,true);stress.Draw(0);
+        Require(stress.SmoothTrail.Count<=CursorEffects.MaxTrailVertices&&stress.Commands.Count<=2048,"Curve maximum exceeds renderer budget");
+        renderer.Capture(stress,1920,1080);
+    }
     async void RunTest(){
         string report=Path.Combine(profile,"test.json");var checks=new List<string>();var shell=Native.ShellInputHandles().ToDictionary(h=>h,h=>Native.IsWindowEnabled(h));
         try{
@@ -145,7 +179,7 @@ sealed partial class CursorHost {
             before=Frames;Pointer(origin.X+150,origin.Y+100,true,true);await Task.Delay(150);Require(Frames-before>=7&&Frames-before<=12,"60 FPS scheduler");StopAnimation(true);ResetControls();inputTimer.Stop();checks.Add("fixed 60 FPS scheduler");
             var test=new CursorEffects(()=>.5){Viewport=new Rectangle(-1920,-100,3840,1080)};test.Input(-1820,0,true,true);Require(test.Points.Single().X==100&&test.Points.Single().Y==100,"Negative monitor origin");test.Input(-1800,20,true,true,true);Require(test.Points.Count==1,"Blocked input emits");test.Clear();test.Configure(true,true,1,1,3,1,60);test.Input(-1820,0,true,true);Require(test.Particles.Count==18,"Density multiplier");test.Configure(true,true,2,1,3,1,60);Require(test.Particles[0].Size==10,"Size multiplier");for(int i=0;i<1000;i++)test.Input(-1820+(i*4)%1500,100,true,true);Require(test.Points.Count==CursorEffects.MaxTrailPoints&&test.Particles.Count==192&&test.Rings.Count==16,"Unbounded particles");for(int i=0;i<20;i++)test.Draw(.1);Require(test.Alive==0,"Expiration");checks.Add("negative origin, blocked controls, multipliers, bounded memory, finite lifetimes");
             TestHighSpeedTrails();checks.Add("600px real GPU line without gaps, 3720px multi-monitor stroke with distributed fragments, release/blocked boundaries, 1000 rapid 7600px samples within fixed budgets");
-            TestTrailDefaultsAndFade();checks.Add("halved click and slow/fast drag density, 80 percent baseline width, 40-1000ms fade, continuous live edits, 1s trail at 125Hz");TestTrailJoints();checks.Add("GPU trail overlap invariant, no sample-node brightening or gaps, tight loops and acute turns, independent ring blend");TestTrailSpread();checks.Add("perpendicular two-sided scatter, independent range/count/click effects, 0/100/200 percent GPU previews");
+            TestTrailDefaultsAndFade();checks.Add("halved click and slow/fast drag density, 80 percent baseline width, 40-1000ms fade, continuous live edits, 1s trail at 125Hz");TestTrailJoints();checks.Add("GPU trail overlap invariant, no sample-node brightening or gaps, tight loops and acute turns, independent ring blend");TestTrailSpread();TestCurvesAndLight();checks.Add("near-path random velocity scatter, independent per-particle brightness, smooth sparse loops, bounded curve budget, glow changes halo only");
             var visual=new List<object>();double prev=0;
             renderer.Appearance(Color.FromArgb(69,237,255),Color.FromArgb(69,237,255),Color.FromArgb(196,252,255));
             foreach(int glow in new[]{0,1,3}){
@@ -173,7 +207,7 @@ sealed partial class CursorHost {
             renderer.Appearance(Color.FromArgb(69,237,255),Color.FromArgb(69,237,255),Color.FromArgb(196,252,255));var plain=renderer.Capture(Sample(1),640,400);SaveBackground(plain,Color.White,Path.Combine(profile,"effects-white.png"));SaveBackground(plain,Color.FromArgb(16,19,23),Path.Combine(profile,"effects-dark.png"));checks.Add("independent sizes/opacity, cached GPU recoloring, live particle speed and zero-speed expiration, original appearance without outlines");
             // Validate actual composition, not just offscreen drawing. The
             // screenshot is restricted to our own temporary black test window.
-            controls.HidePanel();StopAnimation(true);
+            controls.HidePanel();inputTimer.Stop();StopAnimation(true);lastHealth=clock.ElapsedMilliseconds;
             {
                 var area=Screen.PrimaryScreen.WorkingArea;var rect=new Rectangle(area.Left+Math.Max(0,(area.Width-640)/2),area.Top+Math.Max(0,(area.Height-400)/2),640,400);
                 // Overlay suppresses GDI painting; a normal owned form below
@@ -190,6 +224,7 @@ sealed partial class CursorHost {
             controls.VisibleValue.Checked=false;using(var bitmap=new Bitmap(controls.Width,controls.Height)){controls.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));bitmap.Save(Path.Combine(profile,"controls-off.png"));}controls.VisibleValue.Checked=true;Configure();
             controls.WindowState=FormWindowState.Minimized;Require(controls.Visible&&controls.WindowState==FormWindowState.Minimized&&controls.ShowInTaskbar&&overlay.Visible,"Normal minimize changes effects/taskbar");ShowControls();Require(controls.Visible&&controls.WindowState==FormWindowState.Normal,"Restore");controls.HidePanel();Require(!controls.Visible&&overlay.Visible,"Hide differs from minimize");
             controls.Updating=true;controls.EffectSize.Value=173;controls.ParticleStrength.Value=142;controls.ParticleSpeed.Value=225;controls.TrailSpread.Value=175;controls.TrailFade.Value=320;controls.OpacityValue.Value=68;controls.RippleSize.Value=230;controls.TrailFragmentSize.Value=51;controls.ClickFragmentSize.Value=182;controls.ClickOpacity.Value=29;controls.TrailColor.Value=Color.Red;controls.RippleColor.Value=Color.Blue;controls.FragmentColor.Value=Color.Green;controls.VisibleValue.Checked=false;controls.Updating=false;SaveControls(true);Require(!File.ReadAllText(ControlsPath).Contains("contrast"),"Removed outline persisted");controls.VisibleValue.Checked=true;ResetControls();Require(controls.ParticleSpeed.Value==100&&controls.TrailSpread.Value==100&&controls.TrailFade.Value==180,"Speed/spread/fade reset");RestoreControls(true);Require(controls.EffectSize.Value==173&&controls.ParticleStrength.Value==142&&controls.ParticleSpeed.Value==225&&controls.TrailSpread.Value==175&&controls.TrailFade.Value==320&&controls.OpacityValue.Value==68&&controls.RippleSize.Value==230&&controls.TrailFragmentSize.Value==51&&controls.ClickFragmentSize.Value==182&&controls.ClickOpacity.Value==29&&controls.TrailColor.Value.ToArgb()==Color.Red.ToArgb()&&controls.RippleColor.Value.ToArgb()==Color.Blue.ToArgb()&&controls.FragmentColor.Value.ToArgb()==Color.Green.ToArgb()&&!controls.VisibleValue.Checked,"Settings persistence");Configure();Require(!overlay.Visible,"Restored OFF ignored");
+            File.WriteAllText(ControlsPath,"{\"version\":6,\"trailColor\":\"#EF83AD\",\"rippleColor\":\"#DB5A91\",\"fragmentColor\":\"#FFE1EC\",\"trailFadeMs\":320}");RestoreControls(true);Require(controls.TrailColor.Value==ColorPalette.All[2].Trail&&controls.RippleColor.Value==ColorPalette.All[2].Ripple&&controls.FragmentColor.Value==ColorPalette.All[2].Fragment&&controls.TrailFade.Value==320,"Old Sakura preset migration changed custom parameters");
             File.WriteAllText(ControlsPath,"{\"version\":1,\"visible\":true,\"top\":false,\"monitor\":\"removed\",\"fps\":7,\"size\":125}");RestoreControls(true);Configure();Require(controls.VisibleValue.Checked&&overlay.Visible&&overlay.Bounds==SystemInformation.VirtualScreen&&effects.Fps==60&&(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0,"Legacy settings override fixed behavior");checks.Add("actual settings save/restore, legacy visibility migration ignores removed options");
             Require(controls.TrailSpread.Value==100&&controls.TrailFade.Value==180&&controls.RippleSize.Value==125&&controls.TrailFragmentSize.Value==125&&controls.ClickFragmentSize.Value==125,"Legacy global size migration");foreach(var entry in shell)Require(!entry.Value||!Native.IsWindow(entry.Key)||Native.IsWindowEnabled(entry.Key),"Shell disabled");checks.Add("normal taskbar minimize, explicit hide keeps effects, restore works, X exits");
             var result=new{passed=true,hardware=renderer.Hardware,checks,visual,frames=Frames,layerRepairs};controls.Close();Require(quitting&&controls.IsDisposed,"X didn't exit");File.WriteAllText(report,Json.Serialize(result));

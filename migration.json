@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "date": "2026-10-04",
   "method": "git subtree add without squash; preserve source refs as namespaced tags",
-  "originalRepositoriesRetained": true,
+  "originalRepositoriesRetained": false,
   "sources": [
     {
       "source": "https://github.com/g114056175/word2pdf",
@@ -21,7 +21,9 @@
         }
       ],
       "sourceCommittedAt": "2026-07-10T14:31:18+08:00",
-      "sourceLastUpdatedDate": "2026-07-10"
+      "sourceLastUpdatedDate": "2026-07-10",
+      "originalRepositoryDeleted": true,
+      "originalRepositoryDeletionDate": "2026-10-04"
     },
     {
       "source": "https://github.com/g114056175/test_examAssistant",
@@ -48,7 +50,9 @@
         }
       ],
       "sourceCommittedAt": "2026-05-26T18:36:49+08:00",
-      "sourceLastUpdatedDate": "2026-05-26"
+      "sourceLastUpdatedDate": "2026-05-26",
+      "originalRepositoryDeleted": true,
+      "originalRepositoryDeletionDate": "2026-10-04"
     },
     {
       "source": "https://github.com/g114056175/VoiceCapture",
@@ -71,7 +75,9 @@
         }
       ],
       "sourceCommittedAt": "2026-09-15T17:02:06+08:00",
-      "sourceLastUpdatedDate": "2026-09-15"
+      "sourceLastUpdatedDate": "2026-09-15",
+      "originalRepositoryDeleted": true,
+      "originalRepositoryDeletionDate": "2026-10-04"
     }
   ],
   "adjustments": [

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/out/
+**/dist/
+**/artifacts/
+.vs/
+*.exe
+*.zip
+*.user
+*.suo
+*.pending*

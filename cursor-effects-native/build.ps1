@@ -31,7 +31,7 @@ if(!$Test){
     New-Item -ItemType Directory -Force -Path (Join-Path $out 'licenses') | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $root 'licenses') -File | Copy-Item -Destination (Join-Path $out 'licenses') -Force
     New-Item -ItemType Directory -Force -Path (Join-Path $out 'docs') | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'docs/preview.png') -Destination (Join-Path $out 'docs') -Force
+    Get-ChildItem -LiteralPath (Join-Path $root 'docs') -File | Copy-Item -Destination (Join-Path $out 'docs') -Force
 }
 $hashes=[ordered]@{}
 foreach($directory in @('src','assets')){foreach($file in Get-ChildItem -LiteralPath (Join-Path $root $directory) -File){$hashes[$directory+'/'+$file.Name]=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}}

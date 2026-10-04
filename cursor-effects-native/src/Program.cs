@@ -81,11 +81,16 @@ sealed partial class CursorHost : ApplicationContext {
         try{
             var bounds=SystemInformation.VirtualScreen;
             if(overlay.Bounds!=bounds){StopAnimation(true);overlay.Bounds=bounds;effects.Viewport=bounds;hasPoint=false;}
-            effects.Configure(controls.Trail.Checked,controls.ClickValue.Checked,1,(double)controls.Strength.Value/100,(double)controls.ParticleStrength.Value/100,1,cursorFps);
+            effects.Configure(controls.Trail.Checked,controls.ClickValue.Checked,1,(double)controls.Strength.Value/100,1,1,cursorFps);
             effects.Customize((double)controls.EffectSize.Value/100,(double)controls.RippleSize.Value/100,(double)controls.TrailFragmentSize.Value/100,(double)controls.ClickFragmentSize.Value/100,(double)controls.OpacityValue.Value/100,(double)controls.ClickOpacity.Value/100);
             effects.SetParticleSpeed((double)controls.ParticleSpeed.Value/100);
+            effects.SetClickSpeed((double)controls.ClickSpeed.Value/100);
             effects.SetTrailSpread((double)controls.TrailSpread.Value/100);
             effects.SetTrailLifetime((double)controls.TrailFade.Value/1000);
+            effects.SetTrailEmission((double)controls.TrailSpacing.Value,(double)controls.SpacingJitter.Value/100);
+            effects.SetTrailGap((double)controls.TrailGap.Value);
+            effects.SetClickParticles((int)controls.ClickCount.Value,(double)controls.ClickRadius.Value);
+            effects.SetParticleFlash((double)controls.BirthWhite.Value/100,(double)controls.ColorFade.Value/1000);
             renderer.Appearance(controls.TrailColor.Value,controls.RippleColor.Value,controls.FragmentColor.Value);
             bool visible=controls.VisibleValue.Checked&&(controls.Trail.Checked&&controls.OpacityValue.Value>0||controls.ClickValue.Checked&&controls.ClickOpacity.Value>0);blockedAbove=IntPtr.Zero;
             bool wasTop=(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0;
@@ -142,7 +147,15 @@ sealed partial class CursorHost : ApplicationContext {
             foreach(var n in new[]{controls.EffectSize,controls.RippleSize,controls.TrailFragmentSize,controls.ClickFragmentSize})number("size",n);
             foreach(var n in new[]{controls.OpacityValue,controls.ClickOpacity})number("opacity",n);
             number("trailWidth",controls.EffectSize);number("rippleSize",controls.RippleSize);number("trailFragmentSize",controls.TrailFragmentSize);number("clickFragmentSize",controls.ClickFragmentSize);number("trailOpacity",controls.OpacityValue);number("clickOpacity",controls.ClickOpacity);
-            number("particles",controls.ParticleStrength);number("particleSpeed",controls.ParticleSpeed);controls.TrailSpread.Value=100;number("trailSpread",controls.TrailSpread);number("glow",controls.Strength);check("trail",controls.Trail);check("click",controls.ClickValue);
+            ResetParticleControls();
+            if(data.TryGetValue("particles",out value)){
+                double density=Math.Max(0,Math.Min(300,Convert.ToDouble(value)))/100;
+                controls.TrailSpacing.Value=density>0?(decimal)(80/density):0;
+                controls.ClickCount.Value=(decimal)Math.Round(4*density);
+            }
+            number("particleSpeed",controls.ParticleSpeed);number("particleSpeed",controls.ClickSpeed);
+            number("trailSpacing",controls.TrailSpacing);number("spacingJitter",controls.SpacingJitter);number("trailGap",controls.TrailGap);number("clickCount",controls.ClickCount);number("clickRadius",controls.ClickRadius);number("clickSpeed",controls.ClickSpeed);number("birthWhite",controls.BirthWhite);number("colorFadeMs",controls.ColorFade);
+            controls.TrailSpread.Value=100;number("trailSpread",controls.TrailSpread);number("glow",controls.Strength);check("trail",controls.Trail);check("click",controls.ClickValue);
             controls.TrailFade.Value=180;number("trailFadeMs",controls.TrailFade);
             Action<string,ColorField> color=(key,input)=>{if(data.TryGetValue(key,out value)&&value is string){string hex=((string)value).TrimStart('#');int rgb;if(hex.Length==6&&int.TryParse(hex,System.Globalization.NumberStyles.HexNumber,System.Globalization.CultureInfo.InvariantCulture,out rgb))input.Value=Color.FromArgb(255,(rgb>>16)&255,(rgb>>8)&255,rgb&255);}};
             color("trailColor",controls.TrailColor);color("rippleColor",controls.RippleColor);color("fragmentColor",controls.FragmentColor);
@@ -154,11 +167,12 @@ sealed partial class CursorHost : ApplicationContext {
         }catch(Exception e){Log("設定載入失敗："+e.Message);}finally{controls.Updating=false;controls.SyncPalette();}
     }
     void SaveControls(bool force=false){if(Test&&!force||controls.Updating)return;try{
-        var data=new{version=7,trailFadeMs=controls.TrailFade.Value,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,trailFragmentSize=controls.TrailFragmentSize.Value,clickFragmentSize=controls.ClickFragmentSize.Value,trailOpacity=controls.OpacityValue.Value,clickOpacity=controls.ClickOpacity.Value,particles=controls.ParticleStrength.Value,particleSpeed=controls.ParticleSpeed.Value,trailSpread=controls.TrailSpread.Value,glow=controls.Strength.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
+        var data=new{version=8,trailFadeMs=controls.TrailFade.Value,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,trailFragmentSize=controls.TrailFragmentSize.Value,clickFragmentSize=controls.ClickFragmentSize.Value,trailOpacity=controls.OpacityValue.Value,clickOpacity=controls.ClickOpacity.Value,trailSpacing=controls.TrailSpacing.Value,spacingJitter=controls.SpacingJitter.Value,trailGap=controls.TrailGap.Value,clickCount=controls.ClickCount.Value,clickRadius=controls.ClickRadius.Value,clickSpeed=controls.ClickSpeed.Value,birthWhite=controls.BirthWhite.Value,colorFadeMs=controls.ColorFade.Value,particleSpeed=controls.ParticleSpeed.Value,trailSpread=controls.TrailSpread.Value,glow=controls.Strength.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
         var temp=ControlsPath+".tmp";File.WriteAllText(temp,Json.Serialize(data),Encoding.UTF8);if(File.Exists(ControlsPath))File.Replace(temp,ControlsPath,null);else File.Move(temp,ControlsPath);
     }catch(Exception e){Log("設定儲存失敗："+e.Message);}}
     public void ApplyPalette(ColorPalette palette){controls.Updating=true;try{controls.TrailColor.Value=palette.Trail;controls.RippleColor.Value=palette.Ripple;controls.FragmentColor.Value=palette.Fragment;}finally{controls.Updating=false;}controls.SyncPalette();Configure();}
-    public void ResetControls(){controls.Updating=true;foreach(var n in controls.Numbers)n.Value=100;controls.TrailFade.Value=180;controls.Trail.Checked=true;controls.ClickValue.Checked=true;controls.TrailColor.Value=Color.FromArgb(69,237,255);controls.RippleColor.Value=Color.FromArgb(69,237,255);controls.FragmentColor.Value=Color.FromArgb(196,252,255);controls.Updating=false;controls.SyncPalette();Configure();}
+    void ResetParticleControls(){controls.TrailSpacing.Value=80;controls.SpacingJitter.Value=35;controls.TrailGap.Value=8;controls.ClickCount.Value=4;controls.ClickRadius.Value=12;controls.ClickSpeed.Value=100;controls.BirthWhite.Value=100;controls.ColorFade.Value=90;}
+    public void ResetControls(){controls.Updating=true;foreach(var n in controls.Numbers)n.Value=100;ResetParticleControls();controls.TrailFade.Value=180;controls.Trail.Checked=true;controls.ClickValue.Checked=true;controls.TrailColor.Value=Color.FromArgb(69,237,255);controls.RippleColor.Value=Color.FromArgb(69,237,255);controls.FragmentColor.Value=Color.FromArgb(196,252,255);controls.Updating=false;controls.SyncPalette();Configure();}
     public void Quit(int code){if(quitting)return;configureTimer.Stop();saveTimer.Stop();SaveControls();quitting=true;Environment.ExitCode=code;inputTimer.Dispose();healthTimer.Dispose();configureTimer.Dispose();saveTimer.Dispose();StopAnimation(false);frameTimer.Dispose();if(orderObserver!=null)orderObserver.Dispose();if(tray!=null){tray.Visible=false;tray.Dispose();}if(trayMenu!=null)trayMenu.Dispose();overlay.Display(false,false);if(renderer!=null)renderer.Dispose();overlay.Dispose();controls.Dispose();ExitThread();}
 }
 

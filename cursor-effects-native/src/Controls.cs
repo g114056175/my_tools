@@ -124,35 +124,41 @@ sealed class PaletteField : ComboBox {
 sealed class ControlsWindow : Form {
     readonly CursorHost host;
     readonly ToolTip hints=new ToolTip();
-    public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),Strength=AppTheme.Number(0,300,100),EffectSize=AppTheme.Number(25,300,100),ParticleStrength=AppTheme.Number(0,300,100);
+    public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),Strength=AppTheme.Number(0,300,100),EffectSize=AppTheme.Number(25,300,100);
     public readonly NumberField TrailFragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100),ClickFragmentSize=AppTheme.Number(25,300,100),ClickOpacity=AppTheme.Number(0,100,100);
     public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,180);
+    public readonly NumberField TrailSpacing=AppTheme.Number(0,300,80),SpacingJitter=AppTheme.Number(0,80,35),TrailGap=AppTheme.Number(0,60,8);
+    public readonly NumberField ClickCount=AppTheme.Number(0,20,4),ClickRadius=AppTheme.Number(4,60,12),ClickSpeed=AppTheme.Number(0,300,100);
+    public readonly NumberField BirthWhite=AppTheme.Number(0,100,100),ColorFade=AppTheme.Number(20,400,90);
     public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(196,252,255));
     public readonly OnOffSwitch VisibleValue=new OnOffSwitch{Checked=true};
     public readonly PaletteField Palette=new PaletteField();bool synchronizingPalette;
     public readonly CheckBox Trail=AppTheme.Check("按住左鍵時顯示",true),ClickValue=AppTheme.Check("點擊時顯示",true);
     public readonly Label Status;public bool Updating;
     readonly TableLayoutPanel body;readonly Control[] pages;readonly Button[] tabs;
-    public NumberField[] Numbers{get{return new[]{EffectSize,TrailFragmentSize,OpacityValue,TrailFade,RippleSize,ClickFragmentSize,ClickOpacity,ParticleStrength,ParticleSpeed,TrailSpread,Strength};}}
+    public NumberField[] Numbers{get{return new[]{EffectSize,OpacityValue,TrailFade,TrailSpacing,SpacingJitter,RippleSize,ClickOpacity,ClickCount,ClickRadius,ClickSpeed,TrailFragmentSize,ClickFragmentSize,ParticleSpeed,TrailGap,TrailSpread,BirthWhite,ColorFade,Strength};}}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);AppTheme.DarkTitle(Handle);}
     public void HidePanel(){Hide();}
     public void ShowPanel(){WindowState=FormWindowState.Normal;Show();Activate();}
     public void SelectPage(int selected){for(int i=0;i<pages.Length;i++){pages[i].Visible=i==selected;tabs[i].BackColor=i==selected?AppTheme.Selected:AppTheme.Field;tabs[i].FlatAppearance.BorderColor=i==selected?AppTheme.Accent:AppTheme.Border;}}
     public void SyncPalette(){int selected=0;for(int i=0;i<ColorPalette.All.Length;i++){var p=ColorPalette.All[i];if(p.Trail.ToArgb()==TrailColor.Value.ToArgb()&&p.Ripple.ToArgb()==RippleColor.Value.ToArgb()&&p.Fragment.ToArgb()==FragmentColor.Value.ToArgb()){selected=i+1;break;}}synchronizingPalette=true;try{Palette.SelectedIndex=selected;}finally{synchronizingPalette=false;}}
     public ControlsWindow(CursorHost value){
-        host=value;Updating=true;Text="滑鼠光跡";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.FixedSingle;ClientSize=new Size(380,468);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
+        host=value;Updating=true;Text="滑鼠光跡";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.FixedSingle;ClientSize=new Size(380,542);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
         Font=new Font("Microsoft JhengHei UI",9);BackColor=AppTheme.Back;ForeColor=AppTheme.Text;
         body=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Padding=new Padding(14),Margin=Padding.Empty};body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));Controls.Add(body);
-        foreach(int height in new[]{66,44,36,260,34})body.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+        foreach(int height in new[]{66,44,36,334,34})body.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
         var master=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,BackColor=AppTheme.Card,Padding=new Padding(14,8,12,8),Margin=new Padding(0,0,0,12)};master.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));master.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,110));master.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         master.Controls.Add(new Label{Text="滑鼠效果",AutoSize=true,Anchor=AnchorStyles.Left,ForeColor=AppTheme.Text,Font=new Font(Font,FontStyle.Bold),Margin=Padding.Empty},0,0);VisibleValue.Dock=DockStyle.Fill;VisibleValue.BackColor=AppTheme.Card;VisibleValue.Margin=Padding.Empty;master.Controls.Add(VisibleValue,1,0);body.Controls.Add(master,0,0);
         var paletteRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Padding=new Padding(14,0,14,0),BackColor=AppTheme.Card,Margin=new Padding(0,0,0,8)};paletteRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,94));paletteRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));paletteRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));paletteRow.Controls.Add(new Label{Text="配色模板",AutoSize=true,Anchor=AnchorStyles.Left,Margin=Padding.Empty},0,0);Palette.Anchor=AnchorStyles.Left|AnchorStyles.Right;Palette.Dock=DockStyle.None;Palette.Margin=Padding.Empty;paletteRow.Controls.Add(Palette,1,0);body.Controls.Add(paletteRow,0,1);
         var tabRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));tabs=new Button[3];var titles=new[]{"拖曳光跡","點擊效果","碎片"};for(int i=0;i<3;i++){int index=i;tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));var tab=AppTheme.Button(titles[i],()=>SelectPage(index));tab.Dock=DockStyle.Fill;tab.Margin=new Padding(i==0?0:3,0,i==2?0:3,4);tabs[i]=tab;tabRow.Controls.Add(tab,i,0);}body.Controls.Add(tabRow,0,2);
-        var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,38);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),38);Row(drag,"碎片大小 %",AppTheme.Slider(TrailFragmentSize),38);Row(drag,"不透明度 %",AppTheme.Slider(OpacityValue),38);Row(drag,"衰退時間 ms",AppTheme.Slider(TrailFade),38);
-        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,38);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),38);Row(click,"碎片大小 %",AppTheme.Slider(ClickFragmentSize),38);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),38);
+        var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,34);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),34);Row(drag,"不透明度 %",AppTheme.Slider(OpacityValue),34);Row(drag,"衰退時間 ms",AppTheme.Slider(TrailFade),34);var spacing=AppTheme.Slider(TrailSpacing);Row(drag,"生成間距 px",spacing,34);var jitter=AppTheme.Slider(SpacingJitter);Row(drag,"間距浮動 %",jitter,34);
+        Hint(spacing,"累積移動多少像素生成一顆碎片，越大越稀疏；速度越快，每秒生成越多。停止移動不會生成，0 關閉拖曳碎片。" );Hint(jitter,"每次生成門檻在設定間距的 ± 此百分比內隨機變化，避免等距排列。");
+        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,34);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),34);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),34);Row(click,"碎片數量 顆",AppTheme.Slider(ClickCount),34);var radius=AppTheme.Slider(ClickRadius);Row(click,"周邊距離 px",radius,34);var clickSpeed=AppTheme.Slider(ClickSpeed);Row(click,"散開速度 %",clickSpeed,34);
+        Hint(radius,"波紋起始半徑與碎片生成位置；越大，點擊碎片越靠外圍。");Hint(clickSpeed,"點擊碎片的移動與淡出倍速，最終散開範圍不變。0% 停止移動，仍會淡出。");
         var glow=AppTheme.Slider(Strength);const string glowHelp="調整光跡、波紋及碎片周圍的柔光。0% 關閉柔光，本體仍保留；不改變數量、大小或分散距離。";
-        Action<Control> glowHint=null;glowHint=c=>{hints.SetToolTip(c,glowHelp);c.AccessibleDescription=glowHelp;foreach(Control child in c.Controls)glowHint(child);};glowHint(glow);
-        var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,38);Row(fragments,"碎片數量 %",AppTheme.Slider(ParticleStrength),38);Row(fragments,"碎片速度 %",AppTheme.Slider(ParticleSpeed),38);Row(fragments,"拖曳分散 %",AppTheme.Slider(TrailSpread),38);Row(fragments,"周圍光暈 %",glow,38);
+        Hint(glow,glowHelp);
+        var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,34);Row(fragments,"拖曳大小 %",AppTheme.Slider(TrailFragmentSize),34);Row(fragments,"點擊大小 %",AppTheme.Slider(ClickFragmentSize),34);Row(fragments,"拖曳速度 %",AppTheme.Slider(ParticleSpeed),34);var gap=AppTheme.Slider(TrailGap);Row(fragments,"離線距離 px",gap,34);Row(fragments,"散開幅度 %",AppTheme.Slider(TrailSpread),34);var flash=AppTheme.Slider(BirthWhite);Row(fragments,"出生白光 %",flash,34);var tintTime=AppTheme.Slider(ColorFade);Row(fragments,"變色時間 ms",tintTime,34);Row(fragments,"周圍光暈 %",glow,34);
+        Hint(gap,"拖曳碎片與光跡的留白距離，每顆帶有小幅隨機變化，並計入碎片大小；散開幅度會一起縮放距離與漂移。");Hint(flash,"新碎片偏白發亮的強度；多數較亮、少數較弱，隨後轉成碎片顏色。0% 直接使用設定顏色。");Hint(tintTime,"出生白光衰變到碎片顏色所需時間；之後在小幅色調範圍內淡出。");
         pages=new Control[]{drag,click,fragments};foreach(var page in new[]{drag,click,fragments}){page.RowCount++;page.RowStyles.Add(new RowStyle(SizeType.Percent,100));pageHost.Controls.Add(page);}body.Controls.Add(pageHost,0,3);
         var footer=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,76));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));footer.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         var reset=AppTheme.Button("重設",()=>host.ResetControls());reset.Dock=DockStyle.Fill;reset.AccessibleName="重設效果";footer.Controls.Add(reset,0,0);Status=new Label{Dock=DockStyle.Fill,ForeColor=AppTheme.Muted,Visible=false,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,0,8,0)};footer.Controls.Add(Status,1,0);var hide=AppTheme.Button("收起面板",HidePanel);hide.Dock=DockStyle.Fill;footer.Controls.Add(hide,2,0);body.Controls.Add(footer,0,4);
@@ -164,6 +170,7 @@ sealed class ControlsWindow : Form {
         FormClosed+=(s,e)=>{hints.Dispose();host.Quit(0);};Updating=false;
     }
     void Changed(){if(!Updating){host.UpdateVisibilityMenu();if(!VisibleValue.Checked)host.Configure();else host.ScheduleConfigure();}}
+    void Hint(Control c,string text){hints.SetToolTip(c,text);c.AccessibleDescription=text;foreach(Control child in c.Controls)Hint(child,text);}
     static TableLayoutPanel Page(){var p=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=0,Padding=new Padding(14,10,14,10),BackColor=AppTheme.Card,Margin=Padding.Empty};p.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,94));p.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));return p;}
     static void Row(TableLayoutPanel panel,string text,Control control,int height){int r=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.Absolute,height));panel.Height+=height;if(text.Length>0){panel.Controls.Add(new Label{Text=text,AutoSize=true,Anchor=AnchorStyles.Left,Margin=Padding.Empty},0,r);panel.Controls.Add(control,1,r);control.AccessibleName=text;}else{panel.Controls.Add(control,0,r);panel.SetColumnSpan(control,2);}control.Margin=new Padding(0,3,0,3);}
 }

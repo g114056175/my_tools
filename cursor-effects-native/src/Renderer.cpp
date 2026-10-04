@@ -16,7 +16,8 @@ template<class T> static void release(T*& p){if(p){p->Release();p=nullptr;}}
 struct DrawCommand {int kind;float x,y,x2,y2,width,angle,alpha;};
 // Windows 10 D2D1_PRIMITIVE_BLEND_MAX (omitted by the pinned MinGW header).
 static constexpr auto trailBlend=static_cast<D2D1_PRIMITIVE_BLEND>(4);
-// Only two embedded sprites and one temporary recolor buffer are needed.
+// Two embedded sprites plus one cached white glow variant; recolor only on
+// appearance changes, with a temporary buffer released immediately afterward.
 // Windows-owned buffers avoid linking the general C++ allocation/runtime stack.
 struct PixelBuffer {
     BYTE* bytes=nullptr;UINT length=0;
@@ -29,11 +30,11 @@ struct Renderer {
     ID2D1Factory1* factory=nullptr;ID2D1Device* device=nullptr;ID2D1DeviceContext* dc=nullptr;
     IDCompositionDevice* comp=nullptr;IDCompositionTarget* target=nullptr;IDCompositionVisual* visual=nullptr;IDCompositionSurface* surface=nullptr;
     ID2D1SolidColorBrush* cyan=nullptr;ID2D1SolidColorBrush* white=nullptr;ID2D1SolidColorBrush* ring=nullptr;ID2D1StrokeStyle* round=nullptr;ID2D1PathGeometry* triangle=nullptr;
-    ID2D1Bitmap1* lineGlow=nullptr;ID2D1Bitmap1* triangleGlow=nullptr;
+    ID2D1Bitmap1* lineGlow=nullptr;ID2D1Bitmap1* triangleGlow=nullptr;ID2D1Bitmap1* whiteTriangleGlow=nullptr;
     PixelBuffer linePixels,trianglePixels;D2D1_SIZE_U lineSize={},triangleSize={};
     UINT trailColor=0x45edff,particleColor=0xc4fcff;
     int width=0,height=0;bool hardware=false;
-    ~Renderer(){if(dc)dc->SetTarget(nullptr);release(surface);release(triangleGlow);release(lineGlow);release(triangle);release(round);release(ring);release(white);release(cyan);release(visual);release(target);release(comp);release(dc);release(device);release(factory);release(dxgi);release(d3d);}
+    ~Renderer(){if(dc)dc->SetTarget(nullptr);release(surface);release(whiteTriangleGlow);release(triangleGlow);release(lineGlow);release(triangle);release(round);release(ring);release(white);release(cyan);release(visual);release(target);release(comp);release(dc);release(device);release(factory);release(dxgi);release(d3d);}
     HRESULT load(BYTE* bytes,UINT length,ID2D1Bitmap1** output,PixelBuffer& pixels,D2D1_SIZE_U& size){
         IWICImagingFactory* wic=nullptr;IWICStream* stream=nullptr;IWICBitmapDecoder* decoder=nullptr;IWICBitmapFrameDecode* frame=nullptr;IWICFormatConverter* converter=nullptr;
         HRESULT hr=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic));
@@ -82,6 +83,12 @@ struct Renderer {
         TRY(factory->CreateStrokeStyle(stroke,nullptr,0,&round));TRY(factory->CreatePathGeometry(&triangle));
         ID2D1GeometrySink* sink=nullptr;TRY(triangle->Open(&sink));sink->BeginFigure(D2D1::Point2F(0,-1),D2D1_FIGURE_BEGIN_FILLED);sink->AddLine(D2D1::Point2F(.86f,.5f));sink->AddLine(D2D1::Point2F(-.86f,.5f));sink->EndFigure(D2D1_FIGURE_END_CLOSED);hr=sink->Close();release(sink);TRY(hr);
         TRY(load(line,lineSize,&lineGlow,linePixels,this->lineSize));TRY(load(tri,triSize,&triangleGlow,trianglePixels,triangleSize));
+        // A single cached white version of the fragment glow supports the
+        // short birth flash. No per-frame recoloring, blur, or readback.
+        PixelBuffer flashPixels;TRY(flashPixels.allocate(trianglePixels.length));
+        for(UINT i=0;i<trianglePixels.length;i+=4){BYTE alpha=trianglePixels.bytes[i+3];flashPixels.bytes[i]=flashPixels.bytes[i+1]=flashPixels.bytes[i+2]=flashPixels.bytes[i+3]=alpha;}
+        auto flashProps=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96,96);
+        TRY(dc->CreateBitmap(triangleSize,flashPixels.bytes,triangleSize.width*4,&flashProps,&whiteTriangleGlow));
         TRY(DCompositionCreateDevice(dxgi,__uuidof(IDCompositionDevice),reinterpret_cast<void**>(&comp)));
         TRY(comp->CreateTargetForHwnd(hwnd,TRUE,&target));TRY(comp->CreateVisual(&visual));TRY(target->SetRoot(visual));return comp->Commit();
     }
@@ -103,13 +110,22 @@ struct Renderer {
             cyan->SetOpacity(alpha);white->SetOpacity(alpha);ring->SetOpacity(alpha);dc->SetTransform(base);
             if(c.kind==0)dc->DrawLine(D2D1::Point2F(c.x,c.y),D2D1::Point2F(c.x2,c.y2),cyan,c.width,round);
             else if(c.kind==1||c.kind==4)dc->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(c.x,c.y),c.x2,c.x2),ring,c.width);
-            else if(c.kind==2){dc->SetTransform(D2D1::Matrix3x2F::Scale(c.width,c.width)*D2D1::Matrix3x2F::Rotation(c.angle)*D2D1::Matrix3x2F::Translation(c.x,c.y)*base);dc->FillGeometry(triangle,white);}
+            else if(c.kind==2){
+                float flash=(std::max)(0.f,(std::min)(1.f,c.x2)),tone=c.y2>0?(std::min)(1.f,c.y2):1.f;auto tint=color(particleColor);
+                white->SetColor(D2D1::ColorF(tint.r*tone*(1-flash)+flash,tint.g*tone*(1-flash)+flash,tint.b*tone*(1-flash)+flash));
+                dc->SetTransform(D2D1::Matrix3x2F::Scale(c.width,c.width)*D2D1::Matrix3x2F::Rotation(c.angle)*D2D1::Matrix3x2F::Translation(c.x,c.y)*base);dc->FillGeometry(triangle,white);
+            }
             else if(c.kind==3){
                 float size=c.width,len=c.x2;dc->SetTransform(D2D1::Matrix3x2F::Rotation(c.angle)*D2D1::Matrix3x2F::Translation(c.x,c.y)*base);
                 auto source=D2D1::RectF(0,0,64,128);auto dest=D2D1::RectF(-32*size,-32*size,0,32*size);dc->DrawBitmap(lineGlow,dest,alpha,D2D1_INTERPOLATION_MODE_LINEAR,&source);
                 source=D2D1::RectF(64,0,128,128);dest=D2D1::RectF(0,-32*size,len,32*size);dc->DrawBitmap(lineGlow,dest,alpha,D2D1_INTERPOLATION_MODE_LINEAR,&source);
                 source=D2D1::RectF(128,0,192,128);dest=D2D1::RectF(len,-32*size,len+32*size,32*size);dc->DrawBitmap(lineGlow,dest,alpha,D2D1_INTERPOLATION_MODE_LINEAR,&source);
-            }else if(c.kind==5){float size=c.width;dc->SetTransform(D2D1::Matrix3x2F::Rotation(c.angle)*D2D1::Matrix3x2F::Translation(c.x,c.y)*base);dc->DrawBitmap(triangleGlow,D2D1::RectF(-32*size,-32*size,32*size,32*size),alpha,D2D1_INTERPOLATION_MODE_LINEAR);}
+            }else if(c.kind==5){
+                float size=c.width,flash=(std::max)(0.f,(std::min)(1.f,c.x2)),tone=c.y2>0?(std::min)(1.f,c.y2):1.f;
+                dc->SetTransform(D2D1::Matrix3x2F::Rotation(c.angle)*D2D1::Matrix3x2F::Translation(c.x,c.y)*base);auto dest=D2D1::RectF(-32*size,-32*size,32*size,32*size);
+                if(flash<1)dc->DrawBitmap(triangleGlow,dest,alpha*tone*(1-flash),D2D1_INTERPOLATION_MODE_LINEAR);
+                if(flash>0)dc->DrawBitmap(whiteTriangleGlow,dest,alpha*flash,D2D1_INTERPOLATION_MODE_LINEAR);
+            }
         }
         dc->SetTransform(D2D1::Matrix3x2F::Identity());dc->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
     }

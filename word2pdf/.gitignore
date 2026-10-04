@@ -1,0 +1,10 @@
+.venv/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.spec
+
+dist/*
+!dist/Word2PDF-Batch.exe

@@ -118,10 +118,10 @@ sealed partial class CursorHost : ApplicationContext {
 #endif
             }
             lastFrame=now;double period=1000.0/effects.Fps;nextFrame=Math.Max(nextFrame+period,now-period/2);
-            if(effects.Alive==0&&!effects.Dirty){StopAnimation(false);return;}ScheduleFrame();
+            if(effects.Alive==0&&!effects.Dirty){StopAnimation(false,false);return;}ScheduleFrame();
         }catch(COMException e){if(e.ErrorCode==unchecked((int)0x8899000C)||e.ErrorCode==unchecked((int)0x887A0005)||e.ErrorCode==unchecked((int)0x887A0007)){RecoverDevice();}else Fail(e.Message);}catch(Exception e){Fail(e.Message);}
     }
-    void StopAnimation(bool clear){animating=false;frameTimer.Cancel();effects.Clear();if(clear&&renderer!=null)renderer.Clear();}
+    void StopAnimation(bool clear,bool resetPointer=true){animating=false;frameTimer.Cancel();effects.Clear(resetPointer);if(clear&&renderer!=null)renderer.Clear();}
     void RecoverDevice(){
         StopAnimation(false);long now=clock.ElapsedMilliseconds;if(now-recoveryWindow>10000){recoveryAttempts=0;recoveryWindow=now;}if(++recoveryAttempts>2){Fail("繪圖裝置持續失敗");return;}
         try{renderer.Dispose();renderer=new D2DRenderer(overlay.Handle);Configure();Log("繪圖裝置已重建");}catch(Exception e){Fail(e.Message);}

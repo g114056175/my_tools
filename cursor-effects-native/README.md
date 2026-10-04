@@ -4,7 +4,7 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 
 ## 下載
 
-下載 [**`BlueArchiveCursor.exe`**](https://github.com/g114056175/my_tools/releases/download/cursor-effects-v1.0.0/BlueArchiveCursor.exe) 後直接執行，免安裝，只需這一個檔案。
+下載 [**`BlueArchiveCursor.exe`**](https://github.com/g114056175/my_tools/releases/download/cursor-effects-v1.0.1/BlueArchiveCursor.exe) 後直接執行，免安裝，只需這一個檔案。
 
 適用 **Windows 10（1703 以上）／Windows 11 x64**，需 .NET Framework 4.8 與支援 Direct3D 11 的顯示驅動；已在 Windows 10 22H2 測試。
 
@@ -20,15 +20,16 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 
 ## 大小與效能
 
-**EXE：100.5 KiB**；首次執行另釋出 **19 KiB** 原生 DLL。
+**EXE：101 KiB**；首次執行另釋出 **19 KiB** 原生 DLL。
 
 測試電腦：**i5-12600K、RTX 4060、Windows 10 22H2**，桌面範圍 3840×1080。
 
 | 狀態 | CPU | 記憶體（工作集） |
 | --- | ---: | ---: |
-| 背景常駐、無操作 | 約 0.016% | 約 74 MiB |
-| 持續播放預設效果 | 約 0.21% | 約 79 MiB |
-| 碎片數量／光暈 300% | 約 0.36% | 約 80 MiB |
+| 背景常駐、無操作 | 約 0.03% | 約 74 MiB |
+| 持續播放預設效果 | 約 0.05% | 約 79 MiB |
+| 碎片數量／光暈 300% | 約 0.31% | 約 80 MiB |
+| 跨桌面高速拖曳，碎片／光暈 300% | 約 0.60% | 約 84 MiB |
 
 效果固定 60 FPS，結束後停止繪製。以上為收起面板、每階段 6 秒的短時量測；CPU 按 16 邏輯執行緒折算，未包含桌面合成器（DWM），不同電腦的結果會有差異。
 
@@ -42,6 +43,8 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 ### 技術
 
 C#／WinForms 控制面板，C++／Direct2D + DirectComposition 繪製。只繪製效果附近的小區域，閒置時停止渲染；圖片與原生模組內嵌於 EXE。GPU 不可用時退回 WARP 軟體繪圖。
+
+光跡連接相鄰游標取樣點，長距離移動也會連線；碎片依距離分布在沿途，各次取樣與存活碎片數量均有上限。停頓後續接原位置，放開滑鼠或進入控制面板時結束該段。
 
 設定及原生 DLL 快取位於 `%LOCALAPPDATA%\BlueArchiveCursor.Native`。碎片速度改變移動與淡出時間，飛散範圍不變；0% 停止移動但仍淡出。程式僅允許一個實例，再次執行會叫回面板。
 

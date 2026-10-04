@@ -18,6 +18,38 @@ sealed partial class CursorHost {
     }
     static double Alpha(byte[] pixels){double sum=0;for(int i=3;i<pixels.Length;i+=4)sum+=pixels[i];return sum;}
     CursorEffects Sample(double strength){uint seed=1234;Func<double> rng=()=>{seed=unchecked(seed*1664525+1013904223);return seed/4294967296.0;};var fx=new CursorEffects(rng){Viewport=new Rectangle(0,0,640,400)};fx.Configure(true,true,1,strength,1,1,60);fx.Input(200,200,true,true);for(int i=1;i<=12;i++)fx.Input(200+i*12,200+Math.Sin(i*.4)*50,false,true);fx.Draw(.08);return fx;}
+    void TestHighSpeedTrails(){
+        var line=new CursorEffects(()=>.5){Viewport=new Rectangle(0,0,640,400)};
+        line.Configure(true,false,1,1,0,1,60);line.Input(20,200,true,true);line.Input(620,200,false,true);line.Draw(.01);
+        var pixels=renderer.Capture(line,640,400);
+        for(int x=32;x<608;x++)Require(pixels[(200*640+x)*4+3]>0,"High-speed line has a transparent gap at "+x);
+        D2DRenderer.Save(pixels,640,400,Path.Combine(profile,"high-speed-trail.png"));
+
+        var path=new CursorEffects(()=>.5){Viewport=new Rectangle(-1920,-100,3840,1080)};
+        path.Configure(true,true,1,1,1,1,60);path.Input(-1880,100,true,true);path.Input(1840,100,false,true);path.Draw(0);
+        Require(path.Commands.Any(c=>c.Kind==0&&c.X==40&&c.X2==3760),"Monitor-wide drag was discarded");
+        Require(path.Commands.Any(c=>c.Kind==3&&c.X2>3700),"Monitor-wide halo was discarded");
+        var fragments=path.Particles.Where(p=>!p.Burst).ToArray();
+        Require(fragments.Length>0&&fragments.All(p=>p.X>40&&p.X<3760&&p.Y==200)&&fragments.Select(p=>(int)(p.X/640)).Distinct().Count()>=5,"Drag fragments are not spread over the line");
+        path.Input(1840,100,false,false);path.Input(-1600,300,true,true);path.Input(-1000,300,false,true);path.Draw(0);
+        Require(path.Commands.Count(c=>c.Kind==0)==2,"Separate button presses were joined");
+        path.Input(-900,300,false,true,true);path.Input(-300,300,false,true);path.Draw(0);
+        Require(path.Commands.Count(c=>c.Kind==0)==2,"Blocked area was bridged");
+
+        var release=new CursorEffects(()=>.5){Viewport=new Rectangle(0,0,640,400)};
+        release.Input(20,100,true,true);release.Input(620,100,false,false);release.Draw(0);
+        Require(release.Commands.Any(c=>c.Kind==0&&c.X==20&&c.X2==620),"Fast mouse-up endpoint was lost");
+        release.Input(400,300,true,true);release.Draw(0);
+        Require(release.Commands.Count(c=>c.Kind==0)==1,"Mouse-up left a stale connection");
+
+        var stress=new CursorEffects(()=>.5){Viewport=new Rectangle(-3840,0,7680,2160)};
+        stress.Configure(true,true,3,3,3,1,60);stress.Customize(3,3,3,3,1,1);
+        for(int i=0;i<1000;i++){
+            stress.Input(i%2==0?-3800:3800,200+(i%8)*200,i==0,true);stress.Draw(1.0/120);
+            Require(stress.Points.Count<=32&&stress.Particles.Count<=192&&stress.Rings.Count<=16&&stress.Commands.Count<=2048,"High-speed path exceeds renderer/memory limits");
+        }
+        for(int i=0;i<20;i++)stress.Draw(.1);Require(stress.Alive==0,"High-speed effects fail to expire");
+    }
     async void RunTest(){
         string report=Path.Combine(profile,"test.json");var checks=new List<string>();var shell=Native.ShellInputHandles().ToDictionary(h=>h,h=>Native.IsWindowEnabled(h));
         try{
@@ -36,9 +68,11 @@ sealed partial class CursorHost {
             checks.Add("event-driven topmost repair with bounded retries");
             StopAnimation(true);long before=Frames;await Task.Delay(1100);Require(Frames==before&&!animating&&renderer.Surface.Size==new Size(1,1),"Idle drawing continues");
             var origin=effects.Viewport.Location;Pointer(origin.X+150,origin.Y+100,false,false);Require(effects.Alive==0&&!animating,"Hover emits effects");Pointer(origin.X+150,origin.Y+100,true,true);await Task.Delay(80);Require(Frames>before,"Click doesn't wake");Pointer(origin.X+180,origin.Y+110,false,true);Pointer(origin.X+180,origin.Y+110,false,false);await Task.Delay(900);Require(effects.Alive==0&&!animating&&renderer.Surface.Size==new Size(1,1),"Effects don't sleep");checks.Add("hover silent, click/held trail wake, expiration returns to 1px and stops timer");
+            Pointer(origin.X+100,origin.Y+100,true,true);await Task.Delay(900);Require(effects.Alive==0&&!animating,"Stationary hold does not sleep");Pointer(origin.X+650,origin.Y+100,false,true);effects.Draw(0);Require(effects.Commands.Any(c=>c.Kind==0&&c.X==100&&c.X2==650),"Drag after a stationary hold lost its anchor");StopAnimation(true);checks.Add("stationary held cursor sleeps and resumes with a connected trail");
             Pointer(origin.X+150,origin.Y+100,true,true);lastFrame=clock.Elapsed.TotalMilliseconds-1000;Frame();Require(!animating&&effects.Alive==0,"Suspend/stall replays old effects");RecoverDevice();Require(!failed&&renderer.Hardware,"Device rebuild failed");checks.Add("stalled frames clear effects, graphics device recreation succeeds");
             before=Frames;Pointer(origin.X+150,origin.Y+100,true,true);await Task.Delay(150);Require(Frames-before>=7&&Frames-before<=12,"60 FPS scheduler");StopAnimation(true);ResetControls();inputTimer.Stop();checks.Add("fixed 60 FPS scheduler");
             var test=new CursorEffects(()=>.5){Viewport=new Rectangle(-1920,-100,3840,1080)};test.Input(-1820,0,true,true);Require(test.Points.Single().X==100&&test.Points.Single().Y==100,"Negative monitor origin");test.Input(-1800,20,true,true,true);Require(test.Points.Count==1,"Blocked input emits");test.Clear();test.Configure(true,true,1,1,3,1,60);test.Input(-1820,0,true,true);Require(test.Particles.Count==36,"Density multiplier");test.Configure(true,true,2,1,3,1,60);Require(test.Particles[0].Size==10,"Size multiplier");for(int i=0;i<1000;i++)test.Input(-1820+(i*4)%1500,100,true,true);Require(test.Points.Count==32&&test.Particles.Count==192&&test.Rings.Count==16,"Unbounded particles");for(int i=0;i<20;i++)test.Draw(.1);Require(test.Alive==0,"Expiration");checks.Add("negative origin, blocked controls, multipliers, bounded memory, finite lifetimes");
+            TestHighSpeedTrails();checks.Add("600px real GPU line without gaps, 3720px multi-monitor stroke with distributed fragments, release/blocked boundaries, 1000 rapid 7600px samples within fixed budgets");
             var visual=new List<object>();double prev=0;
             renderer.Appearance(Color.FromArgb(69,237,255),Color.FromArgb(69,237,255),Color.FromArgb(196,252,255));
             foreach(int glow in new[]{0,1,3}){

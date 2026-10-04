@@ -27,25 +27,39 @@ sealed class CursorEffects {
     public void SetParticleSpeed(double speed){particleSpeed=Clamp(speed,0,3);Dirty=true;}
     static double Clamp(double value,double min,double max){return double.IsNaN(value)||double.IsInfinity(value)?min:Math.Max(min,Math.Min(max,value));}
     static double Distance(Item a,Item b){double x=a.X-b.X,y=a.Y-b.Y;return Math.Sqrt(x*x+y*y);}
-    public void Clear(){Points.Clear();Particles.Clear();Rings.Clear();Commands.Clear();last=null;Dirty=false;}
+    public void Clear(bool resetPointer=true){Points.Clear();Particles.Clear();Rings.Clear();Commands.Clear();if(resetPointer)last=null;Dirty=false;}
     public void Input(double x,double y,bool down,bool pressed,bool blocked=false){
         if(blocked||x<Viewport.Left||y<Viewport.Top||x>=Viewport.Right||y>=Viewport.Bottom){last=null;return;}
         if(Opacity==0||!Trail&&!Click)return;
         var p=new Item{X=x-Viewport.Left,Y=y-Viewport.Top};
+        if(down)last=null;
         if(pressed&&!down&&last!=null&&Distance(p,last)<1.5)return;
-        if(pressed&&Trail&&TrailOpacity>0&&(last==null||Distance(p,last)>1.5)){
+        // Each accepted cursor sample is joined to the preceding sample, even
+        // when a fast drag covers an entire monitor between input ticks. Also
+        // keep the final mouse-up position and resume from a stationary anchor.
+        if((pressed||last!=null)&&Trail&&TrailOpacity>0&&(last==null||Distance(p,last)>1.5)){
+            if(last!=null&&Points.Count==0)Points.Add(new Item{X=last.X,Y=last.Y,Life=.32,Start=true});
             p.Start=last==null;p.Life=.32;Points.Add(p);if(Points.Count>32)Points.RemoveAt(0);
-            if(last!=null){double distance=Distance(p,last);if(distance>3)Triangle(p.X,p.Y,Math.Min(3,(int)Math.Ceiling(distance/24)),false);}
+            if(last!=null){double distance=Distance(p,last);if(distance>3)TrailParticles(last,p,distance);}
         }
         if(down&&Click&&ClickOpacity>0){Rings.Add(new Item{X=p.X,Y=p.Y,Life=.42});if(Rings.Count>16)Rings.RemoveAt(0);Triangle(p.X,p.Y,12,true);}
-        last=pressed?p:null;if(pressed||down)Dirty=true;
+        last=pressed?p:null;if(pressed||down||Points.Count>0)Dirty=true;
+    }
+    void TrailParticles(Item a,Item b,double distance){
+        // Distribute fragments along the sampled path instead of piling them
+        // at its endpoint. Bound work for very long/high-DPI cursor jumps.
+        int count=(int)Math.Floor(Math.Min(12,Math.Ceiling(distance/24))*Density+.5);
+        for(int i=0;i<count;i++){double t=(i+.5)/count;Particle(a.X+(b.X-a.X)*t,a.Y+(b.Y-a.Y)*t,false);}
+        LimitParticles();
     }
     void Triangle(double x,double y,int count,bool burst){
-        count=(int)Math.Floor(count*Density+.5);for(int i=0;i<count;i++){
-            double a=random()*Math.PI*2,s=burst?60+random()*130:15+random()*40;
-            Particles.Add(new Item{X=x,Y=y,Vx=Math.Cos(a)*s,Vy=Math.Sin(a)*s,Angle=a,Spin=(random()-.5)*2,Life=burst?.42+.25*random():.28+.16*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Burst=burst});
-        }if(Particles.Count>192)Particles.RemoveRange(0,Particles.Count-192);
+        count=(int)Math.Floor(count*Density+.5);for(int i=0;i<count;i++)Particle(x,y,burst);LimitParticles();
     }
+    void Particle(double x,double y,bool burst){
+        double a=random()*Math.PI*2,s=burst?60+random()*130:15+random()*40;
+        Particles.Add(new Item{X=x,Y=y,Vx=Math.Cos(a)*s,Vy=Math.Sin(a)*s,Angle=a,Spin=(random()-.5)*2,Life=burst?.42+.25*random():.28+.16*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Burst=burst});
+    }
+    void LimitParticles(){if(Particles.Count>192)Particles.RemoveRange(0,Particles.Count-192);}
     public void Update(double dt){
         dt=Clamp(dt,0,.1);foreach(var list in new[]{Points,Rings}){foreach(var p in list)p.Age+=dt;for(int i=list.Count-1;i>=0;i--)if(list[i].Age>=list[i].Life)list.RemoveAt(i);}
         for(int i=Particles.Count-1;i>=0;i--){
@@ -60,14 +74,14 @@ sealed class CursorEffects {
     }
     void Add(int type,double x,double y,double x2,double width,double angle,double alpha,double y2=0){Commands.Add(new DrawCommand(type,x,y,x2,y2,width,angle,alpha));}
     void Halo(double intensity){
-        for(int i=1;i<Points.Count;i++){var a=Points[i-1];var b=Points[i];double len=Distance(a,b);if(b.Start||len>250||len==0)continue;Add(3,a.X,a.Y,len,Size*TrailWidth,Math.Atan2(b.Y-a.Y,b.X-a.X),Opacity*TrailOpacity*.9*(1-b.Age/b.Life)*intensity);}
+        for(int i=1;i<Points.Count;i++){var a=Points[i-1];var b=Points[i];double len=Distance(a,b);if(b.Start||len==0)continue;Add(3,a.X,a.Y,len,Size*TrailWidth,Math.Atan2(b.Y-a.Y,b.X-a.X),Opacity*TrailOpacity*.9*(1-b.Age/b.Life)*intensity);}
         foreach(var r in Rings){double t=r.Age/r.Life,scale=Size*RippleSize,alpha=Opacity*ClickOpacity*(1-t)*.85*intensity,radius=(8+72*t)*scale;Add(4,r.X,r.Y,radius,24*scale,0,alpha*.07);Add(4,r.X,r.Y,radius,13*scale,0,alpha*.13);Add(4,r.X,r.Y,radius,6*scale,0,alpha*.24);}
         foreach(var p in Particles)Add(5,p.X,p.Y,0,p.Size/5,p.Angle,Opacity*(p.Burst?ClickOpacity:TrailOpacity)*(1-p.Age/p.Life)*intensity);
     }
     public bool Draw(double dt){
         Update(dt);if(Alive==0&&!Dirty)return false;Commands.Clear();
         for(double remaining=Strength*.55;remaining>0;remaining-=1)Halo(Math.Min(1,remaining));
-        for(int i=1;i<Points.Count;i++){var a=Points[i-1];var b=Points[i];if(b.Start||Distance(a,b)>250)continue;Add(0,a.X,a.Y,b.X,(1.5+2*(double)i/Points.Count)*Size*TrailWidth,0,Opacity*TrailOpacity*.9*(1-b.Age/b.Life),b.Y);}
+        for(int i=1;i<Points.Count;i++){var a=Points[i-1];var b=Points[i];if(b.Start||Distance(a,b)==0)continue;Add(0,a.X,a.Y,b.X,(1.5+2*(double)i/Points.Count)*Size*TrailWidth,0,Opacity*TrailOpacity*.9*(1-b.Age/b.Life),b.Y);}
         foreach(var r in Rings){double t=r.Age/r.Life;Add(1,r.X,r.Y,(8+72*t)*Size*RippleSize,2.5*Size*RippleSize,0,Opacity*ClickOpacity*(1-t)*.85);}
         foreach(var p in Particles)Add(2,p.X,p.Y,0,p.Size,p.Angle,Opacity*(p.Burst?ClickOpacity:TrailOpacity)*(1-p.Age/p.Life));
         Dirty=Alive>0;return true;

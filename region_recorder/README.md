@@ -2,7 +2,9 @@
 
 把桌面指定範圍錄成 MP4 或 GIF。
 
-**[下載 region_recorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe)** · [版本資訊](https://github.com/g114056175/my_tools/releases/tag/region_recorder-v1.0.0)
+**[下載 region_recorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.1/region_recorder.exe)** · [版本資訊](https://github.com/g114056175/my_tools/releases/tag/region_recorder-v1.0.1)
+
+支援跨螢幕框選與錄製；框線和錄製工具列不會出現在成品中。
 
 適用 Windows 10 2004 以上／Windows 11，x64。單一 EXE 即可執行，不需安裝；Windows N 版本需先安裝 Media Feature Pack。
 
@@ -23,13 +25,15 @@
 
 錄製限制固定為 **GIF：300 MB／1 分鐘；Video：4 GB／30 分鐘**，任一條件先到即自動停止並進入保存流程。
 手動暫停不計時，容量以十進位計算；為了完成檔案收尾，可能略早於容量上限停止。
-MP4 使用 H.264 壓縮；GIF 使用 256 色編碼。**目前只錄畫面，不錄系統聲音或麥克風。**
+MP4 使用 H.264 壓縮；GIF 依每一畫格建立最多 256 色的自適應色盤，改善深色介面的色偏。
+GIF 仍有色數限制，照片或漸層畫面可使用 MP4。**目前只錄畫面，不錄系統聲音或麥克風。**
 
 下圖是由本工具實際錄製的 GIF：
 
 ![GIF 示範](images/demo.gif)
 
 採用原生 Win32、Windows Graphics Capture 與 Media Foundation。錄到的是桌面可見內容；其他視窗的遮擋也會錄入。
+跨螢幕範圍以桌面實體像素拼接；螢幕排列間的空隙填黑。錄製中重新框選時，成品尺寸維持開始錄製時的大小。
 剪貼簿以檔案方式複製，適用檔案總管及支援檔案貼上的程式。
 
 需要自行編譯時，安裝 LLVM-MinGW 並將其 `bin` 加入 PATH；在 `region_recorder/` 執行：
@@ -39,3 +43,5 @@ powershell -ExecutionPolicy Bypass -File .\src\build.ps1
 ```
 
 EXE 產生在 `region_recorder/`。
+
+開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。測試會短暫顯示色塊視窗，檢查 GIF 色彩、跨螢幕拼接、框線排除，以及 MP4／GIF 時間與容量上限；跨螢幕實測需要兩個相鄰螢幕。

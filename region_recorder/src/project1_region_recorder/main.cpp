@@ -3,7 +3,7 @@
 #include <cmath>
 
 #include "common/image_utils.h"
-#include "common/wgc_capture.h"
+#include "project1_region_recorder/desktop_capture.h"
 #include "project1_region_recorder/gif_writer.h"
 #include "project1_region_recorder/mp4_writer.h"
 #include "project1_region_recorder/recorder_app.h"
@@ -26,7 +26,7 @@ void RecordingWorker(bool gif, std::wstring outputPath, int canvasWidth, int can
         canvasHeight &= ~1;
     }
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    lc::WgcCapture capture;
+    lc::DesktopCapture capture;
     const bool captureCursor = g_app.captureCursor.load();
     lc::Mp4Writer mp4;
     lc::GifWriter gifWriter;
@@ -44,15 +44,8 @@ void RecordingWorker(bool gif, std::wstring outputPath, int canvasWidth, int can
         return;
     }
 
-    HMONITOR activeMonitor = nullptr;
-    MONITORINFO monitorInfo{};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    RECT previousRegion{};
     std::vector<uint8_t> source;
-    std::vector<uint8_t> previousSource;
     std::vector<uint8_t> canvas;
-    int previousWidth = 0;
-    int previousHeight = 0;
     int64_t mediaTime = 0;
     auto nextFrame = std::chrono::steady_clock::now();
     auto previousTick = nextFrame;
@@ -87,39 +80,20 @@ void RecordingWorker(bool gif, std::wstring outputPath, int canvasWidth, int can
         nextFrame += interval;
 
         RECT region{};
+        int sourceWidth = 0;
+        int sourceHeight = 0;
+        bool captured = false;
         {
             std::lock_guard lock(g_app.regionMutex);
+            if (g_app.paused.load()) continue;
             region = g_app.region;
+            captured = capture.Capture(region, captureCursor, source, sourceWidth, sourceHeight, error);
         }
-        HMONITOR monitor = MonitorFromRect(&region, MONITOR_DEFAULTTONEAREST);
-        if (monitor != activeMonitor || !capture.IsRunning()) {
-            capture.Stop();
-            monitorInfo = {};
-            monitorInfo.cbSize = sizeof(monitorInfo);
-            GetMonitorInfoW(monitor, &monitorInfo);
-            if (!capture.StartForMonitor(monitor, error, captureCursor)) {
+        if (!captured) {
+            if (!error.empty()) {
                 reason = DoneError;
                 break;
             }
-            activeMonitor = monitor;
-            previousSource.clear();
-        }
-        RECT relative{
-            region.left - monitorInfo.rcMonitor.left, region.top - monitorInfo.rcMonitor.top,
-            region.right - monitorInfo.rcMonitor.left, region.bottom - monitorInfo.rcMonitor.top};
-        int sourceWidth = 0;
-        int sourceHeight = 0;
-        const bool fresh = capture.CaptureLatest(source, sourceWidth, sourceHeight, &relative);
-        if (fresh) {
-            previousSource = source;
-            previousWidth = sourceWidth;
-            previousHeight = sourceHeight;
-            previousRegion = region;
-        } else if (!previousSource.empty() && EqualRect(&region, &previousRegion)) {
-            source = previousSource;
-            sourceWidth = previousWidth;
-            sourceHeight = previousHeight;
-        } else {
             std::this_thread::sleep_until(nextFrame);
             continue;
         }

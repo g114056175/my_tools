@@ -6,6 +6,10 @@
 #include <cstdint>
 #include <string>
 
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+
 namespace lc {
 namespace {
 
@@ -228,16 +232,17 @@ void CancelDesktopRegionSelection() {
 
 void ShowRegionMarker(HINSTANCE instance, const RECT& region) {
     if (!RegisterMarkerClass(instance)) return;
-    MONITORINFO info{};
-    info.cbSize = sizeof(info);
-    if (!GetMonitorInfoW(MonitorFromRect(&region, MONITOR_DEFAULTTONEAREST), &info)) return;
-    // Avoid capture exclusion: it also hides the outline in screenshots/desktop
-    // streaming. The usual path keeps every cyan pixel outside the captured ROI.
+    const LONG left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const LONG top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const LONG right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const LONG bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    // Keep edge outlines visible even at the desktop boundary. Capture exclusion
+    // keeps these pixels out of the recording, including cross-monitor selections.
     const RECT bounds{
-        std::max(region.left - kRegionMarkerThickness, info.rcMonitor.left),
-        std::max(region.top - kRegionMarkerThickness, info.rcMonitor.top),
-        std::min(region.right + kRegionMarkerThickness, info.rcMonitor.right),
-        std::min(region.bottom + kRegionMarkerThickness, info.rcMonitor.bottom)
+        std::max(region.left - kRegionMarkerThickness, left),
+        std::max(region.top - kRegionMarkerThickness, top),
+        std::min(region.right + kRegionMarkerThickness, right),
+        std::min(region.bottom + kRegionMarkerThickness, bottom)
     };
     const int width = std::max<LONG>(2, bounds.right - bounds.left);
     const int height = std::max<LONG>(2, bounds.bottom - bounds.top);
@@ -249,6 +254,7 @@ void ShowRegionMarker(HINSTANCE instance, const RECT& region) {
                                    instance, nullptr);
         if (!g_marker) return;
         SetLayeredWindowAttributes(g_marker, kMarkerKey, 255, LWA_COLORKEY);
+        SetWindowDisplayAffinity(g_marker, WDA_EXCLUDEFROMCAPTURE);
     }
     SetWindowPos(g_marker, HWND_TOPMOST, bounds.left, bounds.top, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);

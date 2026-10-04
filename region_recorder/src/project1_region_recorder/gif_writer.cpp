@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <unordered_map>
 
 namespace lc {
 
@@ -21,16 +22,6 @@ bool GifWriter::Open(const std::wstring& path, int width, int height, uint64_t s
     if (SUCCEEDED(hr)) hr = encoder_->Initialize(stream_.Get(), WICBitmapEncoderNoCache);
     if (SUCCEEDED(hr)) hr = factory_->CreatePalette(&palette_);
 
-    std::array<WICColor, 256> colors{};
-    for (int index = 0; index < 256; ++index) {
-        const int r = ((index >> 5) & 7) * 255 / 7;
-        const int g = ((index >> 2) & 7) * 255 / 7;
-        const int b = (index & 3) * 255 / 3;
-        colors[static_cast<size_t>(index)] = 0xff000000u | static_cast<WICColor>(r << 16) |
-                                             static_cast<WICColor>(g << 8) |
-                                             static_cast<WICColor>(b);
-    }
-    if (SUCCEEDED(hr)) hr = palette_->InitializeCustom(colors.data(), colors.size());
     if (FAILED(hr)) {
         error = L"Unable to initialize the GIF encoder: " + HrText(hr);
         Close();
@@ -63,17 +54,60 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
         return false;
     }
 
+    // A fixed RGB332 palette maps neutral dark gray to yellow/green because blue
+    // has only four levels. Optimize all 256 colors for this frame instead. Each
+    // frame receives its own local table so later scenes are not stuck with frame 1.
+    ComPtr<IWICBitmap> bitmap;
+    HRESULT hr = factory_->CreateBitmapFromMemory(
+        width_, height_, GUID_WICPixelFormat32bppBGR, width_ * 4,
+        static_cast<UINT>(static_cast<size_t>(width_) * height_ * 4),
+        const_cast<BYTE*>(bgra.data()), &bitmap);
+    if (SUCCEEDED(hr)) hr = palette_->InitializeFromBitmap(bitmap.Get(), 256, FALSE);
+    std::array<WICColor, 256> colors{};
+    UINT colorCount = 0;
+    if (SUCCEEDED(hr)) hr = palette_->GetColors(static_cast<UINT>(colors.size()), colors.data(), &colorCount);
+    if (SUCCEEDED(hr) && colorCount == 0) hr = E_FAIL;
     std::vector<BYTE> indexed(static_cast<size_t>(width_) * height_);
-    for (size_t i = 0; i < indexed.size(); ++i) {
-        const BYTE b = bgra[i * 4 + 0];
-        const BYTE g = bgra[i * 4 + 1];
-        const BYTE r = bgra[i * 4 + 2];
-        indexed[i] = static_cast<BYTE>((r & 0xe0) | ((g & 0xe0) >> 3) | (b >> 6));
+    if (SUCCEEDED(hr)) {
+        // WIC's indexed converter can map (30,30,30) to (18,18,18) even when
+        // the palette contains an exact match. Preserve palette colors exactly
+        // and find nearest colors ourselves. The bounded 6-bit cache avoids an
+        // unbounded per-frame RGB map for photographic/noisy content.
+        std::unordered_map<uint32_t, BYTE> exact;
+        for (UINT i = 0; i < colorCount; ++i) exact[colors[i] & 0xffffff] = static_cast<BYTE>(i);
+        const auto nearest = [&](int r, int g, int b) {
+            int best = 0, distance = INT_MAX;
+            for (UINT i = 0; i < colorCount; ++i) {
+                const int dr = r - static_cast<int>((colors[i] >> 16) & 255);
+                const int dg = g - static_cast<int>((colors[i] >> 8) & 255);
+                const int db = b - static_cast<int>(colors[i] & 255);
+                const int d = dr * dr + dg * dg + db * db;
+                if (d < distance) { best = static_cast<int>(i); distance = d; }
+            }
+            return static_cast<int16_t>(best);
+        };
+        std::array<int16_t, 256> gray{};
+        gray.fill(-1);
+        std::vector<int16_t> cache(64 * 64 * 64, -1);
+        for (size_t i = 0; i < indexed.size(); ++i) {
+            const int b = bgra[i * 4], g = bgra[i * 4 + 1], r = bgra[i * 4 + 2];
+            const uint32_t rgb = static_cast<uint32_t>((r << 16) | (g << 8) | b);
+            const auto found = exact.find(rgb);
+            if (found != exact.end()) { indexed[i] = found->second; continue; }
+            if (r == g && g == b) {
+                if (gray[r] < 0) gray[r] = nearest(r, g, b);
+                indexed[i] = static_cast<BYTE>(gray[r]);
+            } else {
+                auto& index = cache[((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2)];
+                if (index < 0) index = nearest((r & ~3) + 2, (g & ~3) + 2, (b & ~3) + 2);
+                indexed[i] = static_cast<BYTE>(index);
+            }
+        }
     }
 
     ComPtr<IWICBitmapFrameEncode> frame;
     ComPtr<IPropertyBag2> options;
-    HRESULT hr = encoder_->CreateNewFrame(&frame, &options);
+    if (SUCCEEDED(hr)) hr = encoder_->CreateNewFrame(&frame, &options);
     if (SUCCEEDED(hr)) hr = frame->Initialize(options.Get());
     if (SUCCEEDED(hr)) hr = frame->SetSize(width_, height_);
     if (SUCCEEDED(hr)) hr = frame->SetResolution(96.0, 96.0);

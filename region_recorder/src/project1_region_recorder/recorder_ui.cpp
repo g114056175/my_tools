@@ -118,12 +118,15 @@ RECT CurrentRegion() {
     std::lock_guard lock(g_app.regionMutex);
     return g_app.region;
 }
-RECT ClampToOneMonitor(RECT rect) {
+RECT ClampToDesktop(RECT rect) {
     MONITORINFO info{};
     info.cbSize = sizeof(info);
     if (!GetMonitorInfoW(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST), &info)) return rect;
+    const LONG left = GetSystemMetrics(SM_XVIRTUALSCREEN), top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const RECT desktop{left, top, left + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                       top + GetSystemMetrics(SM_CYVIRTUALSCREEN)};
     RECT clipped{};
-    if (!IntersectRect(&clipped, &rect, &info.rcMonitor) || clipped.right - clipped.left < 8 ||
+    if (!IntersectRect(&clipped, &rect, &desktop) || clipped.right - clipped.left < 8 ||
         clipped.bottom - clipped.top < 8)
         clipped = {info.rcMonitor.left, info.rcMonitor.top,
                    std::min(info.rcMonitor.left + 640, info.rcMonitor.right),
@@ -151,7 +154,7 @@ bool ApplyCoordinates() {
         Status(L"請輸入有效的 X、Y，寬高至少為 8。");
         return false;
     }
-    const RECT next = ClampToOneMonitor({x, y, x + width, y + height}), previous = CurrentRegion();
+    const RECT next = ClampToDesktop({x, y, x + width, y + height}), previous = CurrentRegion();
     SetRegion(next);
     if (g_app.view == View::Ready && !EqualRect(&next, &previous)) UpdateToolbar();
     return true;
@@ -363,7 +366,7 @@ void LoadSettings() {
                  0);
     const int x = std::clamp(ReadInt(g_app.editX, 100), -32768, 32768),
               y = std::clamp(ReadInt(g_app.editY, 100), -32768, 32768);
-    SetRegion(ClampToOneMonitor({x, y, x + std::clamp(ReadInt(g_app.editWidth, 640), 8, 32768),
+    SetRegion(ClampToDesktop({x, y, x + std::clamp(ReadInt(g_app.editWidth, 640), 8, 32768),
                                  y + std::clamp(ReadInt(g_app.editHeight, 360), 8, 32768)}));
 }
 UINT KeyModifiers(WORD key) {
@@ -536,8 +539,8 @@ void PositionToolbar() {
         position = {std::max(monitor.rcWork.left, monitor.rcWork.right - width - gap),
                     std::max(monitor.rcWork.top, monitor.rcWork.bottom - height - gap)};
     // A full-screen ROI can leave no physical space outside it. Keep controls
-    // reachable in that case, but exclude only the toolbar from capture.
-    SetWindowDisplayAffinity(g_app.toolbar, found ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
+    // reachable in that case. Always exclude recording controls from capture.
+    SetWindowDisplayAffinity(g_app.toolbar, WDA_EXCLUDEFROMCAPTURE);
     SetWindowPos(g_app.toolbar, HWND_TOPMOST, position.x, position.y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -601,7 +604,12 @@ void SelectRegion(bool resize = false) {
         return;
     CommitSettings();
     const bool recording = g_app.view == View::Recording;
-    if (recording) g_app.paused = true;
+    if (recording) {
+        g_app.paused = true;
+        // Wait for a currently reading desktop frame before displaying the
+        // per-pixel-alpha selection overlay (which cannot use capture exclusion).
+        std::lock_guard lock(g_app.regionMutex);
+    }
     HideSettings();
     ShowWindow(g_app.toolbar, SW_HIDE);
     lc::HideRegionMarker();
@@ -621,7 +629,7 @@ void SelectRegion(bool resize = false) {
             g_app.previousRegion = CurrentRegion();
             g_app.pendingRegion = true;
         }
-        SetRegion(ClampToOneMonitor(selected));
+        SetRegion(ClampToDesktop(selected));
         if (!recording) g_app.view = View::Ready;
     }
     UpdateToolbar();

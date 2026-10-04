@@ -1,0 +1,5 @@
+config.ini
+main.obj
+*.user
+*.log
+captures/

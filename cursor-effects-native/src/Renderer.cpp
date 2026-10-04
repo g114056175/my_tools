@@ -14,6 +14,8 @@ template<class T> static void release(T*& p){if(p){p->Release();p=nullptr;}}
 #define TRY(call) do {HRESULT code=(call);if(FAILED(code))return code;} while(0)
 // One compact interop batch per frame. Positions are physical desktop pixels.
 struct DrawCommand {int kind;float x,y,x2,y2,width,angle,alpha;};
+// Windows 10 D2D1_PRIMITIVE_BLEND_MAX (omitted by the pinned MinGW header).
+static constexpr auto trailBlend=static_cast<D2D1_PRIMITIVE_BLEND>(4);
 // Only two embedded sprites and one temporary recolor buffer are needed.
 // Windows-owned buffers avoid linking the general C++ allocation/runtime stack.
 struct PixelBuffer {
@@ -94,7 +96,10 @@ struct Renderer {
         dc->SetTransform(base);dc->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         for(int i=0;i<count;i++){
             const auto& c=list[i];float alpha=(std::max)(0.f,(std::min)(1.f,c.alpha));
-            dc->SetPrimitiveBlend(c.kind>=3?D2D1_PRIMITIVE_BLEND_ADD:D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+            // Adjacent round caps and glow sprites describe one continuous
+            // trail, not extra light sources. Keep their greatest coverage
+            // instead of accumulating brightness at every input sample.
+            dc->SetPrimitiveBlend(c.kind==0||c.kind==3?trailBlend:(c.kind>=3?D2D1_PRIMITIVE_BLEND_ADD:D2D1_PRIMITIVE_BLEND_SOURCE_OVER));
             cyan->SetOpacity(alpha);white->SetOpacity(alpha);ring->SetOpacity(alpha);dc->SetTransform(base);
             if(c.kind==0)dc->DrawLine(D2D1::Point2F(c.x,c.y),D2D1::Point2F(c.x2,c.y2),cyan,c.width,round);
             else if(c.kind==1||c.kind==4)dc->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(c.x,c.y),c.x2,c.x2),ring,c.width);

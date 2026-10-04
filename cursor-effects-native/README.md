@@ -4,7 +4,7 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 
 ## 下載
 
-下載 [**`BlueArchiveCursor.exe`**](https://github.com/g114056175/my_tools/releases/download/cursor-effects-v1.0.1/BlueArchiveCursor.exe) 後直接執行，免安裝，只需這一個檔案。
+**v1.0.1 暫停下載**：Windows Defender 偵測為 `Trojan:Win32/Wacatac.C!ml`，正在覆核發布產物。確認前請保留隔離狀態。
 
 適用 **Windows 10（1703 以上）／Windows 11 x64**，需 .NET Framework 4.8 與支援 Direct3D 11 的顯示驅動；已在 Windows 10 22H2 測試。
 
@@ -47,6 +47,8 @@ C#／WinForms 控制面板，C++／Direct2D + DirectComposition 繪製。只繪�
 光跡連接相鄰游標取樣點，長距離移動也會連線；碎片依距離分布在沿途，各次取樣與存活碎片數量均有上限。停頓後續接原位置，放開滑鼠或進入控制面板時結束該段。
 
 設定及原生 DLL 快取位於 `%LOCALAPPDATA%\BlueArchiveCursor.Native`。碎片速度改變移動與淡出時間，飛散範圍不變；0% 停止移動但仍淡出。程式僅允許一個實例，再次執行會叫回面板。
+
+發布前以 `tests/security-scan.ps1` 掃描實際 EXE；`release.ps1` 在偵測到威脅、掃描失敗或檔案被隔離時停止。此檢查不代表微軟已完成覆核。
 
 Windows 版本下限依據所用的 [DPI API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext)。Windows 11 尚未實機驗證。第三方聲明見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

@@ -1,6 +1,7 @@
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath($PSScriptRoot)
 & (Join-Path $root 'build.ps1')
+& (Join-Path $root 'tests/security-scan.ps1') -File (Join-Path $root 'dist/BlueArchiveCursor.exe')
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'release') | Out-Null
 Add-Type -AssemblyName System.IO.Compression,System.IO.Compression.FileSystem
 function Write-CursorZip([string]$path,[IO.FileInfo[]]$files,[string]$base){

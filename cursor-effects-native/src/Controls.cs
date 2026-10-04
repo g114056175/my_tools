@@ -102,7 +102,7 @@ sealed class ColorPalette {
     public ColorPalette(string name,int trail,int ripple,int fragment){Name=name;Trail=Rgb(trail);Ripple=Rgb(ripple);Fragment=Rgb(fragment);}
     static Color Rgb(int rgb){return Color.FromArgb(255,(rgb>>16)&255,(rgb>>8)&255,rgb&255);}
     public static readonly ColorPalette[] All={
-        new ColorPalette("蔚藍檔案",0x45edff,0x45edff,0xc4fcff),
+        new ColorPalette("蔚藍檔案",0x45edff,0x45edff,0x5fc5ff),
         new ColorPalette("星夜紫",0xb087ff,0x8c67ef,0xf3e8ff),
         new ColorPalette("櫻花紅",0xff4f87,0xf52d68,0xff87b0),
         new ColorPalette("薄荷綠",0x42dca1,0x22b889,0xd1ffe9),
@@ -128,15 +128,15 @@ sealed class ControlsWindow : Form {
     public readonly NumberField TrailFragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100),ClickFragmentSize=AppTheme.Number(25,300,100),ClickOpacity=AppTheme.Number(0,100,100);
     public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,180);
     public readonly NumberField TrailSpacing=AppTheme.Number(0,300,80),SpacingJitter=AppTheme.Number(0,80,35),TrailGap=AppTheme.Number(0,60,8);
-    public readonly NumberField ClickCount=AppTheme.Number(0,20,4),ClickRadius=AppTheme.Number(4,60,12),ClickSpeed=AppTheme.Number(0,300,100);
-    public readonly NumberField BirthWhite=AppTheme.Number(0,100,100),ColorFade=AppTheme.Number(20,400,90);
-    public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(196,252,255));
+    public readonly NumberField ClickCount=AppTheme.Number(0,20,4),ClickRadius=AppTheme.Number(4,120,50),ClickSpeed=AppTheme.Number(0,300,100),ClickScatter=AppTheme.Number(0,100,35);
+    public readonly NumberField BirthWhite=AppTheme.Number(0,100,100),ColorFade=AppTheme.Number(20,400,65);
+    public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(95,197,255));
     public readonly OnOffSwitch VisibleValue=new OnOffSwitch{Checked=true};
     public readonly PaletteField Palette=new PaletteField();bool synchronizingPalette;
     public readonly CheckBox Trail=AppTheme.Check("按住左鍵時顯示",true),ClickValue=AppTheme.Check("點擊時顯示",true);
     public readonly Label Status;public bool Updating;
     readonly TableLayoutPanel body;readonly Control[] pages;readonly Button[] tabs;
-    public NumberField[] Numbers{get{return new[]{EffectSize,OpacityValue,TrailFade,TrailSpacing,SpacingJitter,RippleSize,ClickOpacity,ClickCount,ClickRadius,ClickSpeed,TrailFragmentSize,ClickFragmentSize,ParticleSpeed,TrailGap,TrailSpread,BirthWhite,ColorFade,Strength};}}
+    public NumberField[] Numbers{get{return new[]{EffectSize,OpacityValue,TrailFade,TrailSpacing,SpacingJitter,RippleSize,ClickOpacity,ClickCount,ClickRadius,ClickScatter,ClickSpeed,TrailFragmentSize,ClickFragmentSize,ParticleSpeed,TrailGap,TrailSpread,BirthWhite,ColorFade,Strength};}}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);AppTheme.DarkTitle(Handle);}
     public void HidePanel(){Hide();}
     public void ShowPanel(){WindowState=FormWindowState.Normal;Show();Activate();}
@@ -153,8 +153,8 @@ sealed class ControlsWindow : Form {
         var tabRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));tabs=new Button[3];var titles=new[]{"拖曳光跡","點擊效果","碎片"};for(int i=0;i<3;i++){int index=i;tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));var tab=AppTheme.Button(titles[i],()=>SelectPage(index));tab.Dock=DockStyle.Fill;tab.Margin=new Padding(i==0?0:3,0,i==2?0:3,4);tabs[i]=tab;tabRow.Controls.Add(tab,i,0);}body.Controls.Add(tabRow,0,2);
         var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,34);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),34);Row(drag,"不透明度 %",AppTheme.Slider(OpacityValue),34);Row(drag,"衰退時間 ms",AppTheme.Slider(TrailFade),34);var spacing=AppTheme.Slider(TrailSpacing);Row(drag,"生成間距 px",spacing,34);var jitter=AppTheme.Slider(SpacingJitter);Row(drag,"間距浮動 %",jitter,34);
         Hint(spacing,"累積移動多少像素生成一顆碎片，越大越稀疏；速度越快，每秒生成越多。停止移動不會生成，0 關閉拖曳碎片。" );Hint(jitter,"每次生成門檻在設定間距的 ± 此百分比內隨機變化，避免等距排列。");
-        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,34);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),34);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),34);Row(click,"碎片數量 顆",AppTheme.Slider(ClickCount),34);var radius=AppTheme.Slider(ClickRadius);Row(click,"周邊距離 px",radius,34);var clickSpeed=AppTheme.Slider(ClickSpeed);Row(click,"散開速度 %",clickSpeed,34);
-        Hint(radius,"波紋起始半徑與碎片生成位置；越大，點擊碎片越靠外圍。");Hint(clickSpeed,"點擊碎片的移動與淡出倍速，最終散開範圍不變。0% 停止移動，仍會淡出。");
+        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,34);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),34);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),34);Row(click,"碎片數量 顆",AppTheme.Slider(ClickCount),34);var radius=AppTheme.Slider(ClickRadius);Row(click,"粒子半徑 px",radius,34);var scatter=AppTheme.Slider(ClickScatter);Row(click,"粒子散布 %",scatter,34);var clickSpeed=AppTheme.Slider(ClickSpeed);Row(click,"散開速度 %",clickSpeed,34);
+        Hint(RippleSize,"雙環各自隨機大小與旋轉，快速展開後緩慢延伸並淡出，預設最大半徑約 72 px。");Hint(radius,"點擊三角形在圓環周邊生成的基準半徑，與波紋大小一起縮放。");Hint(scatter,"生成半徑與角度保留隨機；此值調整圓環附近的徑向散布範圍，0% 僅固定半徑。");Hint(clickSpeed,"點擊碎片的移動與淡出倍速，最終散開範圍不變。0% 停止移動，仍會淡出。");
         var glow=AppTheme.Slider(Strength);const string glowHelp="調整光跡、波紋及碎片周圍的柔光。0% 關閉柔光，本體仍保留；不改變數量、大小或分散距離。";
         Hint(glow,glowHelp);
         var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,34);Row(fragments,"拖曳大小 %",AppTheme.Slider(TrailFragmentSize),34);Row(fragments,"點擊大小 %",AppTheme.Slider(ClickFragmentSize),34);Row(fragments,"拖曳速度 %",AppTheme.Slider(ParticleSpeed),34);var gap=AppTheme.Slider(TrailGap);Row(fragments,"離線距離 px",gap,34);Row(fragments,"散開幅度 %",AppTheme.Slider(TrailSpread),34);var flash=AppTheme.Slider(BirthWhite);Row(fragments,"出生白光 %",flash,34);var tintTime=AppTheme.Slider(ColorFade);Row(fragments,"變色時間 ms",tintTime,34);Row(fragments,"周圍光暈 %",glow,34);

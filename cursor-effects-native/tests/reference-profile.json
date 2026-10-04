@@ -1,0 +1,277 @@
+{
+  "reference": "Shittim Canvas NEXT Windows (11020260812)",
+  "sourceAssets": "data.unity3d/resources.assets",
+  "wave": {
+    "object": "FX_Touch/MeshTri",
+    "pathId": 1867,
+    "mesh": "Cylinder002",
+    "meshPathId": 116,
+    "segments": 64,
+    "innerRadius": 1,
+    "outerRadius": 1.063668,
+    "burstCount": 2,
+    "lifetimeSeconds": 0.6,
+    "startSizeRange": [
+      0.12,
+      0.14
+    ],
+    "startRotationRangeRadians": [
+      0,
+      6.283185
+    ],
+    "texture": "FX_TEX_Grad_Ring3",
+    "gradientDirection": "UV.x runs around circumference",
+    "sizeCurve": {
+      "mode": 1,
+      "scalar": 1.0,
+      "minScalar": 1.0,
+      "maxCurve": [
+        {
+          "t": 0.00720977783203125,
+          "v": 0.4205089807510376,
+          "in": 2.4004733562469482,
+          "out": 2.4004733562469482
+        },
+        {
+          "t": 0.21392822265625,
+          "v": 0.7159773111343384,
+          "in": 0.9115744829177856,
+          "out": 0.9115744829177856
+        },
+        {
+          "t": 1.0,
+          "v": 1.0,
+          "in": 0.0,
+          "out": 0.0
+        }
+      ],
+      "minCurve": []
+    },
+    "color": {
+      "times": {
+        "a": [
+          0,
+          7132,
+          65535,
+          65535,
+          0,
+          0,
+          0,
+          0
+        ],
+        "c": [
+          7325,
+          32768,
+          65535,
+          65342,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "keys": [
+        {
+          "r": 1.0,
+          "g": 1.0,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.2971698045730591,
+          "g": 0.6532865166664124,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.08176128566265106,
+          "b": 0.801886796951294,
+          "a": 1.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.0,
+          "b": 0.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.0,
+          "b": 0.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.0,
+          "b": 0.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.0,
+          "b": 0.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.0,
+          "g": 0.0,
+          "b": 0.0,
+          "a": 0.0
+        }
+      ],
+      "numAlpha": 3,
+      "numColor": 2
+    }
+  },
+  "clickFragments": {
+    "object": "FX_Touch/Ring (3)",
+    "pathId": 1870,
+    "burstCount": 4,
+    "lifetimeRangeSeconds": [
+      0.6,
+      0.7
+    ],
+    "speedRangeSourceUnits": [
+      0.3,
+      0.4
+    ],
+    "sizeRangeSourceUnits": [
+      0.1,
+      0.2
+    ],
+    "shape": "Circle, random azimuth, radius thickness 0",
+    "texture": "FX_TEX_Triangle_02_1, two frames: up/down",
+    "sizeCurve": {
+      "mode": 1,
+      "scalar": 1.0,
+      "minScalar": 1.0,
+      "maxCurve": [
+        {
+          "t": 0.0,
+          "v": 0.0,
+          "in": 0.0,
+          "out": 0.0
+        },
+        {
+          "t": 0.15445095300674438,
+          "v": 1.0,
+          "in": 0.0,
+          "out": 0.0
+        },
+        {
+          "t": 1.0,
+          "v": 0.0,
+          "in": -2.1621501445770264,
+          "out": -2.1621501445770264
+        }
+      ],
+      "minCurve": []
+    },
+    "color": {
+      "times": {
+        "a": [
+          18890,
+          23901,
+          30840,
+          37586,
+          43754,
+          49537,
+          55898,
+          65535
+        ],
+        "c": [
+          11951,
+          18504,
+          30262,
+          43369,
+          54163,
+          54163,
+          54163,
+          54163
+        ]
+      },
+      "keys": [
+        {
+          "r": 1.0,
+          "g": 1.0,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.37264150381088257,
+          "g": 0.7731872797012329,
+          "b": 1.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.37254902720451355,
+          "g": 0.7725490927696228,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.3529411852359772,
+          "g": 0.729411780834198,
+          "b": 0.9450981020927429,
+          "a": 0.0
+        },
+        {
+          "r": 0.37254902720451355,
+          "g": 0.7725490927696228,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.37254902720451355,
+          "g": 0.7725490927696228,
+          "b": 1.0,
+          "a": 0.0
+        },
+        {
+          "r": 0.37254902720451355,
+          "g": 0.7725490927696228,
+          "b": 1.0,
+          "a": 1.0
+        },
+        {
+          "r": 0.37254902720451355,
+          "g": 0.7725490927696228,
+          "b": 1.0,
+          "a": 1.0
+        }
+      ],
+      "numAlpha": 8,
+      "numColor": 5
+    },
+    "materialHDRGain": 5.99
+  },
+  "dragFragments": {
+    "pathId": 1869,
+    "rateOverDistanceSourceUnits": 5,
+    "lifetimeRangeSeconds": [
+      0.2,
+      0.4
+    ],
+    "speedRangeSourceUnits": [
+      0.2,
+      0.3
+    ]
+  },
+  "portCalibration": {
+    "waveNominalMaxRadiusPixels": 72,
+    "clickFragmentRadiusPixels": 50,
+    "clickRadialScatterPercent": 35,
+    "clickSpeedRangePixelsPerSecond": [
+      22,
+      46
+    ],
+    "colorTransitionMilliseconds": 65,
+    "trailSpacingPixels": 80
+  },
+  "limits": [
+    "Runtime pixel scaling has not been recovered. Pixel ranges are calibrated to the supplied screenshots.",
+    "Unity HDR/bloom and the short flash shader are not fully reproduced.",
+    "No extracted images, meshes, shaders or Unity bundles are distributed."
+  ]
+}

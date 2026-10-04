@@ -1,6 +1,7 @@
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
 $exe=[IO.Path]::GetFullPath((Join-Path $root 'dist/BlueArchiveCursor.exe'))
+& (Join-Path $PSScriptRoot 'security-scan.ps1') -File $exe
 $testPrefix=[IO.Path]::GetFullPath((Join-Path $root '.build/single-exe-smoke'))+[IO.Path]::DirectorySeparatorChar
 if(@(Get-CimInstance Win32_Process -Filter "Name='BlueArchiveCursor.exe'" | Where-Object {$_.ExecutablePath -and ![IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($testPrefix)}).Count){throw 'A native cursor release is already running; close it manually before this isolated smoke test.'}
 $singleRoot=Join-Path $root ('.build/single-exe-smoke/'+[Guid]::NewGuid().ToString('N'))

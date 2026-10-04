@@ -13,7 +13,7 @@ sealed class CursorEffects {
     public readonly List<DrawCommand> Commands=new List<DrawCommand>(1600);
     readonly Func<double> random;Item last;
     public bool Trail=true,Click=true,Dirty;public double Size=1,Strength=1,Density=1,Opacity=1;public int Fps=60;
-    public double TrailWidth=1,RippleSize=1,TrailFragmentSize=1,ClickFragmentSize=1,TrailOpacity=1,ClickOpacity=1;double particleSpeed=1;
+    public double TrailWidth=1,RippleSize=1,TrailFragmentSize=1,ClickFragmentSize=1,TrailOpacity=1,ClickOpacity=1;double particleSpeed=1,trailSpread=1;
     public Rectangle Viewport=System.Windows.Forms.SystemInformation.VirtualScreen;
     public CursorEffects(Func<double> value=null){var rng=new Random();random=value??rng.NextDouble;}
     public int Alive {get{return Points.Count+Particles.Count+Rings.Count;}}
@@ -25,6 +25,7 @@ sealed class CursorEffects {
         foreach(var p in Particles)p.Size*=p.Burst?ClickFragmentSize/oldClick:TrailFragmentSize/oldTrail;Dirty=true;
     }
     public void SetParticleSpeed(double speed){particleSpeed=Clamp(speed,0,3);Dirty=true;}
+    public void SetTrailSpread(double spread){trailSpread=Clamp(spread,0,3);Dirty=true;}
     static double Clamp(double value,double min,double max){return double.IsNaN(value)||double.IsInfinity(value)?min:Math.Max(min,Math.Min(max,value));}
     static double Distance(Item a,Item b){double x=a.X-b.X,y=a.Y-b.Y;return Math.Sqrt(x*x+y*y);}
     public void Clear(bool resetPointer=true){Points.Clear();Particles.Clear();Rings.Clear();Commands.Clear();if(resetPointer)last=null;Dirty=false;}
@@ -49,15 +50,24 @@ sealed class CursorEffects {
         // Distribute fragments along the sampled path instead of piling them
         // at its endpoint. Bound work for very long/high-DPI cursor jumps.
         int count=(int)Math.Floor(Math.Min(12,Math.Ceiling(distance/24))*Density+.5);
-        for(int i=0;i<count;i++){double t=(i+.5)/count;Particle(a.X+(b.X-a.X)*t,a.Y+(b.Y-a.Y)*t,false);}
+        double tx=(b.X-a.X)/distance,ty=(b.Y-a.Y)/distance,nx=-ty,ny=tx;
+        for(int i=0;i<count;i++){
+            // Stratified positions preserve coverage at high speed. Spawn on
+            // both sides of the path so short-lived fragments separate visibly.
+            double t=(i+random())/count,side=random()<.5?-1:1,scale=Size*trailSpread;
+            double offset=side*(8+random()*20)*scale;
+            var p=Particle(a.X+(b.X-a.X)*t+nx*offset,a.Y+(b.Y-a.Y)*t+ny*offset,false);
+            double drift=(random()-.5)*22*Size,outward=side*(18+random()*38)*scale;
+            p.Vx=tx*drift+nx*outward;p.Vy=ty*drift+ny*outward;
+        }
         LimitParticles();
     }
     void Triangle(double x,double y,int count,bool burst){
         count=(int)Math.Floor(count*Density+.5);for(int i=0;i<count;i++)Particle(x,y,burst);LimitParticles();
     }
-    void Particle(double x,double y,bool burst){
+    Item Particle(double x,double y,bool burst){
         double a=random()*Math.PI*2,s=burst?60+random()*130:15+random()*40;
-        Particles.Add(new Item{X=x,Y=y,Vx=Math.Cos(a)*s,Vy=Math.Sin(a)*s,Angle=a,Spin=(random()-.5)*2,Life=burst?.42+.25*random():.28+.16*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Burst=burst});
+        var p=new Item{X=x,Y=y,Vx=Math.Cos(a)*s,Vy=Math.Sin(a)*s,Angle=a,Spin=(random()-.5)*2,Life=burst?.42+.25*random():.28+.16*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Burst=burst};Particles.Add(p);return p;
     }
     void LimitParticles(){if(Particles.Count>192)Particles.RemoveRange(0,Particles.Count-192);}
     public void Update(double dt){

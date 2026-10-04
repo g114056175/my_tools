@@ -26,7 +26,7 @@ sealed partial class CursorHost {
         D2DRenderer.Save(pixels,640,400,Path.Combine(profile,"high-speed-trail.png"));
 
         var path=new CursorEffects(()=>.5){Viewport=new Rectangle(-1920,-100,3840,1080)};
-        path.Configure(true,true,1,1,1,1,60);path.Input(-1880,100,true,true);path.Input(1840,100,false,true);path.Draw(0);
+        path.Configure(true,true,1,1,1,1,60);path.SetTrailSpread(0);path.Input(-1880,100,true,true);path.Input(1840,100,false,true);path.Draw(0);
         Require(path.Commands.Any(c=>c.Kind==0&&c.X==40&&c.X2==3760),"Monitor-wide drag was discarded");
         Require(path.Commands.Any(c=>c.Kind==3&&c.X2>3700),"Monitor-wide halo was discarded");
         var fragments=path.Particles.Where(p=>!p.Burst).ToArray();
@@ -43,12 +43,45 @@ sealed partial class CursorHost {
         Require(release.Commands.Count(c=>c.Kind==0)==1,"Mouse-up left a stale connection");
 
         var stress=new CursorEffects(()=>.5){Viewport=new Rectangle(-3840,0,7680,2160)};
-        stress.Configure(true,true,3,3,3,1,60);stress.Customize(3,3,3,3,1,1);
+        stress.Configure(true,true,3,3,3,1,60);stress.Customize(3,3,3,3,1,1);stress.SetTrailSpread(3);
         for(int i=0;i<1000;i++){
             stress.Input(i%2==0?-3800:3800,200+(i%8)*200,i==0,true);stress.Draw(1.0/120);
             Require(stress.Points.Count<=32&&stress.Particles.Count<=192&&stress.Rings.Count<=16&&stress.Commands.Count<=2048,"High-speed path exceeds renderer/memory limits");
         }
         for(int i=0;i<20;i++)stress.Draw(.1);Require(stress.Alive==0,"High-speed effects fail to expire");
+    }
+    CursorEffects SpreadSample(double spread,bool vertical=false){
+        uint seed=2468;Func<double> rng=()=>{seed=unchecked(seed*1664525+1013904223);return seed/4294967296.0;};
+        var fx=new CursorEffects(rng){Viewport=new Rectangle(0,0,640,640)};
+        fx.Configure(true,false,1,1,1,1,60);fx.SetTrailSpread(spread);
+        fx.Input(vertical?200:40,vertical?40:200,true,true);fx.Input(vertical?200:600,vertical?600:200,false,true);return fx;
+    }
+    void TestTrailSpread(){
+        var narrow=SpreadSample(0);var normal=SpreadSample(1);var wide=SpreadSample(2);var vertical=SpreadSample(1,true);
+        Require(normal.Particles.Count==narrow.Particles.Count&&normal.Particles.Count==wide.Particles.Count,"Spread changes particle density");
+        Require(narrow.Particles.All(p=>p.Y==200&&p.Vy==0),"Zero spread leaves the path");
+        Require(normal.Particles.Count(p=>p.Y<200)>=3&&normal.Particles.Count(p=>p.Y>200)>=3,"Fragments do not occupy both sides of the path");
+        Require(normal.Particles.Average(p=>Math.Abs(p.Y-200))>12,"Default fragments still hug the path");
+        for(int i=0;i<normal.Particles.Count;i++){
+            var a=normal.Particles[i];var b=wide.Particles[i];var v=vertical.Particles[i];
+            Require(Math.Abs((b.Y-200)-2*(a.Y-200))<.00001&&Math.Abs(b.Vy-2*a.Vy)<.00001,"Spread does not scale distance independently");
+            Require(a.X==b.X&&a.Life==b.Life&&a.Size==b.Size,"Spread changes speed lifetime, density or size");
+            Require(Math.Abs(v.X-200+a.Y-200)<.00001&&Math.Abs(v.Y-a.X)<.00001,"Scatter is not perpendicular to a vertical path");
+            Require((a.Y-200)*a.Vy>0,"Fragments drift back toward the path");
+        }
+        var clickA=SpreadSample(0);var clickB=SpreadSample(3);clickA.Clear();clickB.Clear();clickA.Click=clickB.Click=true;clickA.Input(200,200,true,true);clickB.Input(200,200,true,true);
+        Require(clickA.Particles.SelectMany(p=>new[]{p.X,p.Y,p.Vx,p.Vy,p.Life,p.Size}).SequenceEqual(clickB.Particles.SelectMany(p=>new[]{p.X,p.Y,p.Vx,p.Vy,p.Life,p.Size})),"Trail spread changes click bursts");
+        renderer.Appearance(Color.FromArgb(239,131,173),Color.FromArgb(219,90,145),Color.FromArgb(255,225,236));
+        using(var sheet=new Bitmap(640,540))using(var g=Graphics.FromImage(sheet))using(var title=new Font("Microsoft JhengHei UI",13)){
+            g.Clear(Color.FromArgb(16,19,23));
+            for(int row=0;row<3;row++){
+                var fx=SpreadSample(row);fx.Viewport=new Rectangle(0,0,640,400);fx.Draw(.08);
+                string path=Path.Combine(profile,"trail-spread-"+row+".png");SaveBackground(renderer.Capture(fx,640,400),Color.FromArgb(16,19,23),path);
+                g.DrawString("拖曳分散 "+(row*100)+"%"+(row==1?"（預設）":""),title,Brushes.White,20,row*180+10);
+                using(var rendered=new Bitmap(path))g.DrawImage(rendered,new Rectangle(0,row*180+36,640,140),new Rectangle(0,130,640,140),GraphicsUnit.Pixel);
+            }
+            sheet.Save(Path.Combine(profile,"trail-spread-comparison.png"));
+        }
     }
     async void RunTest(){
         string report=Path.Combine(profile,"test.json");var checks=new List<string>();var shell=Native.ShellInputHandles().ToDictionary(h=>h,h=>Native.IsWindowEnabled(h));
@@ -57,9 +90,9 @@ sealed partial class CursorHost {
             Require(cursorFps==60&&effects.Fps==60,"Fixed 60 FPS");Require(overlay.Bounds==SystemInformation.VirtualScreen,"All-screen bounds");ResetControls();
             for(int page=0;page<3;page++){controls.SelectPage(page);controls.PerformLayout();}
             foreach(var n in controls.Numbers){Require(n.Controls.Count==0,"Spin controls");n.Text="73";n.Commit();Require(n.Value==73,"Typed value");n.Text="999";n.Commit();Require(n.Value==n.Maximum,"Clamp value");}
-            var sliders=new List<PositionSlider>();Action<Control> collect=null;collect=c=>{foreach(Control child in c.Controls){if(child is PositionSlider)sliders.Add((PositionSlider)child);collect(child);}};collect(controls);Require(sliders.Count==9,"Nine independent sliders");
+            var sliders=new List<PositionSlider>();Action<Control> collect=null;collect=c=>{foreach(Control child in c.Controls){if(child is PositionSlider)sliders.Add((PositionSlider)child);collect(child);}};collect(controls);Require(sliders.Count==10,"Ten independent sliders");
             foreach(var s in sliders){var type=typeof(PositionSlider);var down=type.GetMethod("OnMouseDown",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);var up=type.GetMethod("OnMouseUp",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);down.Invoke(s,new object[]{new MouseEventArgs(MouseButtons.Left,1,s.Width/2,16,0)});Require(Math.Abs(s.Value-(s.Minimum+s.Maximum)/2)<=2,"Direct slider jump");up.Invoke(s,new object[]{new MouseEventArgs(MouseButtons.Left,1,s.Width+50,16,0)});Require(s.Value==s.Maximum&&!s.Capture,"Fast upper endpoint");down.Invoke(s,new object[]{new MouseEventArgs(MouseButtons.Left,1,s.Width/2,16,0)});up.Invoke(s,new object[]{new MouseEventArgs(MouseButtons.Left,1,-50,16,0)});Require(s.Value==s.Minimum&&!s.Capture,"Fast lower endpoint");}
-            ResetControls();Require(controls.Numbers.Select(n=>n.Parent.Size).Distinct().Count()==1,"Numeric frames differ, including opacity");foreach(var n in controls.Numbers)Require(n.Parent.ClientSize.Height-n.Parent.Padding.Vertical>=n.Font.Height,"Numeric input text clipped: "+n.AccessibleName);var panelSize=controls.ClientSize;for(int page=0;page<3;page++){controls.SelectPage(page);Require(controls.ClientSize==panelSize,"Tab changes panel size");}checks.Add("three fixed pages, nine direct sliders/plain inputs, identical numeric frames including opacity, fixed 60 FPS / all screens");
+            ResetControls();Require(controls.Numbers.Select(n=>n.Parent.Size).Distinct().Count()==1,"Numeric frames differ, including opacity");foreach(var n in controls.Numbers)Require(n.Parent.ClientSize.Height-n.Parent.Padding.Vertical>=n.Font.Height,"Numeric input text clipped: "+n.AccessibleName);var panelSize=controls.ClientSize;for(int page=0;page<3;page++){controls.SelectPage(page);Require(controls.ClientSize==panelSize,"Tab changes panel size");}checks.Add("three fixed pages, ten direct sliders/plain inputs, identical numeric frames including opacity, fixed 60 FPS / all screens");
             var buttons=new List<Button>();Action<Control> gatherButtons=null;gatherButtons=c=>{foreach(Control child in c.Controls){if(child is Button)buttons.Add((Button)child);gatherButtons(child);}};gatherButtons(controls);Require(buttons.All(b=>!b.Text.Contains("更多外觀")),"Collapsible settings remain");var reset=buttons.Single(b=>b.Text=="重設");var hide=buttons.Single(b=>b.Text=="收起面板");Require(reset.Parent==hide.Parent&&reset.Left<hide.Left,"Footer button order");hide.PerformClick();Require(!controls.Visible&&overlay.Visible,"Hide button changes effects");controls.ShowPanel();controls.SelectPage(0);
             Require(trayMenu.Items.Count==4,"Tray structure");visibilityItem.PerformClick();Require(!overlay.Visible&&!controls.VisibleValue.Checked&&visibilityItem.Text=="開啟效果"&&!inputTimer.Enabled&&!animating,"OFF toggle");ResetControls();Require(!controls.VisibleValue.Checked&&!overlay.Visible,"Reset changed master switch");visibilityItem.PerformClick();Configure();Require(overlay.Visible&&visibilityItem.Text=="關閉效果"&&(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0,"ON didn't show topmost");checks.Add("single ON/OFF, synchronized tray, reset preserves master state, always topmost");
             AssertSafe();var foreground=Native.GetForegroundWindow();overlay.Display(false,true);overlay.Display(true,true);await Task.Delay(100);AssertSafe();Require(Native.GetForegroundWindow()==foreground,"Show steals focus");checks.Add("taskbar/screen click through, no focus/capture or shell modification");
@@ -73,6 +106,7 @@ sealed partial class CursorHost {
             before=Frames;Pointer(origin.X+150,origin.Y+100,true,true);await Task.Delay(150);Require(Frames-before>=7&&Frames-before<=12,"60 FPS scheduler");StopAnimation(true);ResetControls();inputTimer.Stop();checks.Add("fixed 60 FPS scheduler");
             var test=new CursorEffects(()=>.5){Viewport=new Rectangle(-1920,-100,3840,1080)};test.Input(-1820,0,true,true);Require(test.Points.Single().X==100&&test.Points.Single().Y==100,"Negative monitor origin");test.Input(-1800,20,true,true,true);Require(test.Points.Count==1,"Blocked input emits");test.Clear();test.Configure(true,true,1,1,3,1,60);test.Input(-1820,0,true,true);Require(test.Particles.Count==36,"Density multiplier");test.Configure(true,true,2,1,3,1,60);Require(test.Particles[0].Size==10,"Size multiplier");for(int i=0;i<1000;i++)test.Input(-1820+(i*4)%1500,100,true,true);Require(test.Points.Count==32&&test.Particles.Count==192&&test.Rings.Count==16,"Unbounded particles");for(int i=0;i<20;i++)test.Draw(.1);Require(test.Alive==0,"Expiration");checks.Add("negative origin, blocked controls, multipliers, bounded memory, finite lifetimes");
             TestHighSpeedTrails();checks.Add("600px real GPU line without gaps, 3720px multi-monitor stroke with distributed fragments, release/blocked boundaries, 1000 rapid 7600px samples within fixed budgets");
+            TestTrailSpread();checks.Add("perpendicular two-sided scatter, independent range/count/click effects, 0/100/200 percent GPU previews");
             var visual=new List<object>();double prev=0;
             renderer.Appearance(Color.FromArgb(69,237,255),Color.FromArgb(69,237,255),Color.FromArgb(196,252,255));
             foreach(int glow in new[]{0,1,3}){
@@ -116,9 +150,9 @@ sealed partial class CursorHost {
             controls.SelectPage(1);using(var bitmap=new Bitmap(controls.Width,controls.Height)){controls.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));bitmap.Save(Path.Combine(profile,"controls-click.png"));}controls.SelectPage(2);controls.PerformLayout();using(var bitmap=new Bitmap(controls.Width,controls.Height)){controls.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));bitmap.Save(Path.Combine(profile,"controls-fragments.png"));}controls.SelectPage(0);
             controls.VisibleValue.Checked=false;using(var bitmap=new Bitmap(controls.Width,controls.Height)){controls.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));bitmap.Save(Path.Combine(profile,"controls-off.png"));}controls.VisibleValue.Checked=true;Configure();
             controls.WindowState=FormWindowState.Minimized;Require(controls.Visible&&controls.WindowState==FormWindowState.Minimized&&controls.ShowInTaskbar&&overlay.Visible,"Normal minimize changes effects/taskbar");ShowControls();Require(controls.Visible&&controls.WindowState==FormWindowState.Normal,"Restore");controls.HidePanel();Require(!controls.Visible&&overlay.Visible,"Hide differs from minimize");
-            controls.Updating=true;controls.EffectSize.Value=173;controls.ParticleStrength.Value=142;controls.ParticleSpeed.Value=225;controls.OpacityValue.Value=68;controls.RippleSize.Value=230;controls.TrailFragmentSize.Value=51;controls.ClickFragmentSize.Value=182;controls.ClickOpacity.Value=29;controls.TrailColor.Value=Color.Red;controls.RippleColor.Value=Color.Blue;controls.FragmentColor.Value=Color.Green;controls.VisibleValue.Checked=false;controls.Updating=false;SaveControls(true);Require(!File.ReadAllText(ControlsPath).Contains("contrast"),"Removed outline persisted");controls.VisibleValue.Checked=true;ResetControls();Require(controls.ParticleSpeed.Value==100,"Speed reset");RestoreControls(true);Require(controls.EffectSize.Value==173&&controls.ParticleStrength.Value==142&&controls.ParticleSpeed.Value==225&&controls.OpacityValue.Value==68&&controls.RippleSize.Value==230&&controls.TrailFragmentSize.Value==51&&controls.ClickFragmentSize.Value==182&&controls.ClickOpacity.Value==29&&controls.TrailColor.Value.ToArgb()==Color.Red.ToArgb()&&controls.RippleColor.Value.ToArgb()==Color.Blue.ToArgb()&&controls.FragmentColor.Value.ToArgb()==Color.Green.ToArgb()&&!controls.VisibleValue.Checked,"Settings persistence");Configure();Require(!overlay.Visible,"Restored OFF ignored");
+            controls.Updating=true;controls.EffectSize.Value=173;controls.ParticleStrength.Value=142;controls.ParticleSpeed.Value=225;controls.TrailSpread.Value=175;controls.OpacityValue.Value=68;controls.RippleSize.Value=230;controls.TrailFragmentSize.Value=51;controls.ClickFragmentSize.Value=182;controls.ClickOpacity.Value=29;controls.TrailColor.Value=Color.Red;controls.RippleColor.Value=Color.Blue;controls.FragmentColor.Value=Color.Green;controls.VisibleValue.Checked=false;controls.Updating=false;SaveControls(true);Require(!File.ReadAllText(ControlsPath).Contains("contrast"),"Removed outline persisted");controls.VisibleValue.Checked=true;ResetControls();Require(controls.ParticleSpeed.Value==100&&controls.TrailSpread.Value==100,"Speed/spread reset");RestoreControls(true);Require(controls.EffectSize.Value==173&&controls.ParticleStrength.Value==142&&controls.ParticleSpeed.Value==225&&controls.TrailSpread.Value==175&&controls.OpacityValue.Value==68&&controls.RippleSize.Value==230&&controls.TrailFragmentSize.Value==51&&controls.ClickFragmentSize.Value==182&&controls.ClickOpacity.Value==29&&controls.TrailColor.Value.ToArgb()==Color.Red.ToArgb()&&controls.RippleColor.Value.ToArgb()==Color.Blue.ToArgb()&&controls.FragmentColor.Value.ToArgb()==Color.Green.ToArgb()&&!controls.VisibleValue.Checked,"Settings persistence");Configure();Require(!overlay.Visible,"Restored OFF ignored");
             File.WriteAllText(ControlsPath,"{\"version\":1,\"visible\":true,\"top\":false,\"monitor\":\"removed\",\"fps\":7,\"size\":125}");RestoreControls(true);Configure();Require(controls.VisibleValue.Checked&&overlay.Visible&&overlay.Bounds==SystemInformation.VirtualScreen&&effects.Fps==60&&(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0,"Legacy settings override fixed behavior");checks.Add("actual settings save/restore, legacy visibility migration ignores removed options");
-            Require(controls.RippleSize.Value==125&&controls.TrailFragmentSize.Value==125&&controls.ClickFragmentSize.Value==125,"Legacy global size migration");foreach(var entry in shell)Require(!entry.Value||!Native.IsWindow(entry.Key)||Native.IsWindowEnabled(entry.Key),"Shell disabled");checks.Add("normal taskbar minimize, explicit hide keeps effects, restore works, X exits");
+            Require(controls.TrailSpread.Value==100&&controls.RippleSize.Value==125&&controls.TrailFragmentSize.Value==125&&controls.ClickFragmentSize.Value==125,"Legacy global size migration");foreach(var entry in shell)Require(!entry.Value||!Native.IsWindow(entry.Key)||Native.IsWindowEnabled(entry.Key),"Shell disabled");checks.Add("normal taskbar minimize, explicit hide keeps effects, restore works, X exits");
             var result=new{passed=true,hardware=renderer.Hardware,checks,visual,frames=Frames,layerRepairs};controls.Close();Require(quitting&&controls.IsDisposed,"X didn't exit");File.WriteAllText(report,Json.Serialize(result));
         }catch(Exception e){File.WriteAllText(report,Json.Serialize(new{passed=false,error=e.ToString(),checks,trace=layerTrace.ToArray()}));Quit(1);}
     }

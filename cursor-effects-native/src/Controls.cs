@@ -125,14 +125,14 @@ sealed class ControlsWindow : Form {
     readonly CursorHost host;
     public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),Strength=AppTheme.Number(0,300,100),EffectSize=AppTheme.Number(25,300,100),ParticleStrength=AppTheme.Number(0,300,100);
     public readonly NumberField TrailFragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100),ClickFragmentSize=AppTheme.Number(25,300,100),ClickOpacity=AppTheme.Number(0,100,100);
-    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100);
+    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100);
     public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(196,252,255));
     public readonly OnOffSwitch VisibleValue=new OnOffSwitch{Checked=true};
     public readonly PaletteField Palette=new PaletteField();bool synchronizingPalette;
     public readonly CheckBox Trail=AppTheme.Check("按住左鍵時顯示",true),ClickValue=AppTheme.Check("點擊時顯示",true);
     public readonly Label Status;public bool Updating;
     readonly TableLayoutPanel body;readonly Control[] pages;readonly Button[] tabs;
-    public NumberField[] Numbers{get{return new[]{EffectSize,TrailFragmentSize,OpacityValue,RippleSize,ClickFragmentSize,ClickOpacity,ParticleStrength,ParticleSpeed,Strength};}}
+    public NumberField[] Numbers{get{return new[]{EffectSize,TrailFragmentSize,OpacityValue,RippleSize,ClickFragmentSize,ClickOpacity,ParticleStrength,ParticleSpeed,TrailSpread,Strength};}}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);AppTheme.DarkTitle(Handle);}
     public void HidePanel(){Hide();}
     public void ShowPanel(){WindowState=FormWindowState.Normal;Show();Activate();}
@@ -149,7 +149,7 @@ sealed class ControlsWindow : Form {
         var tabRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));tabs=new Button[3];var titles=new[]{"拖曳光跡","點擊效果","碎片"};for(int i=0;i<3;i++){int index=i;tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));var tab=AppTheme.Button(titles[i],()=>SelectPage(index));tab.Dock=DockStyle.Fill;tab.Margin=new Padding(i==0?0:3,0,i==2?0:3,4);tabs[i]=tab;tabRow.Controls.Add(tab,i,0);}body.Controls.Add(tabRow,0,2);
         var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,38);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),38);Row(drag,"碎片大小 %",AppTheme.Slider(TrailFragmentSize),38);Row(drag,"不透明度 %",AppTheme.Slider(OpacityValue),38);
         var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,38);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),38);Row(click,"碎片大小 %",AppTheme.Slider(ClickFragmentSize),38);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),38);
-        var fragments=Page();Row(fragments,"",new Label{Text="拖曳與點擊共用設定",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=AppTheme.Muted},34);Row(fragments,"碎片顏色",FragmentColor,38);Row(fragments,"碎片數量 %",AppTheme.Slider(ParticleStrength),38);Row(fragments,"碎片速度 %",AppTheme.Slider(ParticleSpeed),38);Row(fragments,"光暈強度 %",AppTheme.Slider(Strength),38);
+        var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,38);Row(fragments,"碎片數量 %",AppTheme.Slider(ParticleStrength),38);Row(fragments,"碎片速度 %",AppTheme.Slider(ParticleSpeed),38);Row(fragments,"拖曳分散 %",AppTheme.Slider(TrailSpread),38);Row(fragments,"光暈強度 %",AppTheme.Slider(Strength),38);
         pages=new Control[]{drag,click,fragments};foreach(var page in new[]{drag,click,fragments}){page.RowCount++;page.RowStyles.Add(new RowStyle(SizeType.Percent,100));pageHost.Controls.Add(page);}body.Controls.Add(pageHost,0,3);
         var footer=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,76));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));footer.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         var reset=AppTheme.Button("重設",()=>host.ResetControls());reset.Dock=DockStyle.Fill;reset.AccessibleName="重設效果";footer.Controls.Add(reset,0,0);Status=new Label{Dock=DockStyle.Fill,ForeColor=AppTheme.Muted,Visible=false,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,0,8,0)};footer.Controls.Add(Status,1,0);var hide=AppTheme.Button("收起面板",HidePanel);hide.Dock=DockStyle.Fill;footer.Controls.Add(hide,2,0);body.Controls.Add(footer,0,4);

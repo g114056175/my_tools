@@ -3,6 +3,7 @@ $root=Split-Path $PSScriptRoot
 & (Join-Path $root 'build.ps1') -Test
 $null=Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue
 $exe=Join-Path $root '.build/test/BlueArchiveCursor.Native.exe'
+& (Join-Path $PSScriptRoot 'security-scan.ps1') -File $exe
 $process=Start-Process -FilePath $exe -ArgumentList '--performance-test' -WindowStyle Hidden -PassThru
 $profile=Join-Path (Split-Path $exe) ('test-profile-'+$process.Id)
 $phasePath=Join-Path $profile 'performance-phase.json'

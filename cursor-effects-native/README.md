@@ -4,7 +4,7 @@ Windows 桌面滑鼠裝飾：按住左鍵拖曳出現光跡，點擊產生波紋
 
 ## 下載
 
-下載 [**`BlueArchiveCursor-win-x64.zip`**](https://github.com/g114056175/my_tools/releases/download/cursor-effects-v1.0.0/BlueArchiveCursor-win-x64.zip)，解壓後執行 `BlueArchiveCursor.exe`，免安裝。
+下載 [**`BlueArchiveCursor.exe`**](https://github.com/g114056175/my_tools/releases/download/cursor-effects-v1.0.0/BlueArchiveCursor.exe) 後直接執行，免安裝，只需這一個檔案。
 
 適用 **Windows 10（1703 以上）／Windows 11 x64**，需 .NET Framework 4.8 與支援 Direct3D 11 的顯示驅動；已在 Windows 10 22H2 測試。
 
@@ -61,8 +61,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File release.ps1
 工具鏈下載約 179 MiB，僅供建置；版本、網址與 SHA-256 在 `toolchain.json`。可使用 `build.ps1 -Compiler "完整路徑\clang++.exe"` 指定同版編譯器。無須 Visual Studio、Node 或 Python。
 
 - `dist/`：EXE、說明與效果圖。
-- `release/BlueArchiveCursor-win-x64.zip`：執行包，可上傳 GitHub Releases。
-- `release/cursor-effects-native-source.zip`：原始碼包，可解壓作為 GitHub 專案根目錄。
+- `dist/BlueArchiveCursor.exe`：發布用單檔 EXE。
 - `.build/build-info.json`：編譯器版本及來源／產物雜湊。
 
 可重建功能相同的程式，不保證 EXE 位元組完全一致。下載的工具鏈、產物與測試結果已列入 `.gitignore`。

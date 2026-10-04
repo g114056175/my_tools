@@ -1,0 +1,14 @@
+**/.venv/
+**/venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.build/
+**/.tools/
+**/test-results/
+**/config.ini
+**/.env
+*.pyc
+*.user
+Thumbs.db
+Desktop.ini

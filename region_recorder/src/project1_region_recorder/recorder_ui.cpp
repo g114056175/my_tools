@@ -16,6 +16,7 @@
 #include "common/native_theme.h"
 #include "project1_region_recorder/recorder_app.h"
 #include "project1_region_recorder/region_selector.h"
+#include "project1_region_recorder/save_dialog.h"
 // clang-format on
 
 #ifndef WDA_EXCLUDEFROMCAPTURE
@@ -26,11 +27,7 @@ namespace lc::recorder {
 AppState g_app;
 namespace {
 enum ControlId {
-    ID_X = 101,
-    ID_Y,
-    ID_WIDTH,
-    ID_HEIGHT,
-    ID_SELECT,
+    ID_SELECT = 105,
     ID_VIDEO_FPS = 107,
     ID_VIDEO = 109,
     ID_DIRECTORY = 111,
@@ -61,7 +58,7 @@ using Icon = lc::ui::Icon;
 constexpr UINT kTrayMessage = WM_APP + 30;
 constexpr int kSelectHotkey = 1, kEscapeHotkey = 3;
 constexpr UINT_PTR kUiTimer = 1, kSettingsTimer = 2;
-constexpr int kWidth = 600, kHeight = 490;
+constexpr int kWidth = 600, kHeight = 394;
 constexpr UINT kFinishHotkeyEdit = WM_APP + 31;
 constexpr COLORREF kBackground = lc::ui::Background, kCard = lc::ui::Panel;
 constexpr COLORREF kInk = lc::ui::Ink, kMuted = lc::ui::Muted;
@@ -138,27 +135,8 @@ void SetRegion(RECT region) {
         std::lock_guard lock(g_app.regionMutex);
         g_app.region = region;
     }
-    WriteInt(g_app.editX, region.left);
-    WriteInt(g_app.editY, region.top);
-    WriteInt(g_app.editWidth, region.right - region.left);
-    WriteInt(g_app.editHeight, region.bottom - region.top);
 }
 void UpdateToolbar();
-bool ApplyCoordinates() {
-    if (g_app.running || g_app.selectionActive || g_app.view == View::Result) return true;
-    const int x = ReadInt(g_app.editX, INT_MIN), y = ReadInt(g_app.editY, INT_MIN);
-    const int width = ReadInt(g_app.editWidth, 0), height = ReadInt(g_app.editHeight, 0);
-    if (x == INT_MIN || y == INT_MIN || width < 8 || height < 8 || width > 32768 ||
-        height > 32768 || static_cast<int64_t>(x) + width > INT_MAX ||
-        static_cast<int64_t>(y) + height > INT_MAX) {
-        Status(L"請輸入有效的 X、Y，寬高至少為 8。");
-        return false;
-    }
-    const RECT next = ClampToDesktop({x, y, x + width, y + height}), previous = CurrentRegion();
-    SetRegion(next);
-    if (g_app.view == View::Ready && !EqualRect(&next, &previous)) UpdateToolbar();
-    return true;
-}
 std::wstring DefaultDirectory() {
     PWSTR path{};
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &path))) {
@@ -280,23 +258,18 @@ void Paint(HWND window, HDC printDc = nullptr) {
         InflateRect(&frame, -1, -1);
         FillRoundRect(buffer, frame, kCard, kBorder);
     } else {
-        for (RECT card : {Box(12, 12, 576, 156), Box(12, 180, 576, 102), Box(12, 294, 576, 138)})
+        for (RECT card : {Box(12, 12, 576, 60), Box(12, 84, 576, 102), Box(12, 198, 576, 138)})
             FillRoundRect(buffer, card, kCard, kCard, 20);
-        Text(buffer, L"擷取範圍", Box(24, 22, 380, 26), kInk, g_app.titleFont);
-        const wchar_t* labels[]{L"X", L"Y", L"寬", L"高"};
-        for (int i = 0; i < 4; ++i)
-            Text(buffer, labels[i], Box(24 + i * 140, 51, 132, 22), kMuted, g_app.uiFont);
-        Text(buffer, L"框選熱鍵", Box(24, 119, 86, 36), kMuted, g_app.uiFont);
-        Text(buffer, L"錄影設定", Box(24, 190, 200, 30), kInk, g_app.titleFont);
-        Text(buffer, L"擷取滑鼠游標", Box(196, 193, 92, 24), kInk, g_app.uiFont);
-        Text(buffer, L"Video FPS", Box(24, 232, 88, 36), kMuted, g_app.uiFont);
-        Text(buffer, L"GIF FPS", Box(310, 232, 80, 36), kMuted, g_app.uiFont);
-        Text(buffer, L"位置", Box(24, 306, 56, 36), kMuted, g_app.uiFont);
-        Text(buffer, L"檔名", Box(24, 349, 56, 36), kMuted, g_app.uiFont);
-        Text(buffer, L"自動保存", Box(24, 394, 66, 24), kInk, g_app.uiFont);
-        Text(buffer, L"完成後自動複製", Box(310, 394, 120, 24), kInk, g_app.uiFont);
-        for (HWND field : {g_app.editX, g_app.editY, g_app.editWidth, g_app.editHeight,
-                           g_app.videoFps, g_app.gifFps, g_app.editDirectory, g_app.editFileName})
+        Text(buffer, L"框選熱鍵", Box(24, 24, 86, 36), kMuted, g_app.uiFont);
+        Text(buffer, L"錄影設定", Box(24, 94, 160, 30), kInk, g_app.titleFont);
+        Text(buffer, L"擷取滑鼠游標", Box(196, 97, 92, 24), kInk, g_app.uiFont);
+        Text(buffer, L"Video FPS", Box(24, 136, 88, 36), kMuted, g_app.uiFont);
+        Text(buffer, L"GIF FPS", Box(310, 136, 80, 36), kMuted, g_app.uiFont);
+        Text(buffer, L"位置", Box(24, 210, 56, 36), kMuted, g_app.uiFont);
+        Text(buffer, L"檔名", Box(24, 253, 56, 36), kMuted, g_app.uiFont);
+        Text(buffer, L"自動保存", Box(24, 298, 66, 24), kInk, g_app.uiFont);
+        Text(buffer, L"完成後自動複製", Box(310, 298, 120, 24), kInk, g_app.uiFont);
+        for (HWND field : {g_app.videoFps, g_app.gifFps, g_app.editDirectory, g_app.editFileName})
             lc::ui::PaintField(buffer, field, g_app.dpi);
     }
     BitBlt(dc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
@@ -306,7 +279,7 @@ void Paint(HWND window, HDC printDc = nullptr) {
     if (!printDc) EndPaint(window, &ps);
 }
 void SaveSettings() {
-    if (g_app.settingsPath.empty() || !g_app.editX) return;
+    if (g_app.settingsPath.empty() || !g_app.editDirectory) return;
     // Win32 profile APIs preserve Unicode when the INI starts with a UTF-16 BOM.
     HANDLE initial = CreateFileW(g_app.settingsPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                  nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -319,11 +292,7 @@ void SaveSettings() {
     auto write = [&](const wchar_t* key, const std::wstring& text) {
         WritePrivateProfileStringW(L"Recorder", key, text.c_str(), g_app.settingsPath.c_str());
     };
-    for (auto pair : {std::pair{L"X", g_app.editX},
-                      {L"Y", g_app.editY},
-                      {L"Width", g_app.editWidth},
-                      {L"Height", g_app.editHeight},
-                      {L"VideoFPS", g_app.videoFps},
+    for (auto pair : {std::pair{L"VideoFPS", g_app.videoFps},
                       {L"GifFPS", g_app.gifFps},
                       {L"Directory", g_app.editDirectory},
                       {L"FileName", g_app.editFileName}})
@@ -333,7 +302,8 @@ void SaveSettings() {
     write(L"CopyOnFinish", g_app.copyToClipboard ? L"1" : L"0");
     write(L"CaptureCursor", g_app.captureCursor ? L"1" : L"0");
     write(L"SelectKey", std::to_wstring(g_app.selectKey));
-    WritePrivateProfileStringW(L"Recorder", L"StopKey", nullptr, g_app.settingsPath.c_str());
+    for (const auto key : {L"X", L"Y", L"Width", L"Height", L"StopKey"})
+        WritePrivateProfileStringW(L"Recorder", key, nullptr, g_app.settingsPath.c_str());
 }
 void LoadSettings() {
     auto get = [&](const wchar_t* key, const wchar_t* fallback) {
@@ -342,18 +312,14 @@ void LoadSettings() {
                                  g_app.settingsPath.c_str());
         return std::wstring(text);
     };
-    for (auto pair : {std::pair{L"X", g_app.editX},
-                      {L"Y", g_app.editY},
-                      {L"Width", g_app.editWidth},
-                      {L"Height", g_app.editHeight},
-                      {L"VideoFPS", g_app.videoFps},
+    for (auto pair : {std::pair{L"VideoFPS", g_app.videoFps},
                       {L"GifFPS", g_app.gifFps},
                       {L"Directory", g_app.editDirectory},
                       {L"FileName", g_app.editFileName}}) {
         const auto fallback = ReadText(pair.second);
         SetWindowTextW(pair.second, get(pair.first, fallback.c_str()).c_str());
     }
-    g_app.defaultGif = get(L"Gif", L"0") == L"1";
+    g_app.defaultGif = get(L"Gif", L"1") == L"1";
     g_app.autoSave = get(L"AutoSave", L"0") == L"1";
     g_app.copyToClipboard = get(L"CopyOnFinish", L"1") == L"1";
     g_app.captureCursor = get(L"CaptureCursor", L"1") == L"1";
@@ -364,10 +330,6 @@ void LoadSettings() {
                  g_app.copyToClipboard ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_app.cursorCheck, BM_SETCHECK, g_app.captureCursor ? BST_CHECKED : BST_UNCHECKED,
                  0);
-    const int x = std::clamp(ReadInt(g_app.editX, 100), -32768, 32768),
-              y = std::clamp(ReadInt(g_app.editY, 100), -32768, 32768);
-    SetRegion(ClampToDesktop({x, y, x + std::clamp(ReadInt(g_app.editWidth, 640), 8, 32768),
-                                 y + std::clamp(ReadInt(g_app.editHeight, 360), 8, 32768)}));
 }
 UINT KeyModifiers(WORD key) {
     const BYTE flags = HIBYTE(key);
@@ -429,7 +391,6 @@ void CommitSettings() {
     g_app.captureCursor = SendMessageW(g_app.cursorCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
     WriteInt(g_app.videoFps, std::clamp(ReadInt(g_app.videoFps, 60), 1, 60));
     WriteInt(g_app.gifFps, std::clamp(ReadInt(g_app.gifFps, 24), 1, 60));
-    ApplyCoordinates();
     SaveSettings();
     g_suppressSettings = false;
 }
@@ -652,17 +613,7 @@ std::wstring CleanBaseName(std::wstring name) {
     while (!name.empty() && (name.back() == L' ' || name.back() == L'.')) name.pop_back();
     return name.empty() ? L"capture" : name;
 }
-std::wstring UniquePath() {
-    auto directory = ReadText(g_app.editDirectory);
-    if (directory.empty()) directory = DefaultDirectory();
-    if (directory.back() != L'\\' && directory.back() != L'/') directory += L'\\';
-    const auto base = CleanBaseName(ReadText(g_app.editFileName));
-    for (unsigned int suffix = 0;; ++suffix) {
-        const auto path = directory + base + (suffix ? std::to_wstring(suffix) : L"") +
-                          (g_app.outputGif ? L".gif" : L".mp4");
-        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return path;
-    }
-}
+RecordingNames g_recordingNames;
 bool CreateTemporaryOutput() {
     wchar_t directory[MAX_PATH]{}, name[64]{};
     GUID guid{};
@@ -679,10 +630,6 @@ bool CreateTemporaryOutput() {
 }
 void StartRecording() {
     if (g_app.view != View::Ready || g_app.worker.joinable()) return;
-    if (!ApplyCoordinates()) {
-        ShowSettings();
-        return;
-    }
     CommitSettings();
     g_app.outputGif = g_app.defaultGif;
     g_app.completionNotice.clear();
@@ -795,38 +742,59 @@ void Completed() {
 }
 bool SaveOutput(bool automatic) {
     if (g_app.temporaryPath.empty() || g_app.dialogActive) return false;
+    auto directory = ReadText(g_app.editDirectory);
+    if (directory.empty()) directory = DefaultDirectory();
+    const auto base = CleanBaseName(ReadText(g_app.editFileName));
+    const std::wstring extension = g_app.outputGif ? L".gif" : L".mp4";
     std::wstring path;
-    if (automatic)
-        path = UniquePath();
-    else {
-        wchar_t file[32768]{};
-        const auto name =
-            CleanBaseName(ReadText(g_app.editFileName)) + (g_app.outputGif ? L".gif" : L".mp4");
-        wcsncpy_s(file, name.c_str(), _TRUNCATE);
-        const auto directory = ReadText(g_app.editDirectory);
-        OPENFILENAMEW dialog{};
-        dialog.lStructSize = sizeof(dialog);
-        dialog.hwndOwner = g_app.window;
-        dialog.lpstrFilter =
-            g_app.outputGif ? L"GIF 動畫 (*.gif)\0*.gif\0\0" : L"MP4 影片 (*.mp4)\0*.mp4\0\0";
-        dialog.lpstrFile = file;
-        dialog.nMaxFile = ARRAYSIZE(file);
-        dialog.lpstrInitialDir = directory.c_str();
-        dialog.lpstrDefExt = g_app.outputGif ? L"gif" : L"mp4";
+    DWORD namingError = 0;
+    if (!g_recordingNames.Suggest(directory, base, extension, path, namingError)) {
+        Status(L"無法產生保存檔名，錄影仍在暫存處：" + HrText(HRESULT_FROM_WIN32(namingError)));
+        UpdateToolbar(); ShowSettings(); return false;
+    }
+    bool suggestedName = true;
+    if (!automatic) {
+        ComPtr<IFileSaveDialog> dialog;
+        HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&dialog));
+        const COMDLG_FILTERSPEC filter = g_app.outputGif ? COMDLG_FILTERSPEC{L"GIF 動畫 (*.gif)", L"*.gif"}
+                                                       : COMDLG_FILTERSPEC{L"MP4 影片 (*.mp4)", L"*.mp4"};
+        if (SUCCEEDED(hr)) hr = dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                                                  FOS_OVERWRITEPROMPT | FOS_NOCHANGEDIR);
+        if (SUCCEEDED(hr)) hr = dialog->SetFileTypes(1, &filter);
+        if (SUCCEEDED(hr)) hr = dialog->SetDefaultExtension(extension.c_str() + 1);
+        if (SUCCEEDED(hr)) hr = dialog->SetFileName(RecordingNames::Leaf(path).c_str());
+        ComPtr<IShellItem> initialFolder;
+        if (SUCCEEDED(hr) && SUCCEEDED(SHCreateItemFromParsingName(directory.c_str(), nullptr,
+                                                                   IID_PPV_ARGS(&initialFolder))))
+            hr = dialog->SetFolder(initialFolder.Get());
         const auto title =
             g_app.completionNotice.empty() ? L"保存錄影" : g_app.completionNotice + L" — 保存錄影";
-        dialog.lpstrTitle = title.c_str();
-        dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (SUCCEEDED(hr)) hr = dialog->SetTitle(title.c_str());
+        ComPtr<SaveNameEvents> events;
+        events.Attach(new SaveNameEvents(g_recordingNames, base, extension, RecordingNames::Leaf(path)));
+        DWORD cookie = 0;
+        bool advised = false;
+        if (SUCCEEDED(hr)) { hr = dialog->Advise(events.Get(), &cookie); advised = SUCCEEDED(hr); }
         g_app.dialogActive = true;
         ShowWindow(g_app.toolbar, SW_HIDE);
-        const bool chosen = GetSaveFileNameW(&dialog) != FALSE;
+        if (SUCCEEDED(hr)) hr = dialog->Show(g_app.window);
+        if (advised) dialog->Unadvise(cookie);
         g_app.dialogActive = false;
-        if (!chosen) {
+        ComPtr<IShellItem> result;
+        PWSTR chosenPath = nullptr;
+        if (SUCCEEDED(hr)) hr = dialog->GetResult(&result);
+        if (SUCCEEDED(hr)) hr = result->GetDisplayName(SIGDN_FILESYSPATH, &chosenPath);
+        if (FAILED(hr)) {
             g_app.exitRequested = false;
+            if (hr != HRESULT_FROM_WIN32(ERROR_CANCELLED)) Status(L"無法開啟保存對話框：" + HrText(hr));
             UpdateToolbar();
             return false;
         }
-        path = file;
+        path = chosenPath;
+        CoTaskMemFree(chosenPath);
+        suggestedName = events->suggestedResult;
+        directory = RecordingNames::Directory(path);
     }
     const bool wasShared = OwnsClipboardPath(g_app.temporaryPath);
     if (!ReleaseTemporaryClipboard()) {
@@ -835,14 +803,29 @@ bool SaveOutput(bool automatic) {
         UpdateToolbar();
         return false;
     }
-    if (!MoveFileExW(g_app.temporaryPath.c_str(), path.c_str(),
-                     MOVEFILE_COPY_ALLOWED | (automatic ? 0 : MOVEFILE_REPLACE_EXISTING))) {
+    bool moved = false;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        if (MoveFileExW(g_app.temporaryPath.c_str(), path.c_str(),
+                        MOVEFILE_COPY_ALLOWED | (suggestedName ? 0 : MOVEFILE_REPLACE_EXISTING))) {
+            moved = true;
+            break;
+        }
+        const DWORD error = GetLastError();
+        if (!suggestedName || (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) ||
+            !g_recordingNames.Suggest(directory, base, extension, path, namingError)) break;
+    }
+    if (!moved) {
         if (wasShared) CopyTemporaryOutput();
         Status(L"保存失敗；錄影仍在暫存處，可重試或另選位置。");
         g_app.exitRequested = false;
         UpdateToolbar();
         ShowSettings();
         return false;
+    }
+    g_recordingNames.Saved(path, base, extension);
+    if (!automatic) {
+        SetWindowTextW(g_app.editDirectory, directory.c_str());
+        SaveSettings();
     }
     g_app.lastSavedPath = path;
     const bool copied = !(g_app.copyToClipboard || wasShared) || CopyFileToClipboard(path);
@@ -1116,26 +1099,22 @@ LRESULT CALLBACK ToolbarProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
 }
 void CreateControls() {
     g_suppressSettings = true;
-    g_app.hideButton = Button(g_app.window, L"隱藏至通知區", 408, 444, 168, 32, ID_HIDE);
-    g_app.editX = Edit(L"100", 24, 76, 132, 36, ID_X);
-    g_app.editY = Edit(L"100", 164, 76, 132, 36, ID_Y);
-    g_app.editWidth = Edit(L"640", 304, 76, 132, 36, ID_WIDTH, true);
-    g_app.editHeight = Edit(L"360", 444, 76, 132, 36, ID_HEIGHT, true);
+    g_app.hideButton = Button(g_app.window, L"隱藏至通知區", 408, 348, 168, 32, ID_HIDE);
     g_app.selectHotkey = Control(g_app.window, L"STATIC", L"框選熱鍵", WS_TABSTOP | SS_NOTIFY, 112,
-                                 119, 242, 36, ID_SELECT_HOTKEY);
-    Button(g_app.window, L"滑鼠框選", 366, 119, 210, 36, ID_SELECT);
-    g_app.videoButton = Button(g_app.window, L"Video", 396, 189, 86, 32, ID_VIDEO);
-    g_app.gifButton = Button(g_app.window, L"GIF", 490, 189, 86, 32, ID_GIF);
-    g_app.cursorCheck = Button(g_app.window, L"擷取滑鼠游標", 298, 193, 36, 24, ID_CURSOR);
-    g_app.videoFps = Edit(L"60", 112, 232, 164, 36, ID_VIDEO_FPS, true);
-    g_app.gifFps = Edit(L"24", 396, 232, 180, 36, ID_GIF_FPS, true);
+                                 24, 242, 36, ID_SELECT_HOTKEY);
+    Button(g_app.window, L"滑鼠框選", 366, 24, 210, 36, ID_SELECT);
+    g_app.videoButton = Button(g_app.window, L"Video", 396, 93, 86, 32, ID_VIDEO);
+    g_app.gifButton = Button(g_app.window, L"GIF", 490, 93, 86, 32, ID_GIF);
+    g_app.cursorCheck = Button(g_app.window, L"擷取滑鼠游標", 298, 97, 36, 24, ID_CURSOR);
+    g_app.videoFps = Edit(L"60", 112, 136, 164, 36, ID_VIDEO_FPS, true);
+    g_app.gifFps = Edit(L"24", 396, 136, 180, 36, ID_GIF_FPS, true);
     SetWindowSubclass(g_app.selectHotkey, HotkeyEditProc, 1, 0);
-    g_app.editDirectory = Edit(DefaultDirectory().c_str(), 84, 306, 444, 36, ID_DIRECTORY);
-    Button(g_app.window, L"選擇保存資料夾", 540, 306, 36, 36, ID_BROWSE);
-    g_app.editFileName = Edit(L"capture", 84, 349, 492, 36, ID_FILENAME);
-    g_app.autoSaveCheck = Button(g_app.window, L"自動保存", 96, 394, 36, 24, ID_AUTO_SAVE);
-    g_app.clipboardCheck = Button(g_app.window, L"完成後自動複製", 422, 394, 36, 24, ID_CLIPBOARD);
-    g_app.status = Control(g_app.window, L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE, 24, 440, 368, 42,
+    g_app.editDirectory = Edit(DefaultDirectory().c_str(), 84, 210, 444, 36, ID_DIRECTORY);
+    Button(g_app.window, L"選擇保存資料夾", 540, 210, 36, 36, ID_BROWSE);
+    g_app.editFileName = Edit(L"capture", 84, 253, 492, 36, ID_FILENAME);
+    g_app.autoSaveCheck = Button(g_app.window, L"自動保存", 96, 298, 36, 24, ID_AUTO_SAVE);
+    g_app.clipboardCheck = Button(g_app.window, L"完成後自動複製", 422, 298, 36, 24, ID_CLIPBOARD);
+    g_app.status = Control(g_app.window, L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE, 24, 344, 368, 42,
                            ID_STATUS);
     g_app.settingsPath = SettingsPath();
     LoadSettings();

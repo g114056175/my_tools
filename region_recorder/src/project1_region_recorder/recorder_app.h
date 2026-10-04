@@ -20,7 +20,7 @@ enum class View { Idle, Ready, Recording, Result };
 struct AppState {
     HINSTANCE instance{};
     HWND window{}, toolbar{}, tooltip{};
-    HWND editX{}, editY{}, editWidth{}, editHeight{}, videoFps{}, gifFps{};
+    HWND videoFps{}, gifFps{};
     HWND editDirectory{}, editFileName{}, autoSaveCheck{}, clipboardCheck{}, cursorCheck{};
     HWND selectHotkey{}, videoButton{}, gifButton{}, status{};
     HWND startButton{}, pauseButton{}, stopButton{}, typeButton{}, closeButton{}, resizeButton{};
@@ -38,7 +38,7 @@ struct AppState {
     std::wstring pendingDetail;
     WORD selectKey = 0x0352;  // HOTKEYF_CONTROL | HOTKEYF_SHIFT
     bool selectRegistered = false, escapeRegistered = false, discardWhenStopped = false;
-    bool defaultGif = false, autoSave = false, copyToClipboard = true;
+    bool defaultGif = true, autoSave = false, copyToClipboard = true;
     bool hotkeysSuspended = false;
     std::wstring clipboardPath;
     DWORD clipboardSequence = 0;

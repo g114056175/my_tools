@@ -6,15 +6,17 @@ $clang = (Get-Command clang++ -ErrorAction Stop).Source
 $flags = @('-std=c++20','-O2','-DUNICODE','-D_UNICODE','-DWINVER=0x0A00',
     '-D_WIN32_WINNT=0x0A00','-I',$root,'-Wall','-Wextra','-Wpedantic','-static')
 $libraries = @('-municode','-ld3d11','-ldxgi','-lruntimeobject','-lwindowsapp','-lole32','-luuid',
-    '-lmfplat','-lmfreadwrite','-lmfuuid','-lpropsys','-lshlwapi','-luser32','-lgdi32','-lkernel32')
-foreach ($name in @('recorder_visual_smoke','recording_limits_smoke')) {
+    '-lmfplat','-lmfreadwrite','-lmfuuid','-lpropsys','-lshlwapi','-lshell32','-luser32','-lgdi32','-lkernel32')
+foreach ($name in @('recorder_visual_smoke','recording_limits_smoke','recording_names_smoke','save_dialog_smoke')) {
     $sources = @('common/wgc_capture.cpp','project1_region_recorder/gif_writer.cpp')
     $defines = @()
     if ($name -eq 'recorder_visual_smoke') {
         $sources += 'project1_region_recorder/region_selector.cpp'
-    } else {
+    } elseif ($name -eq 'recording_limits_smoke') {
         $sources += @('common/image_utils.cpp','project1_region_recorder/main.cpp','project1_region_recorder/mp4_writer.cpp')
         $defines = @('-DLC_RECORDER_WORKER_TEST')
+    } else {
+        $sources = @()
     }
     $exe = Join-Path $output ($name+'.exe')
     $arguments = $flags + $defines + @($sources | ForEach-Object { Join-Path $root $_ }) +

@@ -76,7 +76,7 @@ function Assert-VisibleToCapture([IntPtr]$Window) {
 function Check-ToolbarPixels([string]$Name) {
     Assert-VisibleToCapture $toolbar
     $path=Join-Path $screenshots $Name
-    [CaptureUiNative]::Snapshot($toolbar,$path,$false)
+    [CaptureUiNative]::SnapshotUnrefreshed($toolbar,$path)
     $image=[Drawing.Bitmap]::FromFile($path)
     try {
         $visible=0;$accent=0;$close=0;$ink=0
@@ -139,17 +139,11 @@ function Check-Marker([int[]]$Region) {
     $marker = Wait-TestWindow 'LightCaptureRegionMarker' $app.Id
     Assert-Equal (Get-TestRect $marker) @(($Region[0]-3),($Region[1]-3),($Region[2]+6),($Region[3]+6)) 'Marker coordinates'
     Start-Sleep -Milliseconds 200
-    $recording=[CaptureUiNative]::IsWindowVisible([CaptureUiNative]::GetDlgItem($toolbar,117))
-    if($recording) {
-        Assert-Excluded $marker
-        Assert-Excluded $toolbar
-    } else {
-        Assert-VisibleToCapture $marker
-        Assert-VisibleToCapture $toolbar
-        foreach($point in @(@(($Region[0]-2),($Region[1]+$Region[3]/2)),@(($Region[0]+$Region[2]/2),($Region[1]-2)))) {
-            $pixel=[CaptureUiNative]::ScreenPixel($point[0],$point[1])
-            if($pixel.R -gt 12 -or [Math]::Abs($pixel.G-210) -gt 12 -or [Math]::Abs($pixel.B-255) -gt 12) {throw "Ready border missing: $pixel"}
-        }
+    Assert-VisibleToCapture $marker
+    Assert-VisibleToCapture $toolbar
+    foreach($point in @(@(($Region[0]-2),($Region[1]+$Region[3]/2)),@(($Region[0]+$Region[2]/2),($Region[1]-2)))) {
+        $pixel=[CaptureUiNative]::ScreenPixel($point[0],$point[1])
+        if($pixel.R -gt 12 -or [Math]::Abs($pixel.G-210) -gt 12 -or [Math]::Abs($pixel.B-255) -gt 12) {throw "Visible border missing: $pixel"}
     }
     $position = Get-TestRect $toolbar
     if ($position[0] -lt $Region[0]+$Region[2] -and $position[0]+$position[2] -gt $Region[0] -and
@@ -159,7 +153,7 @@ function Start-Clip([bool]$Gif) {
     Send-Command $main $(if ($Gif) {127} else {109})
     $before = @(Get-ChildItem -LiteralPath $env:TEMP -Filter 'LightCapture-*' -File | ForEach-Object FullName)
     $destinationsBefore = @(Get-ChildItem -LiteralPath $outputDirectory -File | ForEach-Object FullName)
-    Send-Command $toolbar 115
+    [void][CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($toolbar,115),0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)
     [void](Wait-Control $toolbar 117)
     if (![CaptureUiNative]::IsWindowEnabled([CaptureUiNative]::GetDlgItem($toolbar,117))) { throw 'Recording stop button is disabled' }
     $newPaths = @(Get-ChildItem -LiteralPath $env:TEMP -Filter 'LightCapture-*' -File |
@@ -189,8 +183,27 @@ try {
     $main = Wait-TestWindow 'LightRegionRecorderWindow' $app.Id $false
     Start-Sleep -Milliseconds 250
     [void][CaptureUiNative]::ShowWindow($main,5)
+    [void][CaptureUiNative]::SetForegroundWindow($main)
+    # Wait for the initial DWM show animation, not a repair repaint. Otherwise
+    # desktop snapshots can contain a fading mixture with the window behind it.
+    Start-Sleep -Milliseconds 250
     [void](Wait-Control $main 105)
     $toolbar = Wait-TestWindow 'LightCaptureRegionToolbar' $app.Id $false
+    # Compare an incremental label update with a clean paint. The snapshot
+    # deliberately does not repair the window before checking old glyphs.
+    $status=[CaptureUiNative]::GetDlgItem($main,118)
+    Set-ControlText $main 118 '長狀態文字 ABCDEFGHIJKLMNOPQRSTUVWXYZ 1234567890'
+    Set-ControlText $main 118 '短訊息'
+    $warm=Join-Path $screenshots 'status-incremental.png'
+    $clean=Join-Path $screenshots 'status-clean.png'
+    [CaptureUiNative]::SnapshotUnrefreshed($status,$warm)
+    [CaptureUiNative]::Snapshot($status,$clean,$true)
+    $a=[Drawing.Bitmap]::FromFile($warm);$b=[Drawing.Bitmap]::FromFile($clean)
+    try {
+        for($y=0;$y -lt $a.Height;$y++) {for($x=0;$x -lt $a.Width;$x++) {
+            if($a.GetPixel($x,$y).ToArgb() -ne $b.GetPixel($x,$y).ToArgb()){throw 'Status label leaves old glyphs until a forced repaint'}
+        }}
+    } finally {$a.Dispose();$b.Dispose()}
     $previousSettings=$env:LIGHTCAPTURE_SETTINGS_PATH
     $env:LIGHTCAPTURE_SETTINGS_PATH=Join-Path $outputDirectory 'settings.ini'
     $duplicate=Start-Process -FilePath $Executable -WindowStyle Hidden -PassThru
@@ -313,17 +326,22 @@ try {
     Send-Command $confirmation 7
     Start-Sleep -Milliseconds 100
     [void](Wait-Control $toolbar 117)
-    [CaptureUiNative]::Snapshot($toolbar,(Join-Path $screenshots 'recorder-recording.png'),$true)
+    Check-ToolbarPixels 'recorder-recording.png'
     Send-Command $main 201
     [void](Wait-Control $main 133)
+    $field=Get-TestRect ([CaptureUiNative]::GetDlgItem($main,107))
+    $pixel=[CaptureUiNative]::ScreenPixel(($field[0]+$field[2]-2),($field[1]+2))
+    if($pixel.R -ne 14 -or $pixel.G -ne 19 -or $pixel.B -ne 27){throw "Disabled edit has wrong background: $pixel"}
     [void][CaptureUiNative]::ShowWindow($main,6)
     Start-Sleep -Milliseconds 100
     if (![CaptureUiNative]::IsWindowVisible($toolbar)) { throw 'Minimizing settings hid the recording toolbar' }
     $time = Get-ControlText $toolbar 126
     [void][CaptureUiNative]::PostMessage($toolbar,0x0100,[IntPtr]27,[IntPtr]::Zero)
     [void][CaptureUiNative]::PostMessage($main,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
+    $confirmation=Wait-TestWindow '#32770' $app.Id
+    Send-Command $confirmation 7
     Start-Sleep -Milliseconds 400
-    if ((Get-ControlText $toolbar 126) -eq $time) { throw 'Escape/closing settings stopped recording' }
+    if ((Get-ControlText $toolbar 126) -eq $time) { throw 'Escape/declined close stopped recording' }
     Send-Command $toolbar 121
     $selector = Wait-TestWindow 'LightCaptureRegionSelector' $app.Id
     [void][CaptureUiNative]::PostMessage($selector,0x0100,[IntPtr]27,[IntPtr]::Zero)
@@ -340,7 +358,7 @@ try {
     Check-Marker @(380,240,240,160)
     Send-Command $toolbar 116
     Start-Sleep -Milliseconds 500
-    Send-Command $toolbar 117
+    [void][CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($toolbar,117),0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)
     $saveDialog = Wait-TestWindow '#32770' $app.Id
     $suggestedText=[Text.StringBuilder]::new(1024)
     for($attempt=0;$attempt -lt 60;++$attempt) {
@@ -482,6 +500,8 @@ try {
     Assert-Equal ([CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($main,135),0x00F0,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32()) 0 'Cursor preference persists after restart'
     Assert-Equal ([CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($main,129),0x0402,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32()) (0x0674) 'Hotkey persistence'
     Check-NoFrame
+    [void][CaptureUiNative]::PostMessage($main,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
+    if(!$app.WaitForExit(3000)){throw 'Main X did not terminate the idle recorder'}
     Write-Output 'idle-no-frame=ok live-border-pixels=ok ready-toolbar=ok cancel-exact=ok minimize-taskbar=ok explicit-tray=ok hotkey-edit=ok global-hotkeys=ok esc-recording-safe=ok resize-paused=ok fixed-canvas=ok temp-staging=ok save-dialog=ok gif=ok mp4=ok auto-save=ok unique=ok temporary-clipboard=ok close-cleanup=ok preserve-new-clipboard=ok clipboard-file=ok save-failure=ok discard=ok edge-placement=ok unicode-settings=ok result=PASS'
 }
 finally {

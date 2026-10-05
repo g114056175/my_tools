@@ -245,9 +245,15 @@ void ShowRegionMarker(HINSTANCE instance, const RECT& region, bool excludeFromCa
         if (!g_marker) return;
         SetLayeredWindowAttributes(g_marker, kMarkerKey, 255, LWA_COLORKEY);
     }
-    // Ready selections must remain visible to screenshots and remote desktops.
-    // Exclusion is needed only while the recorder is actively using this outline.
-    SetWindowDisplayAffinity(g_marker, excludeFromCapture ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    // Normally every painted edge lies outside the ROI, so the outline can stay
+    // visible to remote desktops too. Only screen-boundary edges need exclusion:
+    // desktop clipping moves those few pixels inside the recording rectangle.
+    const bool edgeInside = bounds.left + kRegionMarkerThickness > region.left ||
+                            bounds.top + kRegionMarkerThickness > region.top ||
+                            bounds.right - kRegionMarkerThickness < region.right ||
+                            bounds.bottom - kRegionMarkerThickness < region.bottom;
+    SetWindowDisplayAffinity(g_marker,
+        excludeFromCapture && edgeInside ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     SetWindowPos(g_marker, HWND_TOPMOST, bounds.left, bounds.top, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     RedrawWindow(g_marker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);

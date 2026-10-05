@@ -98,13 +98,18 @@ bool TestRegion(const RECT& roi, const std::vector<Monitor>& monitors, const std
         ShowWindow(window,SW_SHOWNOACTIVATE); UpdateWindow(window);
         windows.push_back(window); patches.push_back({crop,colors[i%4]});
     }
-    // Put the real selection marker INSIDE this test's capture ROI. Its four
-    // edges must reveal the original content rather than cyan or black pixels.
-    RECT marker=roi; InflateRect(&marker,-12,-12);
+    // Exercise the real ROI outline: ordinary edges stay outside the capture,
+    // while edges clipped at a desktop boundary are excluded by Windows.
+    RECT marker=roi;
     lc::ShowRegionMarker(GetModuleHandleW(nullptr),marker,true);
     HWND markerWindow=FindWindowW(L"LightCaptureRegionMarker",nullptr);
     DWORD affinity=0;
-    bool ok=markerWindow && GetWindowDisplayAffinity(markerWindow,&affinity) && affinity==0x11;
+    const LONG left=GetSystemMetrics(SM_XVIRTUALSCREEN), top=GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const bool edgeInside=roi.left-3<left || roi.top-3<top ||
+        roi.right+3>left+GetSystemMetrics(SM_CXVIRTUALSCREEN) ||
+        roi.bottom+3>top+GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    bool ok=markerWindow && GetWindowDisplayAffinity(markerWindow,&affinity) &&
+        affinity==(edgeInside?0x11u:0u);
     lc::DesktopCapture capture;
     std::vector<uint8_t> pixels; int width=0,height=0; std::wstring error;
     bool captured=false;
@@ -155,6 +160,10 @@ int wmain(int argc,wchar_t** argv) {
     auto r=monitors[0].rect;
     RECT single{r.left,r.top+80,r.left+240,r.top+240};
     ok=TestRegion(single,monitors,directory+L"/single.gif") && ok;
+    const auto edge=std::min_element(monitors.begin(),monitors.end(),
+        [](const Monitor& a,const Monitor& b){return a.rect.left<b.rect.left;})->rect;
+    RECT boundary{edge.left,edge.top+80,edge.left+240,edge.top+240};
+    ok=TestRegion(boundary,monitors,directory+L"/boundary.gif") && ok;
     bool multi=false;
     for(size_t i=0;i<monitors.size() && !multi;++i) for(size_t j=i+1;j<monitors.size() && !multi;++j) {
         auto a=monitors[i].rect,b=monitors[j].rect; RECT roi{};

@@ -110,7 +110,9 @@ void WriteInt(HWND control, int value) {
     const auto text = std::to_wstring(value);
     if (ReadText(control) != text) SetWindowTextW(control, text.c_str());
 }
-void Status(const std::wstring& text) { SetWindowTextW(g_app.status, text.c_str()); }
+void Status(const std::wstring& text) {
+    if (ReadText(g_app.status) != text) SetWindowTextW(g_app.status, text.c_str());
+}
 RECT CurrentRegion() {
     std::lock_guard lock(g_app.regionMutex);
     return g_app.region;
@@ -216,6 +218,33 @@ void AddTooltip(HWND control, const wchar_t* text) {
     tool.lpszText = const_cast<wchar_t*>(text);
     SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
 }
+LRESULT CALLBACK LabelProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR,
+                           DWORD_PTR) {
+    if (message == WM_ERASEBKGND) return TRUE;
+    if (message == WM_PAINT || message == WM_PRINTCLIENT) {
+        PAINTSTRUCT ps{};
+        HDC dc = message == WM_PAINT ? BeginPaint(window, &ps) : reinterpret_cast<HDC>(wParam);
+        RECT client{};
+        GetClientRect(window, &client);
+        // Each label owns and clears its entire surface. Transparent STATIC
+        // redraws otherwise leave previous status/timer glyphs behind.
+        const bool main = GetParent(window) == g_app.window;
+        FillRect(dc, &client, main ? g_app.backgroundBrush : g_app.cardBrush);
+        lc::ui::Text(dc, ReadText(window), client,
+                     reinterpret_cast<HFONT>(SendMessageW(window, WM_GETFONT, 0, 0)),
+                     main ? kMuted : kInk,
+                     (main ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE);
+        if (message == WM_PAINT) EndPaint(window, &ps);
+        return 0;
+    }
+    if (message == WM_SETTEXT) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(window, LabelProc, 2);
+    return DefSubclassProc(window, message, wParam, lParam);
+}
 HWND Control(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w,
              int h, int id) {
     HWND control =
@@ -226,6 +255,8 @@ HWND Control(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style, 
         lc::ui::Attach(control, g_app.dpi,
                        id == ID_AUTO_SAVE || id == ID_CLIPBOARD || id == ID_CURSOR,
                        id == ID_SELECT_HOTKEY);
+    if (id == ID_STATUS || id == ID_TIME || id == 124)
+        SetWindowSubclass(control, LabelProc, 2, 0);
     if (parent == g_app.window) g_app.setupControls.push_back(control);
     return control;
 }
@@ -462,18 +493,13 @@ bool Inside(RECT inner, RECT outer) {
     return inner.left >= outer.left && inner.top >= outer.top && inner.right <= outer.right &&
            inner.bottom <= outer.bottom;
 }
-void PositionToolbar() {
-    const RECT roi = CurrentRegion();
-    const int width = D(g_app.view == View::Recording ? 252
-                        : g_app.view == View::Result  ? 270
-                                                      : 188),
-              height = D(42), gap = D(8);
+bool FindToolbarPosition(const RECT& roi, int width, int height, POINT& position) {
+    const int gap = D(8);
     MONITORINFO monitor{};
     monitor.cbSize = sizeof(monitor);
     GetMonitorInfoW(MonitorFromRect(&roi, MONITOR_DEFAULTTONEAREST), &monitor);
     std::vector<RECT> areas{monitor.rcWork};
     EnumDisplayMonitors(nullptr, nullptr, CollectWorkArea, reinterpret_cast<LPARAM>(&areas));
-    POINT position{};
     bool found = false;
     for (const RECT area : areas) {
         if (area.right - area.left < width || area.bottom - area.top < height) continue;
@@ -495,15 +521,25 @@ void PositionToolbar() {
         }
         if (found) break;
     }
+    return found;
+}
+void PositionToolbar() {
+    const RECT roi = CurrentRegion();
+    const int width = D(g_app.view == View::Recording ? 252
+                        : g_app.view == View::Result  ? 270 : 188);
+    const int height = D(42), gap = D(8);
+    POINT position{};
+    const bool found = FindToolbarPosition(roi, width, height, position);
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    GetMonitorInfoW(MonitorFromRect(&roi, MONITOR_DEFAULTTONEAREST), &monitor);
     g_app.toolbarInsideRegion = !found;
     if (!found)
         position = {std::max(monitor.rcWork.left, monitor.rcWork.right - width - gap),
                     std::max(monitor.rcWork.top, monitor.rcWork.bottom - height - gap)};
-    // A full-screen ROI can leave no physical space outside it. Keep controls
-    // reachable there, but exclude them only during recording. Ready/result UI
-    // must be visible to ordinary screenshots and remote desktop capture.
-    SetWindowDisplayAffinity(g_app.toolbar,
-                            g_app.view == View::Recording ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    // Keep the only recording controls visible to remote desktops and screen
+    // capture. A recording may start only if these controls fit outside the ROI.
+    SetWindowDisplayAffinity(g_app.toolbar, WDA_NONE);
     SetWindowPos(g_app.toolbar, HWND_TOPMOST, position.x, position.y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -588,6 +624,14 @@ void SelectRegion(bool resize = false) {
     } while (g_app.reselectRequested && !g_app.stopRequested && !g_app.exitRequested);
     g_app.selectionActive = false;
     if (accepted && !g_app.stopRequested && !g_app.exitRequested) {
+        POINT position{};
+        if (recording && !FindToolbarPosition(selected, D(252), D(42), position)) {
+            accepted = false;
+            Status(L"控制列沒有可放置空間，請縮小框選範圍。");
+            ShowSettings();
+        }
+    }
+    if (accepted && !g_app.stopRequested && !g_app.exitRequested) {
         if (!recording && !g_app.pendingRegion) {
             g_app.previousRegion = CurrentRegion();
             g_app.pendingRegion = true;
@@ -632,6 +676,13 @@ bool CreateTemporaryOutput() {
 }
 void StartRecording() {
     if (g_app.view != View::Ready || g_app.worker.joinable()) return;
+    POINT position{};
+    if (!FindToolbarPosition(CurrentRegion(), D(252), D(42), position)) {
+        CloseReady();
+        Status(L"控制列沒有可放置空間，請縮小框選範圍。");
+        ShowSettings();
+        return;
+    }
     CommitSettings();
     g_app.outputGif = g_app.defaultGif;
     g_app.completionNotice.clear();
@@ -870,7 +921,9 @@ void FinishCapture(DoneReason reason, const std::wstring& detail) {
         EnableWindow(control, TRUE);
     if (g_app.discardWhenStopped) {
         g_app.discardWhenStopped = false;
+        const bool exiting = g_app.exitRequested;
         DiscardOutput();
+        if (exiting && IsWindow(g_app.window)) DestroyWindow(g_app.window);
         return;
     }
     UpdateToolbar();
@@ -922,7 +975,16 @@ void BrowseDirectory() {
 void ExitApp() {
     if (g_app.dialogActive) return;
     if (g_app.running) {
+        if (!g_app.stopRequested) {
+            g_app.dialogActive = true;
+            const int answer = MessageBoxW(g_app.window,
+                L"要停止錄影並結束程式嗎？\n尚未保存的這段錄影將清除。", L"結束區域錄影器",
+                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TOPMOST);
+            g_app.dialogActive = false;
+            if (answer != IDYES) return;
+        }
         g_app.exitRequested = true;
+        g_app.discardWhenStopped = true;
         RequestStop();
         return;
     }
@@ -934,6 +996,7 @@ void ExitApp() {
     if (g_app.view == View::Result) {
         g_app.exitRequested = true;
         DiscardOutput();
+        if (IsWindow(g_app.window)) DestroyWindow(g_app.window);
         return;
     }
     SaveSettings();
@@ -1125,7 +1188,7 @@ LRESULT CALLBACK MainProc(HWND window, UINT message, WPARAM wParam, LPARAM lPara
             auto font = [&](int height, int weight, const wchar_t* name) {
                 return CreateFontW(-D(height), 0, 0, 0, weight, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH, name);
+                                   ANTIALIASED_QUALITY, DEFAULT_PITCH, name);
             };
             g_app.uiFont = font(14, FW_NORMAL, L"Microsoft JhengHei UI");
             g_app.titleFont = font(15, FW_SEMIBOLD, L"Microsoft JhengHei UI");
@@ -1219,8 +1282,7 @@ LRESULT CALLBACK MainProc(HWND window, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         case WM_CLOSE:
             CommitSettings();
-            if (g_app.view == View::Result) DiscardOutput();
-            HideSettings();
+            ExitApp();
             return 0;
         case WM_DRAWITEM:
             DrawButton(*reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
@@ -1234,17 +1296,38 @@ LRESULT CALLBACK MainProc(HWND window, UINT message, WPARAM wParam, LPARAM lPara
         case WM_ERASEBKGND:
             return TRUE;
         case WM_CTLCOLOREDIT:
-            SetTextColor(reinterpret_cast<HDC>(wParam), kInk);
+            SetTextColor(reinterpret_cast<HDC>(wParam),
+                         IsWindowEnabled(reinterpret_cast<HWND>(lParam)) ? kInk : kMuted);
             SetBkColor(reinterpret_cast<HDC>(wParam), lc::ui::Field);
             return reinterpret_cast<LRESULT>(g_app.fieldBrush);
         case WM_CTLCOLORSTATIC:
         case WM_CTLCOLORBTN:
+            if (reinterpret_cast<HWND>(lParam) == g_app.videoFps ||
+                reinterpret_cast<HWND>(lParam) == g_app.gifFps ||
+                reinterpret_cast<HWND>(lParam) == g_app.editDirectory ||
+                reinterpret_cast<HWND>(lParam) == g_app.editFileName) {
+                SetTextColor(reinterpret_cast<HDC>(wParam), kMuted);
+                SetBkColor(reinterpret_cast<HDC>(wParam), lc::ui::Field);
+                SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
+                return reinterpret_cast<LRESULT>(g_app.fieldBrush);
+            }
             SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
             SetTextColor(reinterpret_cast<HDC>(wParam), kMuted);
             return reinterpret_cast<LRESULT>(reinterpret_cast<HWND>(lParam) == g_app.status
                                                  ? g_app.backgroundBrush
                                                  : g_app.cardBrush);
         case WM_DESTROY: {
+            // Normal exits join in FinishCapture. Also close the encoder/capture
+            // before destroying UI resources if shutdown destroys this window.
+            g_app.stopRequested = true;
+            g_app.paused = false;
+            if (g_app.worker.joinable()) g_app.worker.join();
+            g_app.running = false;
+            ReleaseTemporaryClipboard();
+            if (!g_app.temporaryPath.empty()) {
+                DeleteFileW(g_app.temporaryPath.c_str());
+                g_app.temporaryPath.clear();
+            }
             KillTimer(window, kUiTimer);
             KillTimer(window, kSettingsTimer);
             UnregisterHotKey(window, kSelectHotkey);

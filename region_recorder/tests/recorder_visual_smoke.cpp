@@ -101,7 +101,7 @@ bool TestRegion(const RECT& roi, const std::vector<Monitor>& monitors, const std
     // Put the real selection marker INSIDE this test's capture ROI. Its four
     // edges must reveal the original content rather than cyan or black pixels.
     RECT marker=roi; InflateRect(&marker,-12,-12);
-    lc::ShowRegionMarker(GetModuleHandleW(nullptr),marker);
+    lc::ShowRegionMarker(GetModuleHandleW(nullptr),marker,true);
     HWND markerWindow=FindWindowW(L"LightCaptureRegionMarker",nullptr);
     DWORD affinity=0;
     bool ok=markerWindow && GetWindowDisplayAffinity(markerWindow,&affinity) && affinity==0x11;

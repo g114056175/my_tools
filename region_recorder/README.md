@@ -49,3 +49,5 @@ powershell -ExecutionPolicy Bypass -File .\src\build.ps1
 EXE 產生在 `region_recorder/`。
 
 開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。包含 GIF 色彩、跨螢幕拼接、框線排除、MP4／GIF 上限及檔名編號測試；跨螢幕實測需要兩個相鄰螢幕。
+
+UI 與保存流程可分別執行 `tests/region_ui_smoke.ps1`、`tests/recording_save_ui_smoke.ps1`，以 `-Executable .\region_recorder.exe` 指定待測程式。UI 測試會操作桌面視窗並暫時使用剪貼簿，結束後恢復原內容。

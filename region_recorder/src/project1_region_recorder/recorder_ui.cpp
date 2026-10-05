@@ -500,8 +500,10 @@ void PositionToolbar() {
         position = {std::max(monitor.rcWork.left, monitor.rcWork.right - width - gap),
                     std::max(monitor.rcWork.top, monitor.rcWork.bottom - height - gap)};
     // A full-screen ROI can leave no physical space outside it. Keep controls
-    // reachable in that case. Always exclude recording controls from capture.
-    SetWindowDisplayAffinity(g_app.toolbar, WDA_EXCLUDEFROMCAPTURE);
+    // reachable there, but exclude them only during recording. Ready/result UI
+    // must be visible to ordinary screenshots and remote desktop capture.
+    SetWindowDisplayAffinity(g_app.toolbar,
+                            g_app.view == View::Recording ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     SetWindowPos(g_app.toolbar, HWND_TOPMOST, position.x, position.y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -525,7 +527,7 @@ void UpdateToolbar() {
     SetWindowTextW(g_app.typeButton, g_app.defaultGif ? L"GIF" : L"Video");
     SetWindowTextW(g_app.pauseButton, g_app.paused ? L"繼續" : L"暫停");
     if (ready || recording)
-        lc::ShowRegionMarker(g_app.instance, CurrentRegion());
+        lc::ShowRegionMarker(g_app.instance, CurrentRegion(), recording);
     else
         lc::HideRegionMarker();
     ShowWindow(g_app.closeButton, ready || recording ? SW_SHOW : SW_HIDE);
@@ -942,17 +944,6 @@ void TrayMenu() {
     AppendMenuW(menu, MF_STRING, ID_SHOW_SETTINGS, L"開啟設定");
     AppendMenuW(menu, MF_STRING | (g_app.view != View::Idle ? MF_GRAYED : 0), ID_SELECT,
                 L"滑鼠框選");
-    if (g_app.running) {
-        AppendMenuW(menu, MF_STRING, ID_PAUSE, g_app.paused ? L"繼續" : L"暫停");
-        AppendMenuW(menu, MF_STRING, ID_STOP, L"結束錄影");
-    } else if (g_app.view == View::Ready) {
-        AppendMenuW(menu, MF_STRING, ID_START, L"錄製");
-        AppendMenuW(menu, MF_STRING, ID_CLOSE, L"取消框選");
-    } else if (g_app.view == View::Result) {
-        AppendMenuW(menu, MF_STRING, ID_SAVE, L"保存錄影…");
-        AppendMenuW(menu, MF_STRING, ID_COPY, L"複製錄影");
-        AppendMenuW(menu, MF_STRING, ID_DISCARD, L"捨棄錄影");
-    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, ID_EXIT, L"結束程式");
     POINT pointer{};
@@ -1221,6 +1212,11 @@ LRESULT CALLBACK MainProc(HWND window, UINT message, WPARAM wParam, LPARAM lPara
         case WM_SIZE:
             // Standard minimization keeps the settings window on the taskbar.
             return 0;
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+            // Clicking a card/background also completes shortcut editing.
+            if (EditingHotkey()) SetFocus(window);
+            return 0;
         case WM_CLOSE:
             CommitSettings();
             if (g_app.view == View::Result) DiscardOutput();
@@ -1327,6 +1323,16 @@ int RunRecorder(HINSTANCE instance) {
     UpdateWindow(window);
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        if ((message.message == WM_LBUTTONDOWN || message.message == WM_RBUTTONDOWN ||
+             message.message == WM_NCLBUTTONDOWN) && EditingHotkey() &&
+            message.hwnd != g_app.selectHotkey &&
+            (message.hwnd == window || IsChild(window, message.hwnd) ||
+             message.hwnd == g_app.toolbar || IsChild(g_app.toolbar, message.hwnd))) {
+            // Native STATIC labels and blank card areas don't transfer focus.
+            // Finish before dispatching the click, including a click on Select.
+            SetFocus(message.hwnd);
+            CommitSettings();
+        }
         if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE && !EditingHotkey()) {
             if (g_app.view == View::Ready) CloseReady();
             continue;

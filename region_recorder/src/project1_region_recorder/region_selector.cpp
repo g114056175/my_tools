@@ -55,16 +55,6 @@ void RenderSelector(HWND window, const SelectorState* state) {
             }
         }
     }
-    // Hide the hint once dragging starts, so it cannot cover any selected edge.
-    if(!state || !state->dragging) {
-        RECT hint{20,16,std::min(width,480),48};
-        HBRUSH brush=CreateSolidBrush(RGB(18,25,35)); FillRect(buffer,&hint,brush); DeleteObject(brush);
-        SetBkMode(buffer,TRANSPARENT); SetTextColor(buffer,RGB(255,255,255));
-        RECT label=hint; label.left+=10;
-        DrawTextW(buffer,L"拖曳框選；Esc 或右鍵取消",-1,&label,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-        for(int y=hint.top;y<std::min<int>(height,hint.bottom);++y)
-            for(int x=hint.left;x<hint.right;++x) pixels[static_cast<size_t>(y)*width+x]|=0xff000000u;
-    }
     RECT bounds{}; GetWindowRect(window,&bounds);
     POINT destination{bounds.left,bounds.top}, origin{}; SIZE size{width,height};
     BLENDFUNCTION blend{AC_SRC_OVER,0,255,AC_SRC_ALPHA};
@@ -230,7 +220,7 @@ void CancelDesktopRegionSelection() {
     if (g_selector && IsWindow(g_selector)) PostMessageW(g_selector, WM_CLOSE, 0, 0);
 }
 
-void ShowRegionMarker(HINSTANCE instance, const RECT& region) {
+void ShowRegionMarker(HINSTANCE instance, const RECT& region, bool excludeFromCapture) {
     if (!RegisterMarkerClass(instance)) return;
     const LONG left = GetSystemMetrics(SM_XVIRTUALSCREEN);
     const LONG top = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -254,8 +244,10 @@ void ShowRegionMarker(HINSTANCE instance, const RECT& region) {
                                    instance, nullptr);
         if (!g_marker) return;
         SetLayeredWindowAttributes(g_marker, kMarkerKey, 255, LWA_COLORKEY);
-        SetWindowDisplayAffinity(g_marker, WDA_EXCLUDEFROMCAPTURE);
     }
+    // Ready selections must remain visible to screenshots and remote desktops.
+    // Exclusion is needed only while the recorder is actively using this outline.
+    SetWindowDisplayAffinity(g_marker, excludeFromCapture ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     SetWindowPos(g_marker, HWND_TOPMOST, bounds.left, bounds.top, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     RedrawWindow(g_marker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);

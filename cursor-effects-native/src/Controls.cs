@@ -73,7 +73,7 @@ sealed class PositionSlider : Control {
 }
 
 sealed class OnOffSwitch : CheckBox {
-    public OnOffSwitch(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);AutoSize=false;Size=new Size(110,30);Cursor=Cursors.Hand;AccessibleName="效果開關";AccessibleRole=AccessibleRole.CheckButton;}
+    public OnOffSwitch(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);AutoSize=false;Size=new Size(48,30);Cursor=Cursors.Hand;AccessibleName="效果開關";AccessibleRole=AccessibleRole.CheckButton;}
     protected override void OnPaint(PaintEventArgs e){
         var g=e.Graphics;g.Clear(BackColor);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         float h=24*DeviceDpi/96f,w=44*DeviceDpi/96f,x=Width-w-2,y=(Height-h)/2;
@@ -83,9 +83,7 @@ sealed class OnOffSwitch : CheckBox {
             using(var pen=new Pen(Checked?AppTheme.Accent:AppTheme.Border,1))g.DrawPath(pen,path);
         }
         float inset=h/6,thumb=h-2*inset,tx=Checked?x+w-h+inset:x+inset;using(var fill=new SolidBrush(Checked?AppTheme.Text:AppTheme.Muted))g.FillEllipse(fill,tx,y+inset,thumb,thumb);
-        var label=new Rectangle(0,0,(int)x-8,Height);
-        TextRenderer.DrawText(g,Checked?"開啟":"關閉",Font,label,Checked?AppTheme.Accent:AppTheme.Muted,TextFormatFlags.Right|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPadding);
-        if(Focused)ControlPaint.DrawFocusRectangle(g,ClientRectangle,AppTheme.Text,BackColor);
+        if(Focused)ControlPaint.DrawFocusRectangle(g,Rectangle.Round(new RectangleF(x-1,y-1,w+2,h+2)),AppTheme.Text,BackColor);
     }
 }
 
@@ -111,64 +109,105 @@ sealed class ColorPalette {
     };
 }
 
-sealed class PaletteField : ComboBox {
-    public PaletteField(){DropDownStyle=ComboBoxStyle.DropDownList;DrawMode=DrawMode.OwnerDrawFixed;FlatStyle=FlatStyle.Flat;BackColor=AppTheme.Field;ForeColor=AppTheme.Text;Dock=DockStyle.Fill;ItemHeight=24;AccessibleName="配色模板";Items.Add("自訂");foreach(var palette in ColorPalette.All)Items.Add(palette.Name);}
-    protected override void OnDrawItem(DrawItemEventArgs e){
-        if(e.Index<0)return;var selected=(e.State&DrawItemState.Selected)!=0;using(var brush=new SolidBrush(selected?AppTheme.Selected:AppTheme.Field))e.Graphics.FillRectangle(brush,e.Bounds);
-        int size=12*DeviceDpi/96,gap=4*DeviceDpi/96;var text=e.Bounds;text.X+=6;text.Width-=e.Index>0?3*(size+gap)+12:12;TextRenderer.DrawText(e.Graphics,Items[e.Index].ToString(),Font,text,AppTheme.Text,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
-        if(e.Index>0){var p=ColorPalette.All[e.Index-1];var colors=new[]{p.Trail,p.Ripple,p.Fragment};for(int i=0;i<3;i++){var r=new Rectangle(e.Bounds.Right-6-(3-i)*(size+gap),e.Bounds.Top+(e.Bounds.Height-size)/2,size,size);using(var brush=new SolidBrush(colors[i]))e.Graphics.FillRectangle(brush,r);}}
-        e.DrawFocusRectangle();
+sealed class PaletteField : Control {
+    readonly ToolStripDropDownMenu menu=new ToolStripDropDownMenu();int selected;bool hover;
+    public event EventHandler SelectedIndexChanged;
+    public int SelectedIndex{get{return selected;}set{value=Math.Max(0,Math.Min(ColorPalette.All.Length,value));if(selected==value)return;selected=value;Text=Caption(value);AccessibleDescription=Text;Invalidate();if(SelectedIndexChanged!=null)SelectedIndexChanged(this,EventArgs.Empty);}}
+    internal ToolStripDropDownMenu DropDown{get{return menu;}}
+    static string Caption(int index){return index==0?"自訂":ColorPalette.All[index-1].Name;}
+    public PaletteField(){
+        SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.Selectable,true);
+        BackColor=AppTheme.Field;ForeColor=AppTheme.Text;Size=new Size(220,30);Dock=DockStyle.Fill;TabStop=true;Cursor=Cursors.Hand;AccessibleName="配色模板";AccessibleRole=AccessibleRole.ComboBox;Text="自訂";
+        menu.Renderer=new DarkMenuRenderer();menu.BackColor=AppTheme.Field;menu.ForeColor=AppTheme.Text;menu.ShowImageMargin=false;menu.ShowCheckMargin=false;menu.AutoSize=true;menu.Padding=new Padding(1);
+        for(int i=0;i<=ColorPalette.All.Length;i++){int index=i;var item=new PaletteItem(this,index){Text=Caption(i),AutoSize=false,Margin=Padding.Empty,Padding=Padding.Empty};item.Click+=(s,e)=>{SelectedIndex=index;menu.Close(ToolStripDropDownCloseReason.ItemClicked);Focus();};menu.Items.Add(item);}
+        menu.Closed+=(s,e)=>Invalidate();
+    }
+    internal void OpenMenu(){
+        if(!Enabled||IsDisposed||!Visible)return;if(menu.Visible){menu.Close();return;}Focus();int h=32*DeviceDpi/96;
+        menu.Font=Font;menu.MinimumSize=new Size(Width,0);menu.MaximumSize=new Size(Width,0);foreach(ToolStripItem item in menu.Items){item.Font=Font;item.Size=new Size(Math.Max(100,Width-2),h);}menu.Show(this,new Point(0,Height+2));menu.Items[selected].Select();Invalidate();
+    }
+    protected override void OnMouseDown(MouseEventArgs e){base.OnMouseDown(e);if(e.Button==MouseButtons.Left)OpenMenu();}
+    protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);hover=true;Invalidate();}
+    protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hover=false;Invalidate();}
+    protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}
+    protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);Invalidate();}
+    protected override bool IsInputKey(Keys key){var k=key&Keys.KeyCode;return k==Keys.Up||k==Keys.Down||k==Keys.Home||k==Keys.End||base.IsInputKey(key);}
+    protected override void OnKeyDown(KeyEventArgs e){
+        base.OnKeyDown(e);
+        if(e.KeyCode==Keys.F4||e.KeyCode==Keys.Space||e.KeyCode==Keys.Enter||e.Alt&&e.KeyCode==Keys.Down)OpenMenu();
+        else if(e.KeyCode==Keys.Down)SelectedIndex++;else if(e.KeyCode==Keys.Up)SelectedIndex--;else if(e.KeyCode==Keys.Home)SelectedIndex=0;else if(e.KeyCode==Keys.End)SelectedIndex=ColorPalette.All.Length;else if(e.KeyCode==Keys.Escape&&menu.Visible)menu.Close();else return;
+        e.Handled=true;e.SuppressKeyPress=true;
+    }
+    protected override void OnPaint(PaintEventArgs e){
+        var g=e.Graphics;g.Clear(AppTheme.Field);int arrow=28*DeviceDpi/96;var body=new Rectangle(0,0,Math.Max(1,Width-arrow),Height);DrawEntry(g,body,selected,false,false,Font,DeviceDpi);
+        using(var fill=new SolidBrush(hover||menu.Visible?AppTheme.Selected:AppTheme.Card))g.FillRectangle(fill,body.Right,0,arrow,Height);
+        g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;float x=Width-arrow/2f,y=Height/2f,d=4*DeviceDpi/96f;using(var pen=new Pen(AppTheme.Muted,1.4f))g.DrawLines(pen,new[]{new PointF(x-d,y-2),new PointF(x,y+2),new PointF(x+d,y-2)});
+        using(var border=new Pen(Focused||menu.Visible?AppTheme.Accent:AppTheme.Border))g.DrawRectangle(border,0,0,Width-1,Height-1);
+    }
+    static void DrawEntry(Graphics g,Rectangle bounds,int index,bool hover,bool chosen,Font font,int dpi){
+        using(var fill=new SolidBrush(hover?AppTheme.Selected:AppTheme.Field))g.FillRectangle(fill,bounds);
+        if(chosen)using(var accent=new SolidBrush(AppTheme.Accent))g.FillRectangle(accent,bounds.Left,bounds.Top+5,2,bounds.Height-10);
+        int size=12*dpi/96,gap=4*dpi/96,pad=8*dpi/96;var text=bounds;text.X+=pad;text.Width-=index>0?3*(size+gap)+2*pad:2*pad;
+        TextRenderer.DrawText(g,Caption(index),font,text,AppTheme.Text,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+        if(index>0){var p=ColorPalette.All[index-1];var colors=new[]{p.Trail,p.Ripple,p.Fragment};for(int i=0;i<3;i++){var r=new Rectangle(bounds.Right-pad-(3-i)*(size+gap),bounds.Top+(bounds.Height-size)/2,size,size);using(var fill=new SolidBrush(colors[i]))g.FillRectangle(fill,r);}}
+    }
+    protected override void Dispose(bool disposing){if(disposing)menu.Dispose();base.Dispose(disposing);}
+    sealed class PaletteItem : ToolStripMenuItem {
+        readonly PaletteField field;readonly int index;public PaletteItem(PaletteField field,int index){this.field=field;this.index=index;}
+        protected override void OnPaint(PaintEventArgs e){DrawEntry(e.Graphics,new Rectangle(Point.Empty,Size),index,Selected,index==field.selected,Font,field.DeviceDpi);}
     }
 }
 
 sealed class ControlsWindow : Form {
     readonly CursorHost host;
     readonly ToolTip hints=new ToolTip();
-    public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),Strength=AppTheme.Number(0,300,100),EffectSize=AppTheme.Number(25,300,100);
-    public readonly NumberField TrailFragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100),ClickFragmentSize=AppTheme.Number(25,300,100),ClickOpacity=AppTheme.Number(0,100,100);
-    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailSpread=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,180);
-    public readonly NumberField TrailSpacing=AppTheme.Number(0,300,80),SpacingJitter=AppTheme.Number(0,80,35),TrailGap=AppTheme.Number(0,60,8);
-    public readonly NumberField ClickCount=AppTheme.Number(0,20,4),ClickRadius=AppTheme.Number(4,120,50),ClickSpeed=AppTheme.Number(0,300,100),ClickScatter=AppTheme.Number(0,100,35);
-    public readonly NumberField BirthWhite=AppTheme.Number(0,100,100),ColorFade=AppTheme.Number(20,400,65);
+    public readonly NumberField OpacityValue=AppTheme.Number(0,100,100),EffectSize=AppTheme.Number(25,300,100);
+    public readonly NumberField FragmentSize=AppTheme.Number(25,300,100),RippleSize=AppTheme.Number(25,300,100);
+    public readonly NumberField ParticleSpeed=AppTheme.Number(0,300,100),TrailFade=AppTheme.Number(40,1000,180),TrailSpacing=AppTheme.Number(0,300,100);
+    public readonly NumberField ClickMin=AppTheme.Number(0,20,3),ClickMax=AppTheme.Number(0,20,5);
     public readonly ColorField TrailColor=new ColorField(Color.FromArgb(69,237,255)),RippleColor=new ColorField(Color.FromArgb(69,237,255)),FragmentColor=new ColorField(Color.FromArgb(95,197,255));
     public readonly OnOffSwitch VisibleValue=new OnOffSwitch{Checked=true};
     public readonly PaletteField Palette=new PaletteField();bool synchronizingPalette;
     public readonly CheckBox Trail=AppTheme.Check("按住左鍵時顯示",true),ClickValue=AppTheme.Check("點擊時顯示",true);
-    public readonly Label Status;public bool Updating;
+    public readonly Label Status,SwitchStatus;public bool Updating;
     readonly TableLayoutPanel body;readonly Control[] pages;readonly Button[] tabs;
-    public NumberField[] Numbers{get{return new[]{EffectSize,OpacityValue,TrailFade,TrailSpacing,SpacingJitter,RippleSize,ClickOpacity,ClickCount,ClickRadius,ClickScatter,ClickSpeed,TrailFragmentSize,ClickFragmentSize,ParticleSpeed,TrailGap,TrailSpread,BirthWhite,ColorFade,Strength};}}
+    public NumberField[] Numbers{get{return new[]{EffectSize,OpacityValue,TrailFade,TrailSpacing,RippleSize,ClickMin,ClickMax,FragmentSize,ParticleSpeed};}}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);AppTheme.DarkTitle(Handle);}
     public void HidePanel(){Hide();}
     public void ShowPanel(){WindowState=FormWindowState.Normal;Show();Activate();}
     public void SelectPage(int selected){for(int i=0;i<pages.Length;i++){pages[i].Visible=i==selected;tabs[i].BackColor=i==selected?AppTheme.Selected:AppTheme.Field;tabs[i].FlatAppearance.BorderColor=i==selected?AppTheme.Accent:AppTheme.Border;}}
     public void SyncPalette(){int selected=0;for(int i=0;i<ColorPalette.All.Length;i++){var p=ColorPalette.All[i];if(p.Trail.ToArgb()==TrailColor.Value.ToArgb()&&p.Ripple.ToArgb()==RippleColor.Value.ToArgb()&&p.Fragment.ToArgb()==FragmentColor.Value.ToArgb()){selected=i+1;break;}}synchronizingPalette=true;try{Palette.SelectedIndex=selected;}finally{synchronizingPalette=false;}}
     public ControlsWindow(CursorHost value){
-        host=value;Updating=true;Text="滑鼠光跡";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.FixedSingle;ClientSize=new Size(380,542);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
+        host=value;Updating=true;Text="滑鼠光跡";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.FixedSingle;ClientSize=new Size(380,416);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
         Font=new Font("Microsoft JhengHei UI",9);BackColor=AppTheme.Back;ForeColor=AppTheme.Text;
         body=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Padding=new Padding(14),Margin=Padding.Empty};body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));Controls.Add(body);
-        foreach(int height in new[]{66,44,36,334,34})body.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+        foreach(int height in new[]{62,44,36,208,38})body.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
         var master=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,BackColor=AppTheme.Card,Padding=new Padding(14,8,12,8),Margin=new Padding(0,0,0,12)};master.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));master.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,110));master.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        master.Controls.Add(new Label{Text="滑鼠效果",AutoSize=true,Anchor=AnchorStyles.Left,ForeColor=AppTheme.Text,Font=new Font(Font,FontStyle.Bold),Margin=Padding.Empty},0,0);VisibleValue.Dock=DockStyle.Fill;VisibleValue.BackColor=AppTheme.Card;VisibleValue.Margin=Padding.Empty;master.Controls.Add(VisibleValue,1,0);body.Controls.Add(master,0,0);
+        master.Controls.Add(new Label{Text="滑鼠效果",AutoSize=true,Anchor=AnchorStyles.Left,ForeColor=AppTheme.Text,Font=new Font(Font,FontStyle.Bold),Margin=Padding.Empty},0,0);
+        var switchRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,BackColor=AppTheme.Card,Margin=Padding.Empty};switchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));switchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,48));switchRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        SwitchStatus=new Label{Text="開啟",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,ForeColor=AppTheme.Accent,Cursor=Cursors.Default,Margin=new Padding(0,0,8,0),TabStop=false};switchRow.Controls.Add(SwitchStatus,0,0);VisibleValue.Dock=DockStyle.Fill;VisibleValue.BackColor=AppTheme.Card;VisibleValue.Margin=Padding.Empty;switchRow.Controls.Add(VisibleValue,1,0);master.Controls.Add(switchRow,1,0);body.Controls.Add(master,0,0);
+        VisibleValue.CheckedChanged+=(s,e)=>{SwitchStatus.Text=VisibleValue.Checked?"開啟":"關閉";SwitchStatus.ForeColor=VisibleValue.Checked?AppTheme.Accent:AppTheme.Muted;};
         var paletteRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Padding=new Padding(14,0,14,0),BackColor=AppTheme.Card,Margin=new Padding(0,0,0,8)};paletteRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,94));paletteRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));paletteRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));paletteRow.Controls.Add(new Label{Text="配色模板",AutoSize=true,Anchor=AnchorStyles.Left,Margin=Padding.Empty},0,0);Palette.Anchor=AnchorStyles.Left|AnchorStyles.Right;Palette.Dock=DockStyle.None;Palette.Margin=Padding.Empty;paletteRow.Controls.Add(Palette,1,0);body.Controls.Add(paletteRow,0,1);
-        var tabRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));tabs=new Button[3];var titles=new[]{"拖曳光跡","點擊效果","碎片"};for(int i=0;i<3;i++){int index=i;tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));var tab=AppTheme.Button(titles[i],()=>SelectPage(index));tab.Dock=DockStyle.Fill;tab.Margin=new Padding(i==0?0:3,0,i==2?0:3,4);tabs[i]=tab;tabRow.Controls.Add(tab,i,0);}body.Controls.Add(tabRow,0,2);
-        var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,34);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),34);Row(drag,"不透明度 %",AppTheme.Slider(OpacityValue),34);Row(drag,"衰退時間 ms",AppTheme.Slider(TrailFade),34);var spacing=AppTheme.Slider(TrailSpacing);Row(drag,"生成間距 px",spacing,34);var jitter=AppTheme.Slider(SpacingJitter);Row(drag,"間距浮動 %",jitter,34);
-        Hint(spacing,"累積移動多少像素生成一顆碎片，越大越稀疏；速度越快，每秒生成越多。停止移動不會生成，0 關閉拖曳碎片。" );Hint(jitter,"每次生成門檻在設定間距的 ± 此百分比內隨機變化，避免等距排列。");
-        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,34);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),34);Row(click,"不透明度 %",AppTheme.Slider(ClickOpacity),34);Row(click,"碎片數量 顆",AppTheme.Slider(ClickCount),34);var radius=AppTheme.Slider(ClickRadius);Row(click,"粒子半徑 px",radius,34);var scatter=AppTheme.Slider(ClickScatter);Row(click,"粒子散布 %",scatter,34);var clickSpeed=AppTheme.Slider(ClickSpeed);Row(click,"散開速度 %",clickSpeed,34);
-        Hint(RippleSize,"雙環各自隨機大小與旋轉，快速展開後緩慢延伸並淡出，預設最大半徑約 72 px。");Hint(radius,"點擊三角形在圓環周邊生成的基準半徑，與波紋大小一起縮放。");Hint(scatter,"生成半徑與角度保留隨機；此值調整圓環附近的徑向散布範圍，0% 僅固定半徑。");Hint(clickSpeed,"點擊碎片的移動與淡出倍速，最終散開範圍不變。0% 停止移動，仍會淡出。");
-        var glow=AppTheme.Slider(Strength);const string glowHelp="調整光跡、波紋及碎片周圍的柔光。0% 關閉柔光，本體仍保留；不改變數量、大小或分散距離。";
-        Hint(glow,glowHelp);
-        var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,34);Row(fragments,"拖曳大小 %",AppTheme.Slider(TrailFragmentSize),34);Row(fragments,"點擊大小 %",AppTheme.Slider(ClickFragmentSize),34);Row(fragments,"拖曳速度 %",AppTheme.Slider(ParticleSpeed),34);var gap=AppTheme.Slider(TrailGap);Row(fragments,"離線距離 px",gap,34);Row(fragments,"散開幅度 %",AppTheme.Slider(TrailSpread),34);var flash=AppTheme.Slider(BirthWhite);Row(fragments,"出生白光 %",flash,34);var tintTime=AppTheme.Slider(ColorFade);Row(fragments,"變色時間 ms",tintTime,34);Row(fragments,"周圍光暈 %",glow,34);
-        Hint(gap,"拖曳碎片與光跡的留白距離，每顆帶有小幅隨機變化，並計入碎片大小；散開幅度會一起縮放距離與漂移。");Hint(flash,"新碎片偏白發亮的強度；多數較亮、少數較弱，隨後轉成碎片顏色。0% 直接使用設定顏色。");Hint(tintTime,"出生白光衰變到碎片顏色所需時間；之後在小幅色調範圍內淡出。");
+        var tabRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));tabs=new Button[3];var titles=new[]{"拖曳","點擊","外觀"};for(int i=0;i<3;i++){int index=i;tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));var tab=AppTheme.Button(titles[i],()=>SelectPage(index));tab.Dock=DockStyle.Fill;tab.Margin=new Padding(i==0?0:3,0,i==2?0:3,4);tabs[i]=tab;tabRow.Controls.Add(tab,i,0);}body.Controls.Add(tabRow,0,2);
+        var pageHost=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,8)};
+        var drag=Page();Row(drag,"",AppTheme.Group(Trail),34);Row(drag,"光跡顏色",TrailColor,34);Row(drag,"軌跡粗細 %",AppTheme.Slider(EffectSize),34);Row(drag,"衰退時間 ms",AppTheme.Slider(TrailFade),34);var spacing=AppTheme.Slider(TrailSpacing);Row(drag,"生成間距 px",spacing,34);
+        Hint(spacing,"拖曳累積位移後生成碎片，越大越稀疏；間距自動帶有隨機浮動，0 關閉拖曳碎片。");
+        var click=Page();Row(click,"",AppTheme.Group(ClickValue),34);Row(click,"波紋顏色",RippleColor,34);Row(click,"波紋大小 %",AppTheme.Slider(RippleSize),34);Row(click,"數量下限 顆",AppTheme.Slider(ClickMin),34);Row(click,"數量上限 顆",AppTheme.Slider(ClickMax),34);
+        Hint(RippleSize,"薄環依原材質的 alpha 與時間門檻裁切，各自保留不同方向的弧段。");Hint(ClickMin,"每次點擊在下限與上限之間隨機取整數，預設 3–5 顆。");Hint(ClickMax,"上下限相同時固定數量；兩者為 0 時關閉點擊碎片。");
+        var fragments=Page();Row(fragments,"碎片顏色",FragmentColor,34);Row(fragments,"碎片大小 %",AppTheme.Slider(FragmentSize),34);Row(fragments,"不透明度 %",AppTheme.Slider(OpacityValue),34);Row(fragments,"移動速度 %",AppTheme.Slider(ParticleSpeed),34);
+        Hint(FragmentSize,"點擊與拖曳共用同一大小範圍；每顆碎片各自抽取亮白停留與轉色時間。");Hint(OpacityValue,"同時調整光跡、波紋與碎片。");Hint(ParticleSpeed,"調整粒子動畫速度，最終散開範圍不變；0 停止位移但仍會消散。");
         pages=new Control[]{drag,click,fragments};foreach(var page in new[]{drag,click,fragments}){page.RowCount++;page.RowStyles.Add(new RowStyle(SizeType.Percent,100));pageHost.Controls.Add(page);}body.Controls.Add(pageHost,0,3);
         var footer=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,76));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));footer.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         var reset=AppTheme.Button("重設",()=>host.ResetControls());reset.Dock=DockStyle.Fill;reset.AccessibleName="重設效果";footer.Controls.Add(reset,0,0);Status=new Label{Dock=DockStyle.Fill,ForeColor=AppTheme.Muted,Visible=false,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,Margin=new Padding(8,0,8,0)};footer.Controls.Add(Status,1,0);var hide=AppTheme.Button("收起面板",HidePanel);hide.Dock=DockStyle.Fill;footer.Controls.Add(hide,2,0);body.Controls.Add(footer,0,4);
         foreach(var n in Numbers)n.ValueChanged+=(s,e)=>Changed();
+        ClickMin.ValueChanged+=(s,e)=>NormalizeCount(ClickMin);ClickMax.ValueChanged+=(s,e)=>NormalizeCount(ClickMax);
         foreach(var c in new CheckBox[]{VisibleValue,Trail,ClickValue})c.CheckedChanged+=(s,e)=>Changed();
         foreach(var c in new[]{TrailColor,RippleColor,FragmentColor})c.ColorChanged+=(s,e)=>{if(!Updating)SyncPalette();Changed();};
         Palette.SelectedIndexChanged+=(s,e)=>{if(!synchronizingPalette&&!Updating&&Palette.SelectedIndex>0)host.ApplyPalette(ColorPalette.All[Palette.SelectedIndex-1]);};
         SyncPalette();SelectPage(0);
         FormClosed+=(s,e)=>{hints.Dispose();host.Quit(0);};Updating=false;
     }
+    void NormalizeCount(NumberField edited){if(Updating)return;Updating=true;try{if(ClickMin.Value>ClickMax.Value){if(edited==ClickMin)ClickMax.Value=ClickMin.Value;else ClickMin.Value=ClickMax.Value;}}finally{Updating=false;}Changed();}
     void Changed(){if(!Updating){host.UpdateVisibilityMenu();if(!VisibleValue.Checked)host.Configure();else host.ScheduleConfigure();}}
     void Hint(Control c,string text){hints.SetToolTip(c,text);c.AccessibleDescription=text;foreach(Control child in c.Controls)Hint(child,text);}
     static TableLayoutPanel Page(){var p=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=0,Padding=new Padding(14,10,14,10),BackColor=AppTheme.Card,Margin=Padding.Empty};p.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,94));p.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));return p;}

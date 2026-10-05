@@ -1,0 +1,84 @@
+﻿{
+    "source":  "data.unity3d level0 TrailRenderer path1866; resources.assets material/shader",
+    "shader":  "DSFX/FX_SHADER_Additive_0",
+    "material":  "FX_MAT_TouchFXTrail",
+    "trailLifetimeSeconds":  0.20000000298023224,
+    "minVertexDistance":  0.009999999776482582,
+    "textureMode":  0,
+    "colorKeys":  [
+                      {
+                          "value":  [
+                                        0.020584420538643473,
+                                        [
+                                            0.0,
+                                            0.3905813694000244,
+                                            1.0,
+                                            1.0
+                                        ]
+                                    ],
+                          "Count":  2
+                      },
+                      {
+                          "value":  [
+                                        0.4205844205386435,
+                                        [
+                                            0.0,
+                                            0.09486991167068481,
+                                            0.2823529541492462,
+                                            1.0
+                                        ]
+                                    ],
+                          "Count":  2
+                      },
+                      {
+                          "value":  [
+                                        1.0,
+                                        [
+                                            0.0,
+                                            0.0,
+                                            0.0,
+                                            0.0
+                                        ]
+                                    ],
+                          "Count":  2
+                      }
+                  ],
+    "alphaKeys":  [
+                      {
+                          "value":  [
+                                        0.0,
+                                        1.0
+                                    ],
+                          "Count":  2
+                      },
+                      {
+                          "value":  [
+                                        1.0,
+                                        1.0
+                                    ],
+                          "Count":  2
+                      }
+                  ],
+    "materialColorHDR":  [
+                             23.968629837,
+                             23.968629837,
+                             23.968629837,
+                             1
+                         ],
+    "blend":  "One,One additive",
+    "disassemblySha256":  "26c0a5ebc4cb794c8a24aba51c04bb1ea7a9d885afef632ec06a4e013cba8da0",
+    "fragmentFormula":  "rgb=texture.rgb * vertex.rgb * material.rgb * vertex.a * texture.a; output.a=1",
+    "texture":  "FX_TEX_Trail_03 256x256 alpha=(255,255), grayscale RGB",
+    "interpretation":  "Independent gradient alpha keys are 1; color-key alpha is not substituted for those keys. With One/One blending, RGB approaching black removes emitted light.",
+    "port":  {
+                 "lightCurve":  "Dominant source blue channel: 1 at 1349/65535; .28235295 at 27563/65535; 0 at 1.",
+                 "timeMapping":  "Normalized point age, using the configured 180ms lifetime. Source runtime age/length mapping has not been independently verified.",
+                 "SDR":  "f(x)=1.6*x/(.6+x), applied to each selected palette RGB channel times light. Alpha=max(mapped RGB), then unpremultiplied RGB=RGB/alpha.",
+                 "gradientCache":  "33 stops, one brush recreated on actual palette change; endpoint ages mapped onto its axis per segment.",
+                 "nativeBlend":  "MAX avoids overlapping sample highlights; source Unity material is One/One additive."
+             },
+    "limitations":  [
+                        "Runtime color/material overrides, TrailRenderer UV axis mapping and exact pixel scale remain unverified.",
+                        "This SDR desktop approximation does not recreate the Unity HDR/Bloom render pipeline."
+                    ]
+}

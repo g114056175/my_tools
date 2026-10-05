@@ -122,6 +122,38 @@
       ],
       "numAlpha": 3,
       "numColor": 2
+    },
+    "dissolveEvidence": {
+      "shader": "Shader Graphs/FX_SHADER_Dissolve_GachaGauge_P",
+      "compiledFormulaRecovered": true,
+      "formula": [
+        "maskA=sample(t1).a",
+        "mainA=sample(t0).a",
+        "a=maskA*mainA*particleColor.a",
+        "rgb=sample(t0).rgb*materialColor.rgb*particleColor.rgb",
+        "discard if a-customThreshold<0"
+      ],
+      "customThresholdKeys": [
+        {
+          "t": 0,
+          "v": 1,
+          "in": 0,
+          "out": 0.2666659
+        },
+        {
+          "t": 0.2,
+          "v": 0,
+          "in": 0,
+          "out": 0.1616586
+        },
+        {
+          "t": 1,
+          "v": 1,
+          "in": 0.2773564,
+          "out": 0.3333333
+        }
+      ],
+      "source": "resources.assets, Shader path 136, D3D11 platform 4 DXBC fragment program"
     }
   },
   "clickFragments": {
@@ -259,19 +291,55 @@
     ]
   },
   "portCalibration": {
-    "waveNominalMaxRadiusPixels": 72,
-    "clickFragmentRadiusPixels": 50,
+    "waveNominalMaxRadiusPixels": 54,
+    "clickFragmentRadiusPixels": 37.5,
     "clickRadialScatterPercent": 35,
     "clickSpeedRangePixelsPerSecond": [
-      22,
-      46
+      16.5,
+      34.5
     ],
-    "colorTransitionMilliseconds": 65,
-    "trailSpacingPixels": 80
+    "trailSpacingPixels": 100,
+    "clickCountRange": [
+      3,
+      5
+    ],
+    "strokeWidthCalibration": 0.55,
+    "SDRMaterialGain": 1.8,
+    "sharedClickDragFragmentSize": true,
+    "ui100PercentBaseline": {
+      "trailWidthRelativeToPrevious": 2,
+      "fragmentSizeRelativeToPrevious": 2,
+      "rippleSizeRelativeToPrevious": 0.75
+    },
+    "fragmentWhite": {
+      "highWhiteBirthProbability": 0.92,
+      "highWhiteMixRange": [
+        0.96,
+        1
+      ],
+      "remainingWhiteMixRange": [
+        0.4,
+        0.75
+      ],
+      "holdLifetimeFractionRange": [
+        0.2,
+        0.6
+      ],
+      "transitionLifetimeFractionRange": [
+        0.12,
+        0.3
+      ],
+      "interpolation": "whiteMix * (1 - smoothstep(0, 1, clamp((normalizedAge - hold) / transition)))",
+      "sampling": "Each fragment samples once at birth, independent of position and other fragments.",
+      "provenance": "Desktop appearance calibration; these intervals are not recovered official constants."
+    },
+    "softEffectsEnabled": false,
+    "softEffectAssetsEmbedded": false
   },
   "limits": [
-    "Runtime pixel scaling has not been recovered. Pixel ranges are calibrated to the supplied screenshots.",
-    "Unity HDR/bloom and the short flash shader are not fully reproduced.",
-    "No extracted images, meshes, shaders or Unity bundles are distributed."
-  ]
+    "Runtime pixel scaling has not been recovered. Stroke width and pixel ranges are calibrated to the supplied screenshots.",
+    "The core alpha-clip formula and custom threshold curve are recovered. SDR light and randomized fragment flash are desktop calibrations; no HDR bloom is rendered.",
+    "Alpha profile is interpolated from numeric texture samples; no extracted images, meshes, DXBC binaries or Unity bundles are distributed."
+  ],
+  "trailEvidence": "trail-reference.json"
 }

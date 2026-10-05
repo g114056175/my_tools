@@ -1,0 +1,39 @@
+{
+  "shader": "Shader Graphs/FX_SHADER_Dissolve_GachaGauge_P",
+  "source": "resources.assets Shader path 136",
+  "platform": 4,
+  "dxbc": "platform4-dxbc-1.bin",
+  "disassembly": "platform4-disassembly-1.txt",
+  "pixel_formula": [
+    "maskA=sample(t1).a",
+    "mainA=sample(t0).a",
+    "a=maskA*mainA*particleColor.a",
+    "rgb=sample(t0).rgb*materialColor.rgb*particleColor.rgb",
+    "discard if a-customThreshold<0"
+  ],
+  "customThreshold": "pixel shader input TEXCOORD0.z (v1.z), passed unchanged by vertex shader from MeshTri custom stream",
+  "meshtri_custom": "CustomData vector0_0 curve keys t=0,v=1,in=0,out=0.2666659; t=.2,v=0,in=0,out=0.1616586; t=1,v=1,in=.2773564,out=.3333333",
+  "mask_material": "Texture2D_AD649FB is null in FX_MAT_Touch_Tri3; MainTex Texture2D_59799BE -> FX_TEX_Grad_Ring3",
+  "caveat": "No custom mask texture bound; threshold still demonstrably exists via TEXCOORD0.z and compiled clip instruction",
+  "dxbcSha256": "48e9ceaa5d1b2f03b021a35c174d8988a1708a733bac7bad23cacde351ed3ef0",
+  "customThresholdKeys": [
+    {
+      "t": 0,
+      "v": 1,
+      "in": 0,
+      "out": 0.2666659
+    },
+    {
+      "t": 0.2,
+      "v": 0,
+      "in": 0,
+      "out": 0.1616586
+    },
+    {
+      "t": 1,
+      "v": 1,
+      "in": 0.2773564,
+      "out": 0.3333333
+    }
+  ]
+}

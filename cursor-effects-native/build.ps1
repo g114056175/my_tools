@@ -15,13 +15,13 @@ $out=Join-Path $root $(if($Test){'.build/test'}else{'dist'})
 $exeName=if($Test){'BlueArchiveCursor.Native.exe'}else{'BlueArchiveCursor.exe'}
 New-Item -ItemType Directory -Force -Path $out,(Join-Path $root '.build/native'),(Join-Path $root 'test-results') | Out-Null
 $module=Join-Path $root '.build/native/CursorRenderer.dll'
-& $cpp '-std=c++17' '-O2' '-flto' '-shared' '-static' '-nostdlib++' '-fno-exceptions' '-fno-rtti' '-ffunction-sections' '-fdata-sections' '-Wl,--gc-sections,--no-insert-timestamp' '-s' (Join-Path $root 'src/Renderer.cpp') '-o' $module '-ld2d1' '-ld3d11' '-ldxgi' '-ldcomp' '-lwindowscodecs' '-lole32' '-luuid'
+& $cpp '-std=c++17' '-O2' '-flto' '-shared' '-static' '-nostdlib++' '-fno-exceptions' '-fno-rtti' '-ffunction-sections' '-fdata-sections' '-Wl,--gc-sections,--no-insert-timestamp' '-s' (Join-Path $root 'src/Renderer.cpp') '-o' $module '-ld2d1' '-ld3d11' '-ldxgi' '-ldcomp' '-lole32' '-luuid'
 if($LASTEXITCODE -ne 0){throw 'Native renderer build failed.'}
 $compressed=Join-Path $root '.build/native/Renderer.gz'
 $target=[IO.File]::Create($compressed)
 try{$gzip=[IO.Compression.GZipStream]::new($target,[IO.Compression.CompressionLevel]::Optimal,$true);try{$input=[IO.File]::OpenRead($module);try{$input.CopyTo($gzip)}finally{$input.Dispose()}}finally{$gzip.Dispose()}}finally{$target.Dispose()}
 $arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+','/codepage:65001','/utf8output',"/out:$out/$exeName","/win32icon:$root/assets/cursor.ico",'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll')
-$arguments+="/resource:$compressed,Cursor.Renderer.gz";$arguments+="/resource:$root/assets/line-glow.png,Cursor.Line.png";$arguments+="/resource:$root/assets/triangle-glow.png,Cursor.Triangle.png"
+$arguments+="/resource:$compressed,Cursor.Renderer.gz"
 $arguments+=@('AssemblyInfo.cs','Native.cs','Controls.cs','Effects.cs','Renderer.cs','EmbeddedRuntime.cs','FrameClock.cs','Program.cs') | ForEach-Object {Join-Path $root "src/$_"}
 if($Test){$arguments+='/define:SELF_TEST';$arguments+=Join-Path $root 'tests/NativeTests.cs';$arguments+=Join-Path $root 'tests/Performance.cs'}
 & $compiler @arguments

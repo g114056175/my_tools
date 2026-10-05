@@ -4,11 +4,11 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 [StructLayout(LayoutKind.Sequential)] struct DrawCommand {
-    public int Kind;public float X,Y,X2,Y2,Width,Angle,Alpha;
-    public DrawCommand(int kind,double x,double y,double x2,double y2,double width,double angle,double alpha){Kind=kind;X=(float)x;Y=(float)y;X2=(float)x2;Y2=(float)y2;Width=(float)width;Angle=(float)(angle*180/Math.PI);Alpha=(float)alpha;}
+    public int Kind;public float X,Y,X2,Y2,Width,Angle,Alpha,StartAge,EndAge;
+    public DrawCommand(int kind,double x,double y,double x2,double y2,double width,double angle,double alpha,double startAge=0,double endAge=0){Kind=kind;X=(float)x;Y=(float)y;X2=(float)x2;Y2=(float)y2;Width=(float)width;Angle=(float)(angle*180/Math.PI);Alpha=(float)alpha;StartAge=(float)startAge;EndAge=(float)endAge;}
 }
 sealed class CursorEffects {
-    internal sealed class Item {public double X,Y,Vx,Vy,Angle,Spin,Age,Life,Size,Light=1,Tone=1,Flash;public bool Start,Burst;}
+    internal sealed class Item {public double X,Y,Vx,Vy,Angle,Spin,Age,Life,Size,Light=1,Tone=1,Flash,WhiteHold,WhiteFade;public bool Start,Burst;}
     internal struct TrailVertex {public double X,Y,Fade,Width;public bool Start;}
     internal const int MaxTrailPoints=128;
     internal const int MaxTrailVertices=MaxTrailPoints*4;
@@ -16,17 +16,17 @@ sealed class CursorEffects {
     internal readonly List<TrailVertex> SmoothTrail=new List<TrailVertex>(MaxTrailVertices);
     public readonly List<DrawCommand> Commands=new List<DrawCommand>(2048);
     readonly Func<double> random;Item last;double trailRemaining;
-    public bool Trail=true,Click=true,Dirty;public double Size=1,Strength=1,Density=.5,Opacity=1;public int Fps=60;
-    public double TrailWidth=.8,RippleSize=1,TrailFragmentSize=1,ClickFragmentSize=1,TrailOpacity=1,ClickOpacity=1;
-    double particleSpeed=1,clickSpeed=1,trailSpread=1,trailLifetime=.18,trailSpacing=80,spacingJitter=.35,trailGap=8,clickRadius=50,clickScatter=.35,whiteStrength=1,colorFade=.065;int clickCount=4;
+    public bool Trail=true,Click=true,Dirty;public double Size=1,Density=.5,Opacity=1;public int Fps=60;
+    public double TrailWidth=1.6,RippleSize=.75,TrailFragmentSize=2,ClickFragmentSize=2,TrailOpacity=1,ClickOpacity=1;
+    double particleSpeed=1,clickSpeed=1,trailSpread=1,trailLifetime=.18,trailSpacing=100,spacingJitter=.35,trailGap=8,clickRadius=50,clickScatter=.35;int clickCount=4,clickCountJitter=1;
     public Rectangle Viewport=System.Windows.Forms.SystemInformation.VirtualScreen;
     public CursorEffects(Func<double> value=null){var rng=new Random();random=value??rng.NextDouble;}
     public int Alive {get{return Points.Count+Particles.Count+Rings.Count;}}
-    public void Configure(bool trail,bool click,double size,double strength,double density,double opacity,int fps){
-        double old=Size;Trail=trail;Click=click;Size=Clamp(size,.25,3);Strength=Clamp(strength,0,3);Density=.5*Clamp(density,0,3);Opacity=Clamp(opacity,0,1);Fps=Math.Max(15,Math.Min(360,fps));foreach(var p in Particles)p.Size*=Size/old;Dirty=true;
+    public void Configure(bool trail,bool click,double size,double density,double opacity,int fps){
+        double old=Size;Trail=trail;Click=click;Size=Clamp(size,.25,3);Density=.5*Clamp(density,0,3);Opacity=Clamp(opacity,0,1);Fps=Math.Max(15,Math.Min(360,fps));foreach(var p in Particles)p.Size*=Size/old;Dirty=true;
     }
     public void Customize(double width,double ripple,double trailFragment,double clickFragment,double trailOpacity,double clickOpacity){
-        double oldTrail=TrailFragmentSize,oldClick=ClickFragmentSize;TrailWidth=.8*Clamp(width,.25,3);RippleSize=Clamp(ripple,.25,3);TrailFragmentSize=Clamp(trailFragment,.25,3);ClickFragmentSize=Clamp(clickFragment,.25,3);TrailOpacity=Clamp(trailOpacity,0,1);ClickOpacity=Clamp(clickOpacity,0,1);
+        double oldTrail=TrailFragmentSize,oldClick=ClickFragmentSize;TrailWidth=1.6*Clamp(width,.25,3);RippleSize=.75*Clamp(ripple,.25,3);TrailFragmentSize=2*Clamp(trailFragment,.25,3);ClickFragmentSize=2*Clamp(clickFragment,.25,3);TrailOpacity=Clamp(trailOpacity,0,1);ClickOpacity=Clamp(clickOpacity,0,1);
         foreach(var p in Particles)p.Size*=p.Burst?ClickFragmentSize/oldClick:TrailFragmentSize/oldTrail;Dirty=true;
     }
     public void SetParticleSpeed(double speed){particleSpeed=Clamp(speed,0,3);Dirty=true;}
@@ -34,9 +34,11 @@ sealed class CursorEffects {
     public void SetTrailSpread(double spread){trailSpread=Clamp(spread,0,3);Dirty=true;}
     public void SetTrailEmission(double spacing,double jitter){double next=Clamp(spacing,0,300);trailRemaining=trailSpacing>0?trailRemaining*next/trailSpacing:0;trailSpacing=next;spacingJitter=Clamp(jitter,0,.8);Dirty=true;}
     public void SetTrailGap(double gap){trailGap=Clamp(gap,0,60);Dirty=true;}
-    public void SetClickParticles(int count,double radius){clickCount=Math.Max(0,Math.Min(20,count));clickRadius=Clamp(radius,4,120);Dirty=true;}
+    int clickLow=3,clickHigh=5;
+    public void SetClickParticles(int count,double radius){clickCount=Math.Max(0,Math.Min(20,count));clickRadius=Clamp(radius,4,120);SetClickCountJitter(clickCountJitter);}
+    public void SetClickCountJitter(int count){clickCountJitter=Math.Max(0,Math.Min(10,count));SetClickCountRange(clickCount==0?0:clickCount-clickCountJitter,clickCount==0?0:clickCount+clickCountJitter);}
+    public void SetClickCountRange(int low,int high){low=Math.Max(0,Math.Min(20,low));high=Math.Max(0,Math.Min(20,high));clickLow=Math.Min(low,high);clickHigh=Math.Max(low,high);Dirty=true;}
     public void SetClickScatter(double scatter){clickScatter=Clamp(scatter,0,1);Dirty=true;}
-    public void SetParticleFlash(double strength,double fade){whiteStrength=Clamp(strength,0,1);colorFade=Clamp(fade,.02,.4);Dirty=true;}
     public void SetTrailLifetime(double seconds){
         trailLifetime=Clamp(seconds,.04,1);
         foreach(var p in Points){p.Age=p.Age/p.Life*trailLifetime;p.Life=trailLifetime;}Dirty=true;
@@ -102,7 +104,9 @@ sealed class CursorEffects {
         p.Vx=tx*drift+nx*outward;p.Vy=ty*drift+ny*outward;
     }
     void ClickParticles(double x,double y){
-        int count=(int)Math.Floor(clickCount*Density*2+.5);double scale=Size*RippleSize;
+        if(clickHigh==0||Density==0)return;
+        int low=clickLow,high=clickHigh;
+        int count=(int)Math.Floor((low+Math.Min(high-low,(int)(random()*(high-low+1))))*Density*2+.5);double scale=Size*RippleSize;
         for(int i=0;i<count;i++){
             // Independent angles preserve natural clusters/empty sectors.
             // Randomize within an annulus, never equally spaced spokes.
@@ -114,8 +118,8 @@ sealed class CursorEffects {
         LimitParticles();
     }
     Item Particle(double x,double y,bool burst){
-        double flash=random()<.75?.85+.15*random():.1+.4*random();
-        var p=new Item{X=x,Y=y,Angle=random()<.5?0:Math.PI,Spin=0,Life=burst?.6+.1*random():.2+.2*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Light=.9+.1*random(),Tone=.8+.2*random(),Flash=flash,Burst=burst};Particles.Add(p);return p;
+        double flash=random()<.92?.96+.04*random():.4+.35*random();
+        var p=new Item{X=x,Y=y,Angle=random()<.5?0:Math.PI,Spin=0,Life=burst?.6+.1*random():.2+.2*random(),Size=(3+random()*4)*Size*(burst?ClickFragmentSize:TrailFragmentSize),Light=.9+.1*random(),Tone=.8+.2*random(),Flash=flash,WhiteHold=.2+.4*random(),WhiteFade=.12+.18*random(),Burst=burst};Particles.Add(p);return p;
     }
     void LimitParticles(){if(Particles.Count>192)Particles.RemoveRange(0,Particles.Count-192);}
     public void Update(double dt){
@@ -166,37 +170,35 @@ sealed class CursorEffects {
     static double Hermite(double t,double a,double b,double va,double vb,double ma,double mb){double u=Clamp((t-a)/(b-a),0,1),u2=u*u,u3=u2*u;return (2*u3-3*u2+1)*va+(u3-2*u2+u)*(b-a)*ma+(-2*u3+3*u2)*vb+(u3-u2)*(b-a)*mb;}
     internal static double WaveGrowth(double t){return t<.00720978?.42050898:t<.21392822?Hermite(t,.00720978,.21392822,.42050898,.71597731,2.40047336,.91157448):Hermite(t,.21392822,1,.71597731,1,.91157448,0);}
     internal static double FragmentGrowth(double t){return t<.15445095?Hermite(t,0,.15445095,0,1,0,0):Math.Max(0,Hermite(t,.15445095,1,1,0,0,-2.16215014));}
+    internal static double WaveThreshold(double t){return Clamp(t<.2?Hermite(t,0,.2,1,0,.2666659,0):Hermite(t,.2,1,0,1,.1616586,.2773564),0,1);}
     static readonly double[] alphaTimes={0,18890.0/65535,23901.0/65535,30840.0/65535,37586.0/65535,43754.0/65535,49537.0/65535,55898.0/65535,1};
     static readonly double[] alphaValues={1,1,0,1,0,1,0,1,1};
     static double FragmentAlpha(double t){for(int i=1;i<alphaTimes.Length;i++)if(t<=alphaTimes[i])return alphaValues[i-1]+(alphaValues[i]-alphaValues[i-1])*(t-alphaTimes[i-1])/(alphaTimes[i]-alphaTimes[i-1]);return 0;}
     double ParticleAlpha(Item p){return Opacity*(p.Burst?ClickOpacity:TrailOpacity)*p.Light*FragmentAlpha(p.Age/p.Life);}
-    double ParticleWhite(Item p){double hold=.18236*p.Life,duration=colorFade*p.Life/.65,t=Clamp(1-(p.Age-hold)/duration,0,1);return whiteStrength*p.Flash*t;}
+    double ParticleWhite(Item p){double t=Clamp((p.Age/p.Life-p.WhiteHold)/p.WhiteFade,0,1);return p.Flash*(1-t*t*(3-2*t));}
     double ParticleSize(Item p){return p.Size*FragmentGrowth(p.Age/p.Life);}
     double RingRadius(Item r){return 72*r.Size*WaveGrowth(r.Age/r.Life)*Size*RippleSize;}
-    double RingAlpha(Item r){return Opacity*ClickOpacity*Clamp((1-r.Age/r.Life)/(1-.108827),0,1);}
+    double RingLifeAlpha(Item r){return Clamp((1-r.Age/r.Life)/(1-.108827),0,1);}
+    double RingAlpha(Item r){return Opacity*ClickOpacity*RingLifeAlpha(r);}
+    double RingClip(Item r){return WaveThreshold(r.Age/r.Life)/Math.Max(.000001,RingLifeAlpha(r));}
     double RingWhite(Item r){return Clamp((.5-r.Age/r.Life)/(.5-.111772),0,1);}
-    void TrailHalo(double intensity){
-        for(int i=1;i<SmoothTrail.Count;i++){var a=SmoothTrail[i-1];var b=SmoothTrail[i];double dx=b.X-a.X,dy=b.Y-a.Y,len=Math.Sqrt(dx*dx+dy*dy);if(b.Start||len==0)continue;Add(3,a.X,a.Y,len,Size*TrailWidth,Math.Atan2(dy,dx),Opacity*TrailOpacity*.9*b.Fade*intensity);}
-    }
-    void Halo(double intensity){
-        foreach(var r in Rings)Add(7,r.X,r.Y,RingRadius(r),0,r.Angle,RingAlpha(r)*intensity,RingWhite(r));
-        foreach(var p in Particles)Add(5,p.X,p.Y,ParticleWhite(p),ParticleSize(p)/5,p.Angle,ParticleAlpha(p)*intensity,p.Tone);
-    }
+    // TrailRenderer path1866 RGB gradient: bright blue -> dim blue -> black.
+    // Its independent alpha keys remain 1. Use the dominant blue channel as
+    // a hue-independent light curve for all palettes, then map HDR onto SDR.
+    internal static double TrailLight(double t){t=Clamp(t,0,1);const double a=1349.0/65535,b=27563.0/65535,m=.28235295;return t<a?1:t<b?1+(m-1)*(t-a)/(b-a):m*(1-t)/(1-b);}
     public bool Draw(double dt){
         Update(dt);if(Alive==0&&!Dirty)return false;Commands.Clear();BuildSmoothTrail();
         // Render the trail before independent rings/fragments. Trail coverage
         // uses MAX blending, avoiding brighter sample joints and loop crossings.
-        if(Strength>0)TrailHalo(1-Math.Pow(.45,Strength));
-        for(int i=1;i<SmoothTrail.Count;i++){var a=SmoothTrail[i-1];var b=SmoothTrail[i];if(b.Start||a.X==b.X&&a.Y==b.Y)continue;Add(0,a.X,a.Y,b.X,b.Width,0,Opacity*TrailOpacity*.9*b.Fade,b.Y);}
-        for(double remaining=Strength*.55;remaining>0;remaining-=1)Halo(Math.Min(1,remaining));
-        foreach(var r in Rings)Add(6,r.X,r.Y,RingRadius(r),0,r.Angle,RingAlpha(r),RingWhite(r));
+        for(int i=1;i<SmoothTrail.Count;i++){var a=SmoothTrail[i-1];var b=SmoothTrail[i];if(b.Start||a.X==b.X&&a.Y==b.Y)continue;Commands.Add(new DrawCommand(0,a.X,a.Y,b.X,b.Y,b.Width,0,Opacity*TrailOpacity,1-a.Fade,1-b.Fade));}
+        foreach(var r in Rings)Add(6,r.X,r.Y,RingRadius(r),RingClip(r),r.Angle,RingAlpha(r),RingWhite(r));
         foreach(var p in Particles)Add(2,p.X,p.Y,ParticleWhite(p),ParticleSize(p),p.Angle,ParticleAlpha(p),p.Tone);
         Dirty=Alive>0;return true;
     }
     public Rectangle Surface(){
         double left=double.PositiveInfinity,top=left,right=double.NegativeInfinity,bottom=right;
         Action<Item,double> extend=(p,pad)=>{left=Math.Min(left,p.X-pad);top=Math.Min(top,p.Y-pad);right=Math.Max(right,p.X+pad);bottom=Math.Max(bottom,p.Y+pad);};
-        foreach(var p in Points)extend(p,34*Size*TrailWidth+2);foreach(var p in Particles)extend(p,10*p.Size+2);foreach(var r in Rings)extend(r,RingRadius(r)+24*Size*RippleSize+2);
+        foreach(var p in Points)extend(p,2*Size*TrailWidth+2);foreach(var p in Particles)extend(p,p.Size+2);foreach(var r in Rings)extend(r,RingRadius(r)*1.04+2);
         if(double.IsPositiveInfinity(left))return new Rectangle(0,0,1,1);
         left=Math.Max(0,Math.Floor(left/64)*64);top=Math.Max(0,Math.Floor(top/64)*64);right=Math.Min(Viewport.Width,right);bottom=Math.Min(Viewport.Height,bottom);
         if(right<=left||bottom<=top)return new Rectangle(0,0,1,1);

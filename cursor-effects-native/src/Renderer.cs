@@ -5,7 +5,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
 sealed class D2DRenderer : IDisposable {
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CreateFn(IntPtr hwnd,[In]byte[] line,int lineSize,[In]byte[] triangle,int triangleSize,out IntPtr value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CreateFn(IntPtr hwnd,out IntPtr value);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int RenderFn(IntPtr value,int x,int y,int w,int h,[In]DrawCommand[] list,int count);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CaptureFn(IntPtr value,int w,int h,[In]DrawCommand[] list,int count,[Out]byte[] pixels);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int HardwareFn(IntPtr value);
@@ -18,7 +18,7 @@ sealed class D2DRenderer : IDisposable {
     static readonly DestroyFn CursorDestroy=EmbeddedRuntime.Function<DestroyFn>("CursorDestroy");
     static readonly AppearanceFn CursorAppearance=EmbeddedRuntime.Function<AppearanceFn>("CursorAppearance");
     IntPtr handle;readonly DrawCommand[] commands=new DrawCommand[2048];public bool Hardware{get{return CursorHardware(handle)!=0;}}public Rectangle Surface=new Rectangle(0,0,1,1);
-    public D2DRenderer(IntPtr hwnd){var line=EmbeddedRuntime.Read("Cursor.Line.png");var triangle=EmbeddedRuntime.Read("Cursor.Triangle.png");Marshal.ThrowExceptionForHR(CursorCreate(hwnd,line,line.Length,triangle,triangle.Length,out handle));Clear();}
+    public D2DRenderer(IntPtr hwnd){Marshal.ThrowExceptionForHR(CursorCreate(hwnd,out handle));Clear();}
     public void Appearance(Color trail,Color ripple,Color particle){Marshal.ThrowExceptionForHR(CursorAppearance(handle,unchecked((uint)trail.ToArgb()),unchecked((uint)ripple.ToArgb()),unchecked((uint)particle.ToArgb())));}
     public void Draw(CursorEffects effects){effects.Commands.CopyTo(commands);Surface=effects.Surface();Marshal.ThrowExceptionForHR(CursorRender(handle,Surface.X,Surface.Y,Surface.Width,Surface.Height,commands,effects.Commands.Count));}
     public void Clear(){if(handle!=IntPtr.Zero){Surface=new Rectangle(0,0,1,1);Marshal.ThrowExceptionForHR(CursorRender(handle,0,0,1,1,commands,0));}}

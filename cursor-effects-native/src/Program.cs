@@ -81,19 +81,14 @@ sealed partial class CursorHost : ApplicationContext {
         try{
             var bounds=SystemInformation.VirtualScreen;
             if(overlay.Bounds!=bounds){StopAnimation(true);overlay.Bounds=bounds;effects.Viewport=bounds;hasPoint=false;}
-            effects.Configure(controls.Trail.Checked,controls.ClickValue.Checked,1,(double)controls.Strength.Value/100,1,1,cursorFps);
-            effects.Customize((double)controls.EffectSize.Value/100,(double)controls.RippleSize.Value/100,(double)controls.TrailFragmentSize.Value/100,(double)controls.ClickFragmentSize.Value/100,(double)controls.OpacityValue.Value/100,(double)controls.ClickOpacity.Value/100);
-            effects.SetParticleSpeed((double)controls.ParticleSpeed.Value/100);
-            effects.SetClickSpeed((double)controls.ClickSpeed.Value/100);
-            effects.SetTrailSpread((double)controls.TrailSpread.Value/100);
-            effects.SetTrailLifetime((double)controls.TrailFade.Value/1000);
-            effects.SetTrailEmission((double)controls.TrailSpacing.Value,(double)controls.SpacingJitter.Value/100);
-            effects.SetTrailGap((double)controls.TrailGap.Value);
-            effects.SetClickParticles((int)controls.ClickCount.Value,(double)controls.ClickRadius.Value);
-            effects.SetClickScatter((double)controls.ClickScatter.Value/100);
-            effects.SetParticleFlash((double)controls.BirthWhite.Value/100,(double)controls.ColorFade.Value/1000);
+            effects.Configure(controls.Trail.Checked,controls.ClickValue.Checked,1,1,(double)controls.OpacityValue.Value/100,cursorFps);
+            effects.Customize((double)controls.EffectSize.Value/100,(double)controls.RippleSize.Value/100,(double)controls.FragmentSize.Value/100,(double)controls.FragmentSize.Value/100,1,1);
+            effects.SetParticleSpeed((double)controls.ParticleSpeed.Value/100);effects.SetClickSpeed((double)controls.ParticleSpeed.Value/100);
+            effects.SetTrailSpread(1);effects.SetTrailLifetime((double)controls.TrailFade.Value/1000);
+            effects.SetTrailEmission((double)controls.TrailSpacing.Value,.35);effects.SetTrailGap(8);
+            effects.SetClickParticles(4,50);effects.SetClickScatter(.35);effects.SetClickCountRange((int)controls.ClickMin.Value,(int)controls.ClickMax.Value);
             renderer.Appearance(controls.TrailColor.Value,controls.RippleColor.Value,controls.FragmentColor.Value);
-            bool visible=controls.VisibleValue.Checked&&(controls.Trail.Checked&&controls.OpacityValue.Value>0||controls.ClickValue.Checked&&controls.ClickOpacity.Value>0);blockedAbove=IntPtr.Zero;
+            bool visible=controls.VisibleValue.Checked&&controls.OpacityValue.Value>0&&(controls.Trail.Checked||controls.ClickValue.Checked);blockedAbove=IntPtr.Zero;
             bool wasTop=(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0;
             if(overlay.Visible!=visible||visible&&!wasTop)overlay.Display(visible,true);
             if(visible){inputTimer.Start();if(effects.Alive>0)Wake();else StopAnimation(true);}else{inputTimer.Stop();mouse=false;hasPoint=false;StopAnimation(true);}
@@ -142,44 +137,35 @@ sealed partial class CursorHost : ApplicationContext {
     string ControlsPath{get{return Path.Combine(profile,"settings.json");}}
     void RestoreControls(bool force=false){
         if(Test&&!force||!File.Exists(ControlsPath))return;controls.Updating=true;
-        try{var data=Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(ControlsPath));object value;
-            Action<string,NumberField> number=(key,input)=>{if(data.TryGetValue(key,out value))input.Value=Convert.ToDecimal(value);};Action<string,CheckBox> check=(key,input)=>{if(data.TryGetValue(key,out value)&&value is bool)input.Checked=(bool)value;};
-            // Migrate old global size/opacity to both independent effect groups.
-            foreach(var n in new[]{controls.EffectSize,controls.RippleSize,controls.TrailFragmentSize,controls.ClickFragmentSize})number("size",n);
-            foreach(var n in new[]{controls.OpacityValue,controls.ClickOpacity})number("opacity",n);
-            number("trailWidth",controls.EffectSize);number("rippleSize",controls.RippleSize);number("trailFragmentSize",controls.TrailFragmentSize);number("clickFragmentSize",controls.ClickFragmentSize);number("trailOpacity",controls.OpacityValue);number("clickOpacity",controls.ClickOpacity);
-            ResetParticleControls();
-            if(data.TryGetValue("particles",out value)){
-                double density=Math.Max(0,Math.Min(300,Convert.ToDouble(value)))/100;
-                controls.TrailSpacing.Value=density>0?(decimal)(80/density):0;
-                controls.ClickCount.Value=(decimal)Math.Round(4*density);
-            }
-            number("particleSpeed",controls.ParticleSpeed);number("particleSpeed",controls.ClickSpeed);
-            number("trailSpacing",controls.TrailSpacing);number("spacingJitter",controls.SpacingJitter);number("trailGap",controls.TrailGap);number("clickCount",controls.ClickCount);number("clickRadius",controls.ClickRadius);number("clickScatter",controls.ClickScatter);number("clickSpeed",controls.ClickSpeed);number("birthWhite",controls.BirthWhite);number("colorFadeMs",controls.ColorFade);
-            controls.TrailSpread.Value=100;number("trailSpread",controls.TrailSpread);number("glow",controls.Strength);check("trail",controls.Trail);check("click",controls.ClickValue);
-            controls.TrailFade.Value=180;number("trailFadeMs",controls.TrailFade);
+        try{var data=Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(ControlsPath));object value;ResetFields();
+            Action<string,NumberField> number=(key,input)=>{if(data.TryGetValue(key,out value))input.Value=Convert.ToDecimal(value);};
+            Action<string,CheckBox> check=(key,input)=>{if(data.TryGetValue(key,out value)&&value is bool)input.Checked=(bool)value;};
+            number("size",controls.EffectSize);number("size",controls.RippleSize);number("size",controls.FragmentSize);
+            number("trailWidth",controls.EffectSize);number("rippleSize",controls.RippleSize);
+            number("clickFragmentSize",controls.FragmentSize);number("trailFragmentSize",controls.FragmentSize);number("fragmentSize",controls.FragmentSize);
+            number("trailOpacity",controls.OpacityValue);number("opacity",controls.OpacityValue);
+            number("particleSpeed",controls.ParticleSpeed);number("trailFadeMs",controls.TrailFade);
+            if(data.TryGetValue("particles",out value)){double density=Math.Max(0,Math.Min(300,Convert.ToDouble(value)))/100;controls.TrailSpacing.Value=density>0?(decimal)(80/density):0;SetLegacyCount((int)Math.Round(4*density),1);}
+            if(data.TryGetValue("clickCount",out value)){int count=Convert.ToInt32(value),jitter=1;object spread;if(data.TryGetValue("clickCountJitter",out spread))jitter=Convert.ToInt32(spread);SetLegacyCount(count,jitter);}
+            number("trailSpacing",controls.TrailSpacing);number("clickMin",controls.ClickMin);number("clickMax",controls.ClickMax);
+            if(controls.ClickMin.Value>controls.ClickMax.Value){decimal low=controls.ClickMax.Value;controls.ClickMax.Value=controls.ClickMin.Value;controls.ClickMin.Value=low;}
+            check("trail",controls.Trail);check("click",controls.ClickValue);
             Action<string,ColorField> color=(key,input)=>{if(data.TryGetValue(key,out value)&&value is string){string hex=((string)value).TrimStart('#');int rgb;if(hex.Length==6&&int.TryParse(hex,System.Globalization.NumberStyles.HexNumber,System.Globalization.CultureInfo.InvariantCulture,out rgb))input.Value=Color.FromArgb(255,(rgb>>16)&255,(rgb>>8)&255,rgb&255);}};
             color("trailColor",controls.TrailColor);color("rippleColor",controls.RippleColor);color("fragmentColor",controls.FragmentColor);
-            int settingsVersion=data.TryGetValue("version",out value)?Convert.ToInt32(value):0;
-            // Correct only the rejected defaults; retain user-entered values.
-            if(settingsVersion<9){
-                if(controls.ClickRadius.Value==12)controls.ClickRadius.Value=50;
-                if(controls.ColorFade.Value==90)controls.ColorFade.Value=65;
-                if(controls.TrailColor.Text=="#45EDFF"&&controls.RippleColor.Text=="#45EDFF"&&controls.FragmentColor.Text=="#C4FCFF")controls.FragmentColor.Value=ColorPalette.All[0].Fragment;
-            }
-            if(settingsVersion<7&&controls.TrailColor.Text=="#EF83AD"&&controls.RippleColor.Text=="#DB5A91"&&controls.FragmentColor.Text=="#FFE1EC"){
-                var sakura=ColorPalette.All[2];controls.TrailColor.Value=sakura.Trail;controls.RippleColor.Value=sakura.Ripple;controls.FragmentColor.Value=sakura.Fragment;
-            }
+            int version=data.TryGetValue("version",out value)?Convert.ToInt32(value):0;
+            if(version<9&&controls.TrailColor.Text=="#45EDFF"&&controls.RippleColor.Text=="#45EDFF"&&controls.FragmentColor.Text=="#C4FCFF")controls.FragmentColor.Value=ColorPalette.All[0].Fragment;
+            if(version<7&&controls.TrailColor.Text=="#EF83AD"&&controls.RippleColor.Text=="#DB5A91"&&controls.FragmentColor.Text=="#FFE1EC"){var p=ColorPalette.All[2];controls.TrailColor.Value=p.Trail;controls.RippleColor.Value=p.Ripple;controls.FragmentColor.Value=p.Fragment;}
             if(data.ContainsKey("enabled"))check("enabled",controls.VisibleValue);else check("visible",controls.VisibleValue);
         }catch(Exception e){Log("設定載入失敗："+e.Message);}finally{controls.Updating=false;controls.SyncPalette();}
     }
+    void SetLegacyCount(int count,int jitter){controls.ClickMin.Value=count<=0?0:count-Math.Max(0,jitter);controls.ClickMax.Value=count<=0?0:count+Math.Max(0,jitter);}
     void SaveControls(bool force=false){if(Test&&!force||controls.Updating)return;try{
-        var data=new{version=9,trailFadeMs=controls.TrailFade.Value,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,trailFragmentSize=controls.TrailFragmentSize.Value,clickFragmentSize=controls.ClickFragmentSize.Value,trailOpacity=controls.OpacityValue.Value,clickOpacity=controls.ClickOpacity.Value,trailSpacing=controls.TrailSpacing.Value,spacingJitter=controls.SpacingJitter.Value,trailGap=controls.TrailGap.Value,clickCount=controls.ClickCount.Value,clickRadius=controls.ClickRadius.Value,clickScatter=controls.ClickScatter.Value,clickSpeed=controls.ClickSpeed.Value,birthWhite=controls.BirthWhite.Value,colorFadeMs=controls.ColorFade.Value,particleSpeed=controls.ParticleSpeed.Value,trailSpread=controls.TrailSpread.Value,glow=controls.Strength.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
+        var data=new{version=13,trailWidth=controls.EffectSize.Value,rippleSize=controls.RippleSize.Value,fragmentSize=controls.FragmentSize.Value,opacity=controls.OpacityValue.Value,particleSpeed=controls.ParticleSpeed.Value,trailFadeMs=controls.TrailFade.Value,trailSpacing=controls.TrailSpacing.Value,clickMin=controls.ClickMin.Value,clickMax=controls.ClickMax.Value,trail=controls.Trail.Checked,click=controls.ClickValue.Checked,enabled=controls.VisibleValue.Checked,trailColor=controls.TrailColor.Text,rippleColor=controls.RippleColor.Text,fragmentColor=controls.FragmentColor.Text};
         var temp=ControlsPath+".tmp";File.WriteAllText(temp,Json.Serialize(data),Encoding.UTF8);if(File.Exists(ControlsPath))File.Replace(temp,ControlsPath,null);else File.Move(temp,ControlsPath);
     }catch(Exception e){Log("設定儲存失敗："+e.Message);}}
     public void ApplyPalette(ColorPalette palette){controls.Updating=true;try{controls.TrailColor.Value=palette.Trail;controls.RippleColor.Value=palette.Ripple;controls.FragmentColor.Value=palette.Fragment;}finally{controls.Updating=false;}controls.SyncPalette();Configure();}
-    void ResetParticleControls(){controls.TrailSpacing.Value=80;controls.SpacingJitter.Value=35;controls.TrailGap.Value=8;controls.ClickCount.Value=4;controls.ClickRadius.Value=50;controls.ClickScatter.Value=35;controls.ClickSpeed.Value=100;controls.BirthWhite.Value=100;controls.ColorFade.Value=65;}
-    public void ResetControls(){controls.Updating=true;foreach(var n in controls.Numbers)n.Value=100;ResetParticleControls();controls.TrailFade.Value=180;controls.Trail.Checked=true;controls.ClickValue.Checked=true;controls.TrailColor.Value=Color.FromArgb(69,237,255);controls.RippleColor.Value=Color.FromArgb(69,237,255);controls.FragmentColor.Value=Color.FromArgb(95,197,255);controls.Updating=false;controls.SyncPalette();Configure();}
+    void ResetFields(){foreach(var n in controls.Numbers)n.Value=100;controls.TrailSpacing.Value=100;controls.TrailFade.Value=180;controls.ClickMin.Value=3;controls.ClickMax.Value=5;controls.Trail.Checked=true;controls.ClickValue.Checked=true;var p=ColorPalette.All[0];controls.TrailColor.Value=p.Trail;controls.RippleColor.Value=p.Ripple;controls.FragmentColor.Value=p.Fragment;}
+    public void ResetControls(){controls.Updating=true;try{ResetFields();}finally{controls.Updating=false;}controls.SyncPalette();Configure();}
     public void Quit(int code){if(quitting)return;configureTimer.Stop();saveTimer.Stop();SaveControls();quitting=true;Environment.ExitCode=code;inputTimer.Dispose();healthTimer.Dispose();configureTimer.Dispose();saveTimer.Dispose();StopAnimation(false);frameTimer.Dispose();if(orderObserver!=null)orderObserver.Dispose();if(tray!=null){tray.Visible=false;tray.Dispose();}if(trayMenu!=null)trayMenu.Dispose();overlay.Display(false,false);if(renderer!=null)renderer.Dispose();overlay.Dispose();controls.Dispose();ExitThread();}
 }
 

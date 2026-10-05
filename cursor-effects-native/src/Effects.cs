@@ -17,7 +17,7 @@ sealed class CursorEffects {
     public readonly List<DrawCommand> Commands=new List<DrawCommand>(2048);
     readonly Func<double> random;Item last;double trailRemaining;
     public bool Trail=true,Click=true,Dirty;public double Size=1,Density=.5,Opacity=1;public int Fps=60;
-    public double TrailWidth=1.6,RippleSize=.75,TrailFragmentSize=2,ClickFragmentSize=2,TrailOpacity=1,ClickOpacity=1;
+    public double TrailWidth=1.6,RippleSize=.75,TrailFragmentSize=1.8,ClickFragmentSize=1.8,TrailOpacity=1,ClickOpacity=1;
     double particleSpeed=1,clickSpeed=1,trailSpread=1,trailLifetime=.18,trailSpacing=100,spacingJitter=.35,trailGap=8,clickRadius=50,clickScatter=.35;int clickCount=4,clickCountJitter=1;
     public Rectangle Viewport=System.Windows.Forms.SystemInformation.VirtualScreen;
     public CursorEffects(Func<double> value=null){var rng=new Random();random=value??rng.NextDouble;}
@@ -26,7 +26,7 @@ sealed class CursorEffects {
         double old=Size;Trail=trail;Click=click;Size=Clamp(size,.25,3);Density=.5*Clamp(density,0,3);Opacity=Clamp(opacity,0,1);Fps=Math.Max(15,Math.Min(360,fps));foreach(var p in Particles)p.Size*=Size/old;Dirty=true;
     }
     public void Customize(double width,double ripple,double trailFragment,double clickFragment,double trailOpacity,double clickOpacity){
-        double oldTrail=TrailFragmentSize,oldClick=ClickFragmentSize;TrailWidth=1.6*Clamp(width,.25,3);RippleSize=.75*Clamp(ripple,.25,3);TrailFragmentSize=2*Clamp(trailFragment,.25,3);ClickFragmentSize=2*Clamp(clickFragment,.25,3);TrailOpacity=Clamp(trailOpacity,0,1);ClickOpacity=Clamp(clickOpacity,0,1);
+        double oldTrail=TrailFragmentSize,oldClick=ClickFragmentSize;TrailWidth=1.6*Clamp(width,.25,3);RippleSize=.75*Clamp(ripple,.25,3);TrailFragmentSize=1.8*Clamp(trailFragment,.25,3);ClickFragmentSize=1.8*Clamp(clickFragment,.25,3);TrailOpacity=Clamp(trailOpacity,0,1);ClickOpacity=Clamp(clickOpacity,0,1);
         foreach(var p in Particles)p.Size*=p.Burst?ClickFragmentSize/oldClick:TrailFragmentSize/oldTrail;Dirty=true;
     }
     public void SetParticleSpeed(double speed){particleSpeed=Clamp(speed,0,3);Dirty=true;}

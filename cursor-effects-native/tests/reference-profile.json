@@ -307,9 +307,9 @@
     "SDRMaterialGain": 1.8,
     "sharedClickDragFragmentSize": true,
     "ui100PercentBaseline": {
-      "trailWidthRelativeToPrevious": 2,
-      "fragmentSizeRelativeToPrevious": 2,
-      "rippleSizeRelativeToPrevious": 0.75
+      "trailWidthMultiplier": 1.6,
+      "fragmentSizeMultiplier": 1.8,
+      "rippleSizeMultiplier": 0.75
     },
     "fragmentWhite": {
       "highWhiteBirthProbability": 0.92,

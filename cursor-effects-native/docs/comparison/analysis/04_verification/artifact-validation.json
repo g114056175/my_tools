@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "productionSha256": "1167170d6a938785dc08725dc1f7086d543ffc1d343fd399af8557512326088f",
+  "officialMeasurementReproduced": true,
+  "localLinks": 96,
+  "pairedFrames": 36,
+  "gifs": [
+    {
+      "file": "01_official-8x.gif",
+      "frames": 36,
+      "durationMs": 4800
+    },
+    {
+      "file": "02_native-8x.gif",
+      "frames": 36,
+      "durationMs": 4800
+    },
+    {
+      "file": "03_comparison-8x.gif",
+      "frames": 36,
+      "durationMs": 4800
+    }
+  ],
+  "fastRapidFrames": 60,
+  "officialNativeRapidFrames": 88,
+  "officialNativeRapidDurationMs": 5870,
+  "nativeBlueWhiteRadiusRatio": 2,
+  "releaseSmokePassed": true
+}

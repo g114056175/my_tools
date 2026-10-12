@@ -1,0 +1,83 @@
+{
+  "source": "analysis/source/official-frames, original extracted PNGs",
+  "frameRange": {
+    "first": 132,
+    "last": 219,
+    "firstMs": 2200.0,
+    "lastMs": 3650.0,
+    "fps": 60
+  },
+  "output": "official-existing-rapid-4x.gif",
+  "slowdownFactor": 4,
+  "birthFrames": [
+    132,
+    148,
+    165,
+    185,
+    194
+  ],
+  "birthTimesMs": [
+    2200.0,
+    2466.67,
+    2750.0,
+    3083.33,
+    3233.33
+  ],
+  "intervalsMs": [
+    266.67,
+    283.33,
+    333.33,
+    150.0
+  ],
+  "precedingBirthFrame": 110,
+  "precedingBirthTimeMs": 1833.33,
+  "precedingAtFrame132": {
+    "ageMs": 366.67,
+    "assessment": "likely still present because source ring lifetime is about 600ms; frame132 overlaps a new white core, so pixel separation is not definitive"
+  },
+  "centers": {
+    "workingApprox": [
+      144,
+      89
+    ],
+    "whiteBlobCentroidBias": "large white component centroids are about (138,86), shifted by fragments/background; working click center uses ring/edge estimate near (144,89)"
+  },
+  "edgeFit": {
+    "stableFrames": {
+      "148": [
+        143.0,
+        88.4
+      ],
+      "165": [
+        143.2,
+        89.5
+      ],
+      "194": [
+        141.8,
+        89.2
+      ]
+    },
+    "unstableFrames": [
+      132,
+      185
+    ],
+    "uncertaintyPx": "about 2-4; partial arcs and overlap make per-frame circle fit underdetermined"
+  },
+  "interpretation": "Existing 150-333ms rapid-click sequence; f185 to f194 is approximately 150ms. This is not a 50ms official rapid-click recording.",
+  "inputTimingUncertainty": "frame times are first-visible-frame times, not measured OS input timestamps",
+  "firstFrame": 132,
+  "lastFrame": 219,
+  "frames": 88,
+  "durationMs": 5870,
+  "nativeBuildSha256": "1167170d6a938785dc08725dc1f7086d543ffc1d343fd399af8557512326088f",
+  "nativeBirthFrames": [
+    110,
+    132,
+    148,
+    165,
+    185,
+    194
+  ],
+  "comparison": "official source video versus actual native GPU; fixed center approximately144,89; first-visible-frame timing, not OS inputs",
+  "newOfficial50msRecording": false
+}

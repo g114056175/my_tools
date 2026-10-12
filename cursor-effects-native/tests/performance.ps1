@@ -23,6 +23,7 @@ while(!$process.HasExited -and $watch.ElapsedMilliseconds -lt 55000){
 }
 if(!$process.HasExited){Stop-Process -Id $process.Id;throw 'Performance timeout.'}
 $report=Get-Content -LiteralPath (Join-Path $profile 'performance.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$report | Add-Member -NotePropertyName build -NotePropertyValue (Get-Content -LiteralPath (Join-Path (Split-Path $exe) 'build-info.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
 $report | Add-Member -NotePropertyName gpuSamples -NotePropertyValue $samples
 $report | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath (Join-Path $root 'test-results/performance.json') -Encoding UTF8
 $report.phases | Select-Object phase,cpuPercentAllLogicalProcessors,privateMiB,workingSetMiB,@{n='frames';e={$_.frames.frames}},@{n='p95Ms';e={$_.frames.frameP95Ms}} | ConvertTo-Json

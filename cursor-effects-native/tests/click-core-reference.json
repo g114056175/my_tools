@@ -1,0 +1,132 @@
+{
+  "reference": "Shittim Canvas NEXT Windows (11020260812), previously extracted cursor resources",
+  "object": "FX_Touch/ring",
+  "particlePathId": 1871,
+  "lifetimeSeconds": 0.2,
+  "burstCount": 1,
+  "sizeCurve": [
+    {
+      "t": 0,
+      "v": 0.32583582,
+      "slope": 2.40047336
+    },
+    {
+      "t": 0.21392822,
+      "v": 0.71597731,
+      "slope": 0.91157448
+    },
+    {
+      "t": 1,
+      "v": 1,
+      "slope": 0
+    }
+  ],
+  "alphaHoldLifeFraction": 0.108827,
+  "whiteToColorLifeFraction": 0.120592,
+  "captureEvidence": "capture_1.mp4 60fps, frames 27-62: white disc at f27, blue fill f28-35, white growing triangles peaking f32-34, cyan ring, independently dissolving arcs",
+  "desktopAdaptation": "Shared water/outer arc envelope; second arc reaches 6.5 percent inward inset through120ms. Counterclockwise bounded arc pair, softer edges and cubic minification, radial-angular dissolve field for crescent tips. Pale source-over water without white fill; original fixed-radius birth flash only decays and adds naturally across clicks. Bounded1.16-radius blue rays. Body fades50-245ms; core250ms, rims600ms. SDR approximation, no fullscreen blur.",
+  "preservedTrail": {
+    "lifetimeSeconds": 0.18,
+    "spacingPixels": 100,
+    "corners": "quadratic curves and round caps"
+  },
+  "portCalibration": {
+    "ringNominalMaxRadiusPixels": 69.3,
+    "fragmentAnnulusNominalRadiusPixels": 51.3333333333,
+    "ringStrokeRatio": 1.095,
+    "clickFragmentWhiteHoldLifeFraction": [
+      0.23,
+      0.27
+    ],
+    "clickFragmentWhiteFadeLifeFraction": [
+      0.08,
+      0.13
+    ],
+    "previewSeed": 5824,
+    "sourceAlphaCorrection": "Raw source keys are kept above as evidence; the following desktop calibration is intentionally distinct from Unity HDR compositing",
+    "coreWhite": "0.96 * (1 - smoothstep(0ms,22ms,age)); input births use event-time offset",
+    "coreOpacity": ".80 * (1 - smoothstep(50ms, 245ms, age))",
+    "fragmentVisiblePreRollMs": 10,
+    "fragmentMeasuredAreaRatioAt33And50ms": [
+      0.18,
+      0.45
+    ],
+    "ringRadiusMeaning": "water and outer arc share the envelope; the second arc smoothly reaches 6.5 percent inward inset at 120ms",
+    "ringThreshold": ".52+.48*(exp(-t/.065)+(1-exp(-t/.065))*t*t)+.14*t^3; second arc adds .25*smoothstep(.4,.75,t)",
+    "localGlow": "Cached 384px water R/G weights, separate cached feathered birth flash and bounded ray alpha; ColorMatrix plus FillOpacityMask. Five cached 96px exterior shape halos.",
+    "coreBody": "selected saturated water without white fill; separate original birth flash supplies white; initial tint mixes 6 percent white; edge RGB*.90,.95,1; early edge mix .70",
+    "fragmentAlpha": "source three dip/recovery cycles; click floor .42, drag floor .10; final .75-1 life smooth fade",
+    "ringFormationMs": 120,
+    "ringFadeStartLifeFraction": 0.55,
+    "ringStrokeRatioSource": 1.063668,
+    "ringStrokeRatioSDR": 1.095,
+    "ringClipFeatherGain": 4.5,
+    "ringSecondaryRidge": false,
+    "ringRadialPhaseShiftPerRasterPixel": 0.0008,
+    "coreHaloAmplitude": 0.32,
+    "fragmentHaloAmplitude": 0.34,
+    "fragmentHaloInterior": false,
+    "birthRadiusCorrection": ".04 * exp(-ageSeconds/.055) added to normalized growth; shared by water and both rims",
+    "ringClipColorFix": "straight white RGB=1; threshold clips alpha only; avoids RGB=alpha^2 before source-over",
+    "ringSecondPhase": "first phase + 2 radians + .08*wrapped sampled phase difference; bounded overlapping arc separation",
+    "ringComposition": "additive PLUS, brighter overlapping cyan arcs",
+    "clickFragmentExpansion": "birth at shared newborn wave radius + (1.1+random*2.2*scatter)*scale; full wave-radius delta plus3-8px/s scaled local drift",
+    "ringSecondInset": ".065 * smoothstep(0ms,120ms,age), radial scale applied to the second arc only",
+    "coreComposition": "water SOURCE_OVER without white fill; original fixed-radius birth flash PLUS, exp(-age/.022)*(1-smoothstep(40ms,100ms,age)); subtract flash from the body alpha budget",
+    "linkedFragmentColor": "chromatic HSL lightness +.04, clamp .67-.79, saturation *.86; low-chroma smooth blend toward L+.46*(1-L); exact black remains black",
+    "fragmentTone": ".92+.08*particleTone; avoids the previous extra darkening",
+    "lifetimeSeconds": 0.25,
+    "ringClipFeather": "clamp(4.5*(guideAlpha-threshold)+.5), centered on the threshold",
+    "ringDirection": "counterclockwise in screen coordinates; negative angular increment with the existing source velocity curve",
+    "ringDissolveField": "all 9 source alpha rows, angular profile exponent .64; radial multiplier .35+.65*exp(-.5*((radius-mid)/(.4*bandWidth))^2)",
+    "ringEdgeFeatherRasterPixels": 3,
+    "ringInterpolation": "Direct2D HIGH_QUALITY_CUBIC minification",
+    "coreHaloOuterRadius": 1.16,
+    "birthFlash": "born at maximum intensity, monotonic decay; cached 384px feathered mask with palette-colored fringe; no delayed rebrightening or rapid-click branch",
+    "waterOpacityMultiplier": 0.8,
+    "rippleBaseline": 0.6666666666666666,
+    "unitWaveBaseRadiusPx": 60,
+    "birthFlashScale": 1.02,
+    "fragmentShapes": {
+      "names": [
+        "三角形",
+        "心形",
+        "箭頭",
+        "星星",
+        "閃電"
+      ],
+      "directions": [
+        2,
+        1,
+        4,
+        1,
+        1
+      ],
+      "sharedLifecycle": true,
+      "cachedGeometryAndGlow": true
+    },
+    "fragmentWhite": {
+      "clickBirthWhiteShare": 1,
+      "dragBirthWhiteShare": 0.9344827586206896,
+      "clickHoldLifeFraction": [
+        0.18,
+        0.21
+      ],
+      "clickFadeLifeFraction": [
+        0.05,
+        0.07
+      ],
+      "holdLifeFraction": [
+        0.11,
+        0.2
+      ],
+      "fadeLifeFraction": [
+        0.08,
+        0.13
+      ],
+      "flicker": "three alpha dip/recovery cycles; RGB stays colored"
+    },
+    "fragmentBaseline": 2.2,
+    "fragmentMenuIcons": true
+  }
+}

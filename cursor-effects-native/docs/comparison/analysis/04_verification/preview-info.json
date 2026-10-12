@@ -1,0 +1,527 @@
+{
+  "generatedAt": "2026-10-12T20:34:54",
+  "nativeBuildSha256": "1167170d6a938785dc08725dc1f7086d543ffc1d343fd399af8557512326088f",
+  "nativeExePath": "C:\\VSCode\\VTuberLLM\\cursor-effects-native\\dist\\BlueArchiveCursor.exe",
+  "nativeSourceMatchesBuild": true,
+  "source": "capture_1.mp4, 270x184, 60fps; frames27-62; frame27=0ms",
+  "frames": 36,
+  "comparisonGIFDurationMs": 4800,
+  "nativePreviewSeed": 5824,
+  "nativePreviewCount": 4,
+  "composition": "Actual GPU capture composited onto MP4 frame26, restoring masked static cursor pixels; not a desktop recording",
+  "limits": [
+    "Random particle positions/sizes and ring phases are not paired.",
+    "Video contains HDR, background and codec effects; native rendering is SDR.",
+    "0ms is first observed source frame, not a measured OS input timestamp."
+  ],
+  "sampleLocation": [
+    132,
+    83
+  ],
+  "pixelSamples": [
+    {
+      "officialFrame": 27,
+      "ageMs": 0.0,
+      "officialRGB": [
+        255,
+        255,
+        255
+      ],
+      "nativeCompositeRGB": [
+        250,
+        253,
+        255
+      ]
+    },
+    {
+      "officialFrame": 28,
+      "ageMs": 16.666666666666668,
+      "officialRGB": [
+        136,
+        207,
+        254
+      ],
+      "nativeCompositeRGB": [
+        163,
+        189,
+        225
+      ]
+    },
+    {
+      "officialFrame": 29,
+      "ageMs": 33.333333333333336,
+      "officialRGB": [
+        123,
+        192,
+        255
+      ],
+      "nativeCompositeRGB": [
+        129,
+        175,
+        224
+      ]
+    },
+    {
+      "officialFrame": 30,
+      "ageMs": 50.0,
+      "officialRGB": [
+        113,
+        174,
+        254
+      ],
+      "nativeCompositeRGB": [
+        113,
+        165,
+        224
+      ]
+    },
+    {
+      "officialFrame": 31,
+      "ageMs": 66.66666666666667,
+      "officialRGB": [
+        101,
+        159,
+        253
+      ],
+      "nativeCompositeRGB": [
+        103,
+        158,
+        222
+      ]
+    },
+    {
+      "officialFrame": 32,
+      "ageMs": 83.33333333333333,
+      "officialRGB": [
+        89,
+        142,
+        251
+      ],
+      "nativeCompositeRGB": [
+        96,
+        151,
+        215
+      ]
+    },
+    {
+      "officialFrame": 33,
+      "ageMs": 100.0,
+      "officialRGB": [
+        79,
+        123,
+        229
+      ],
+      "nativeCompositeRGB": [
+        89,
+        141,
+        206
+      ]
+    },
+    {
+      "officialFrame": 34,
+      "ageMs": 116.66666666666667,
+      "officialRGB": [
+        79,
+        123,
+        229
+      ],
+      "nativeCompositeRGB": [
+        82,
+        130,
+        193
+      ]
+    },
+    {
+      "officialFrame": 35,
+      "ageMs": 133.33333333333334,
+      "officialRGB": [
+        68,
+        107,
+        199
+      ],
+      "nativeCompositeRGB": [
+        73,
+        118,
+        180
+      ]
+    },
+    {
+      "officialFrame": 36,
+      "ageMs": 150.0,
+      "officialRGB": [
+        49,
+        81,
+        150
+      ],
+      "nativeCompositeRGB": [
+        65,
+        104,
+        165
+      ]
+    },
+    {
+      "officialFrame": 37,
+      "ageMs": 166.66666666666666,
+      "officialRGB": [
+        49,
+        83,
+        151
+      ],
+      "nativeCompositeRGB": [
+        57,
+        91,
+        151
+      ]
+    },
+    {
+      "officialFrame": 38,
+      "ageMs": 183.33333333333334,
+      "officialRGB": [
+        36,
+        60,
+        120
+      ],
+      "nativeCompositeRGB": [
+        49,
+        79,
+        138
+      ]
+    },
+    {
+      "officialFrame": 39,
+      "ageMs": 200.0,
+      "officialRGB": [
+        34,
+        58,
+        116
+      ],
+      "nativeCompositeRGB": [
+        42,
+        68,
+        126
+      ]
+    },
+    {
+      "officialFrame": 40,
+      "ageMs": 216.66666666666666,
+      "officialRGB": [
+        34,
+        56,
+        115
+      ],
+      "nativeCompositeRGB": [
+        37,
+        59,
+        118
+      ]
+    },
+    {
+      "officialFrame": 41,
+      "ageMs": 233.33333333333334,
+      "officialRGB": [
+        34,
+        56,
+        115
+      ],
+      "nativeCompositeRGB": [
+        35,
+        56,
+        112
+      ]
+    },
+    {
+      "officialFrame": 42,
+      "ageMs": 250.0,
+      "officialRGB": [
+        34,
+        56,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 43,
+      "ageMs": 266.6666666666667,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 44,
+      "ageMs": 283.3333333333333,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 45,
+      "ageMs": 300.0,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 46,
+      "ageMs": 316.6666666666667,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 47,
+      "ageMs": 333.3333333333333,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 48,
+      "ageMs": 350.0,
+      "officialRGB": [
+        33,
+        57,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 49,
+      "ageMs": 366.6666666666667,
+      "officialRGB": [
+        31,
+        55,
+        113
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 50,
+      "ageMs": 383.3333333333333,
+      "officialRGB": [
+        31,
+        55,
+        113
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 51,
+      "ageMs": 400.0,
+      "officialRGB": [
+        31,
+        55,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 52,
+      "ageMs": 416.6666666666667,
+      "officialRGB": [
+        31,
+        54,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 53,
+      "ageMs": 433.3333333333333,
+      "officialRGB": [
+        31,
+        55,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 54,
+      "ageMs": 450.0,
+      "officialRGB": [
+        31,
+        55,
+        115
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 55,
+      "ageMs": 466.6666666666667,
+      "officialRGB": [
+        33,
+        56,
+        119
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 56,
+      "ageMs": 483.3333333333333,
+      "officialRGB": [
+        33,
+        56,
+        119
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 57,
+      "ageMs": 500.0,
+      "officialRGB": [
+        33,
+        56,
+        119
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 58,
+      "ageMs": 516.6666666666666,
+      "officialRGB": [
+        33,
+        57,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 59,
+      "ageMs": 533.3333333333334,
+      "officialRGB": [
+        33,
+        57,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 60,
+      "ageMs": 550.0,
+      "officialRGB": [
+        33,
+        57,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 61,
+      "ageMs": 566.6666666666666,
+      "officialRGB": [
+        33,
+        57,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    },
+    {
+      "officialFrame": 62,
+      "ageMs": 583.3333333333334,
+      "officialRGB": [
+        33,
+        57,
+        117
+      ],
+      "nativeCompositeRGB": [
+        34,
+        54,
+        111
+      ]
+    }
+  ]
+}

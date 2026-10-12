@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "filesBesideExe": 1,
+  "checks": [
+    "EXE runs alone in a clean folder",
+    "embedded native DLL loads from cache, no browser/Unity",
+    "normal taskbar minimize",
+    "second instance restores panel and exits",
+    "X exits release"
+  ]
+}

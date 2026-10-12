@@ -291,8 +291,8 @@
     ]
   },
   "portCalibration": {
-    "waveNominalMaxRadiusPixels": 54,
-    "clickFragmentRadiusPixels": 37.5,
+    "waveNominalMaxRadiusPixels": 69.3,
+    "clickFragmentRadiusPixels": 51.3333333333,
     "clickRadialScatterPercent": 35,
     "clickSpeedRangePixelsPerSecond": [
       16.5,
@@ -303,13 +303,14 @@
       3,
       5
     ],
-    "strokeWidthCalibration": 0.55,
-    "SDRMaterialGain": 1.8,
+    "strokeWidthCalibration": 1.0,
+    "SDRMaterialGain": 1.25,
     "sharedClickDragFragmentSize": true,
     "ui100PercentBaseline": {
       "trailWidthMultiplier": 1.6,
-      "fragmentSizeMultiplier": 1.8,
-      "rippleSizeMultiplier": 0.75
+      "fragmentSizeMultiplier": 2.2,
+      "rippleSizeMultiplier": 0.6666666666666666,
+      "waveBaseRadiusPixels": 60
     },
     "fragmentWhite": {
       "highWhiteBirthProbability": 0.92,
@@ -322,23 +323,65 @@
         0.75
       ],
       "holdLifetimeFractionRange": [
-        0.2,
-        0.6
+        0.11,
+        0.2
       ],
       "transitionLifetimeFractionRange": [
-        0.12,
-        0.3
+        0.08,
+        0.13
       ],
       "interpolation": "whiteMix * (1 - smoothstep(0, 1, clamp((normalizedAge - hold) / transition)))",
       "sampling": "Each fragment samples once at birth, independent of position and other fragments.",
-      "provenance": "Desktop appearance calibration; these intervals are not recovered official constants."
+      "provenance": "Desktop appearance calibration; these intervals are not recovered official constants.",
+      "clickWhiteMix": 1,
+      "clickHoldLifetimeFractionRange": [
+        0.18,
+        0.21
+      ],
+      "clickTransitionLifetimeFractionRange": [
+        0.05,
+        0.07
+      ]
     },
-    "softEffectsEnabled": false,
-    "softEffectAssetsEmbedded": false
+    "softEffectsEnabled": true,
+    "softEffectAssetsEmbedded": false,
+    "localGlowEnabled": true,
+    "globalBlurEnabled": false,
+    "localGlowImplementation": "Bounded procedural opacity masks created once; no per-fragment effect graph or game images embedded",
+    "fragmentAlpha": {
+      "sourceAlphaCycles": 3,
+      "clickSDRFloor": 0.42,
+      "dragSDRFloor": 0.1,
+      "rewhitensAfterColorTransition": false,
+      "finalFadeLifeRange": [
+        0.75,
+        1
+      ]
+    },
+    "ringAngularMask": "center-row numeric samples, Catmull-Rom interpolation, gamma .86, gentle radial phase; cached once",
+    "ringFormationMs": 120,
+    "ringFadeStartLifeFraction": 0.55,
+    "ringNominalMaxRadiusPixels": 60,
+    "ringStrokeRatioSource": 1.063668,
+    "ringStrokeRatioSDR": 1.075,
+    "ringClipFeatherGain": 4.5,
+    "ringSecondaryRidge": true,
+    "ringRadialPhaseShiftPerRasterPixel": 0.0008,
+    "coreHaloAmplitude": 0.38,
+    "fragmentHaloAmplitude": 0.34,
+    "fragmentHaloInterior": false,
+    "waterOpacityMultiplier": 0.8,
+    "fragmentShapes": {
+      "Triangle": "up/down",
+      "Heart": "upright",
+      "Arrow": "four cardinal directions",
+      "Star": "upright",
+      "Lightning": "upright"
+    }
   },
   "limits": [
     "Runtime pixel scaling has not been recovered. Stroke width and pixel ranges are calibrated to the supplied screenshots.",
-    "The core alpha-clip formula and custom threshold curve are recovered. SDR light and randomized fragment flash are desktop calibrations; no HDR bloom is rendered.",
+    "The core alpha-clip formula and custom threshold curve are recovered. SDR light and randomized fragment flash are desktop calibrations; local procedural halos approximate bloom on SDR.",
     "Alpha profile is interpolated from numeric texture samples; no extracted images, meshes, DXBC binaries or Unity bundles are distributed."
   ],
   "trailEvidence": "trail-reference.json"

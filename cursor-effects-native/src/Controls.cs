@@ -310,10 +310,10 @@ sealed class DarkMenuRenderer : ToolStripProfessionalRenderer {
 
 
 sealed class SimpleTrayRenderer : ToolStripRenderer {
-    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e){e.Graphics.Clear(Color.FromArgb(20,20,20));}
-    protected override void OnRenderItemBackground(ToolStripItemRenderEventArgs e){if(e.Item.Selected)using(var brush=new SolidBrush(Color.FromArgb(55,55,55)))e.Graphics.FillRectangle(brush,new Rectangle(Point.Empty,e.Item.Size));}
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e){e.Graphics.Clear(Color.White);}
+    protected override void OnRenderItemBackground(ToolStripItemRenderEventArgs e){if(e.Item.Selected)using(var brush=new SolidBrush(Color.FromArgb(225,225,225)))e.Graphics.FillRectangle(brush,new Rectangle(Point.Empty,e.Item.Size));}
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e){OnRenderItemBackground(e);}
-    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e){e.TextColor=Color.White;base.OnRenderItemText(e);}
-    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e){using(var pen=new Pen(Color.FromArgb(80,80,80)))e.Graphics.DrawRectangle(pen,0,0,e.ToolStrip.Width-1,e.ToolStrip.Height-1);}
-    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e){using(var pen=new Pen(Color.FromArgb(70,70,70)))e.Graphics.DrawLine(pen,4,e.Item.Height/2,e.Item.Width-5,e.Item.Height/2);}
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e){e.TextColor=Color.Black;base.OnRenderItemText(e);}
+    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e){using(var pen=new Pen(Color.FromArgb(160,160,160)))e.Graphics.DrawRectangle(pen,0,0,e.ToolStrip.Width-1,e.ToolStrip.Height-1);}
+    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e){using(var pen=new Pen(Color.FromArgb(200,200,200)))e.Graphics.DrawLine(pen,4,e.Item.Height/2,e.Item.Width-5,e.Item.Height/2);}
 }

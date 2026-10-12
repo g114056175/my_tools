@@ -9,6 +9,6 @@
 - 五項效果數值：軌跡粗細、衰退時間、生成間距、點擊大小與碎片大小。
 - 單檔EXE，Windows 10（1703以上）／11 x64，需.NET Framework 4.8；設定自動保存，面板可隱藏至托盤。
 
-正式EXE：**122.0KB（124,928 bytes）**，SHA-256開頭 **`1167170d6a938785`**。[完整建置紀錄](docs/comparison/analysis/04_verification/build-info.json)
+正式EXE：**122.0KB（124,928 bytes）**，SHA-256開頭 **`b6e76972b5873970`**。[完整建置紀錄](docs/comparison/analysis/04_verification/build-info.json)
 
 通過31項功能、15組GPU檢查、獨立啟動及Defender掃描。[操作展示](README.md) · [正式版與官方效果對比](docs/comparison/README.md)

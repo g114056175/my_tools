@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-12T20:34:54",
-  "nativeBuildSha256": "1167170d6a938785dc08725dc1f7086d543ffc1d343fd399af8557512326088f",
+  "generatedAt": "2026-10-12T20:48:23",
+  "nativeBuildSha256": "b6e76972b5873970ee17f4fcfb31b586abb8ef7abf07c3a2d201aeeed158de2b",
   "nativeExePath": "C:\\VSCode\\VTuberLLM\\cursor-effects-native\\dist\\BlueArchiveCursor.exe",
   "nativeSourceMatchesBuild": true,
   "source": "capture_1.mp4, 270x184, 60fps; frames27-62; frame27=0ms",

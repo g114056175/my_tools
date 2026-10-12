@@ -60,7 +60,7 @@ sealed partial class CursorHost : ApplicationContext {
     }
     void Start(){try{
         EmbeddedRuntime.Initialize(profile);renderer=new D2DRenderer(overlay.Handle);ready=true;
-        trayMenu=new ContextMenuStrip{BackColor=Color.FromArgb(20,20,20),ForeColor=Color.White,Renderer=new SimpleTrayRenderer(),ShowImageMargin=false,ShowCheckMargin=false,Font=controls.Font};trayMenu.Items.Add("開啟面板",null,(s,e)=>ShowControls());
+        trayMenu=new ContextMenuStrip{BackColor=Color.White,ForeColor=Color.Black,Renderer=new SimpleTrayRenderer(),ShowImageMargin=false,ShowCheckMargin=false,Font=controls.Font};trayMenu.Items.Add("開啟面板",null,(s,e)=>ShowControls());
         visibilityItem=new ToolStripMenuItem();visibilityItem.Click+=(s,e)=>controls.VisibleValue.Checked=!controls.VisibleValue.Checked;trayMenu.Items.Add(visibilityItem);trayMenu.Items.Add(new ToolStripSeparator());trayMenu.Items.Add("退出",null,(s,e)=>Quit(0));trayMenu.Opening+=(s,e)=>UpdateVisibilityMenu();
         tray=new NotifyIcon{Icon=AppTheme.Icon,Text="滑鼠光跡",Visible=!Test,ContextMenuStrip=trayMenu};tray.DoubleClick+=(s,e)=>ShowControls();UpdateVisibilityMenu();
         orderObserver=new Native.ZOrderObserver(source=>{if(source!=overlay.Handle&&Native.GetAncestor(source,3)!=controls.Handle)RepairLayer(source);});healthTimer.Start();Configure();

@@ -6,12 +6,12 @@
     "sourceSha256":  {
                          "src/AssemblyInfo.cs":  "19a84664b82f74dce609cc87df2abd9ca9aad2180cdfb38a55802235b4143fbf",
                          "src/ColorEditor.cs":  "575e5d04629eadbfb095646f4cdaa93811dd35e01ade159d4306d91e9c84dc76",
-                         "src/Controls.cs":  "f97d1e0057714606b6edf156d2d89ea13f8102df16ab74afb30afa0424dbb97a",
+                         "src/Controls.cs":  "8ded936c18501fca626fbcefd51fd7f9e11053f8e9cec0e98a38a6ad9c1c7612",
                          "src/Effects.cs":  "a4d13db3541f2541c2d8eef70601eb39ad6bf3ea7241f7b1c1c1fc309cb92431",
                          "src/EmbeddedRuntime.cs":  "f2df2640ef04abe029bab006bc2dca6de72009794a27f0833606a2cd3b154e58",
                          "src/FrameClock.cs":  "b68fe89fe3e844d96782d6b5f10857c752f1c31ff525e64d948ac3726abdf776",
                          "src/Native.cs":  "a833fefb426cc4df4fbee2486b131138a20bb5e23f7aa348c45fb2a44b0a4c1d",
-                         "src/Program.cs":  "edd62a840207124517c77fa6ccd21ce132d3f43d8d3da470ee3c9228074f75ea",
+                         "src/Program.cs":  "c6d51d2d54846331bb1052b75d8a040283f7d8b36fa70ac7f112bc5a1b1bcaa0",
                          "src/reference-ring-profile.h":  "1e9ac99c5a4852f4758348423b81ef5d509bbb33f1c4030b9a951a27811ea1d7",
                          "src/Renderer.cpp":  "387e34a2e171ee1c6365a79dcf42606b195e44640b5ac7916db071ad404843a6",
                          "src/Renderer.cs":  "557995350b03eb44eb6368dd480876a0a2c1c28060332581aa49ded147291256",
@@ -19,5 +19,5 @@
                      },
     "exePath":  "C:\\VSCode\\VTuberLLM\\cursor-effects-native\\dist\\BlueArchiveCursor.exe",
     "exeBytes":  124928,
-    "exeSha256":  "1167170d6a938785dc08725dc1f7086d543ffc1d343fd399af8557512326088f"
+    "exeSha256":  "b6e76972b5873970ee17f4fcfb31b586abb8ef7abf07c3a2d201aeeed158de2b"
 }

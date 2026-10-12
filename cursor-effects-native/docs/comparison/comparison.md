@@ -33,7 +33,7 @@
 
 [連點、拖曳與碎片觀察](analysis/00_README.md) · [模板色值與166ms畫面](analysis/05_palettes/00_README.md) · [五種碎片樣式](analysis/06_shapes/00_README.md)
 
-正式版通過31項功能與15組GPU檢查、獨立啟動與Defender掃描。預設每幀CPU送出平均約0.63ms、幀間隔p95約17.3ms，僅為短時取樣；不代表輸入至顯示延遲。
+正式版通過31項功能與15組GPU檢查、獨立啟動與Defender掃描。預設每幀CPU送出平均約0.59ms、幀間隔p95約17.3ms，僅為短時取樣；不代表輸入至顯示延遲。
 
 [完整驗證](analysis/04_verification/verification.json) · [正式版建置紀錄](analysis/04_verification/build-info.json) · [正式版效能量測](analysis/04_verification/performance.json)
 

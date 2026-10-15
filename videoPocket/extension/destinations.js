@@ -1,0 +1,6 @@
+// FileSystemHandles are structured-cloned through IndexedDB, never through
+// runtime messages. Entries are discarded at browser session startup.
+(function(root){let opening,opened;const db=()=>opening ||= new Promise((resolve,reject)=>{const r=indexedDB.open('video-pocket-destinations',1);r.onupgradeneeded=()=>r.result.createObjectStore('handles');r.onsuccess=()=>{opened=r.result;resolve(r.result);};r.onerror=()=>reject(r.error);});
+ async function operation(mode,fn){const connection=await db();return new Promise((resolve,reject)=>{const tx=connection.transaction('handles',mode),request=fn(tx.objectStore('handles'));tx.oncomplete=()=>resolve(request?.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+ root.VideoPocketDestinations={ready:db,putNow(handle,id){if(!opened)throw new Error('儲存介面尚未就緒');const tx=opened.transaction('handles','readwrite');tx.objectStore('handles').put(handle,id);tx.commit();},put:async handle=>{const id=crypto.randomUUID();await operation('readwrite',store=>store.put(handle,id));return id;},get:id=>operation('readonly',store=>store.get(id)),remove:id=>operation('readwrite',store=>store.delete(id)),clear:()=>operation('readwrite',store=>store.clear())};
+})(typeof self!=='undefined'?self:globalThis);

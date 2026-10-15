@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "影片口袋",
+  "version": "1.0.0",
+  "description": "從目前影片頁面下載影片、音檔與完整字幕。",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnSDCmMsvMcdYf4933hu7ORYFF0qh79Nl1FoH8Ptw8dW/FHbdPy6F2nMyMc1OnCGhOAiPeLzlgJXkFBH0gskjg/s2CtipoPd19UTgHJMxGDcZmSdXYO29YPd3m3z0FBWd4Ox9mdnZo8xs5FCCTKTPpX6F9G69L8L87feqDMHwAVf+rqE7k2JmDc9lXN7azzCBv52J9NLSCeMiCrWoaBF3uydOawpVzuwmavHoDRAWLwhWM66rubsdwltslSW/J9Qt0yavV4Ghtu88LnF+nkiKLQOeb7jGBklKF0PWBM/cgIvB+TEtvfX1xGZ0rNCN/5Jf/7RhhnbbJforTTsTBYCsvQIDAQAB",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage",
+    "clipboardWrite",
+    "offscreen",
+    "declarativeNetRequestWithHostAccess",
+    "webRequest",
+    "unlimitedStorage"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "影片口袋",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
+  }
+}

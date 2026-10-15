@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>影片口袋</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <div class="source-row"><span id="sourceLabel" class="source-label">目前影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" hidden></select><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊">↻</button></div>
+  <main>
+    <section id="downloadSection" aria-label="下載" hidden>
+      <div class="section-heading"><h2>下載</h2><div class="switch" role="tablist" aria-label="下載類型"><button id="videoTab" role="tab" aria-selected="true" class="active">影片</button><button id="audioTab" role="tab" aria-selected="false">音檔</button><button id="subtitleTab" role="tab" aria-selected="false" disabled title="無字幕">字幕</button></div></div>
+      <div id="videoSettings" class="settings"><label>格式<select id="videoFormat" disabled><option value="auto">來源格式</option></select></label><label>品質<select id="height" disabled><option value="0">最佳</option></select></label></div>
+      <div id="audioSettings" class="settings" hidden><label>格式<select id="audioFormat" disabled><option value="original">來源音訊</option></select></label><label>品質<select id="audioQuality" disabled><option value="best">最佳</option><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="320">320 kbps</option></select></label></div>
+      <button id="download" class="primary" disabled>下載影片</button>
+      <div id="subtitleSection" aria-label="字幕" hidden>
+      <div id="subtitleSettings" class="settings"><label>來源<select id="language" aria-label="字幕版本"><option value="">讀取中…</option></select></label><label>格式<select id="subtitleFormat" aria-label="字幕檔格式"><option value="txt">TXT</option><option value="srt">SRT</option><option value="vtt">VTT</option><option value="plain">純文字</option></select></label></div>
+      <button id="loadSubtitle" class="primary" disabled>擷取</button>
+      <div id="subtitleContent" hidden>
+      <textarea id="preview" rows="4" placeholder="字幕內容" readonly aria-label="完整字幕"></textarea>
+      <div class="subtitle-actions"><button id="copy" class="secondary" disabled>複製</button><button id="saveSubtitle" class="secondary" disabled>下載</button></div>
+      </div>
+      </div>
+    </section>
+    <ul id="job" class="job-list" aria-label="下載工作" hidden></ul>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <div id="diagnosticRow" class="diagnostic-row" role="status" aria-live="polite" hidden><span id="diagnosticText"></span><button id="dismissError" class="icon-button" title="關閉診斷" aria-label="關閉診斷">×</button></div>
+  </main><script type="module" src="popup.js"></script>
+</body></html>
+

@@ -1,19 +1,19 @@
-# 影片口袋 Video Pocket
+# VideoPocket - 網頁媒體下載與擷取
 
 在 Chrome 的小型視窗中，選擇目前影片並下載影片、音檔或字幕。所有處理都在本機瀏覽器內完成，無須另外安裝程式。
 
-**[下載ZIP(9.9MB)](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/videoPocket-v1.0.0.zip)** · Chrome 120 以上
+**[下載ZIP(10.0MB)](https://github.com/g114056175/my_tools/releases/download/VideoPocket-v1.0.1/VideoPocket-v1.0.1.zip)** · Chrome 120 以上
 
 開發這個工具，是希望把可取得的影片、音訊與字幕交給 LLM 整理，減少模型因無法讀取網頁連結而不能分析內容的情況。下載後可自行將素材提供給使用中的模型；本工具不會自動上傳素材。
 
 <details>
 <summary><strong>使用說明：第一次安裝 Chrome 擴充功能</strong></summary>
 
-1. 下載 ZIP，解壓縮並保留 `videoPocket` 資料夾。
+1. 下載 ZIP，解壓縮並保留 `VideoPocket` 資料夾。
 2. 在 Chrome 網址列輸入 `chrome://extensions/`，開啟右上角「開發人員模式」。
-3. 點「載入未封裝項目」，選擇解壓縮後的 **`videoPocket/extension`** 資料夾。
-4. 點瀏覽器右上角的拼圖圖示，將「影片口袋」固定在工具列。
-5. 開啟影片網頁，點工具列的影片口袋圖示。若來源尚未載入，可先正常播放影片，再按視窗右上角重新整理。
+3. 點「載入未封裝項目」，選擇解壓縮後的 **`VideoPocket/extension`** 資料夾。
+4. 點瀏覽器右上角的拼圖圖示，將「VideoPocket」固定在工具列。
+5. 開啟影片網頁，點工具列的 VideoPocket 圖示。若來源尚未載入，可先正常播放影片，再按視窗右上角重新整理。
 
 更新時以新版檔案取代原資料夾，在擴充功能管理頁按重新載入，再重新整理影片網頁。請保留安裝資料夾，避免移動或刪除。
 
@@ -83,7 +83,7 @@
 其他間接依賴、參考程式與完整授權聲明，見 [`extension/vendor/THIRD_PARTY.md`](vendor/THIRD_PARTY.md)、[`extension/vendor/licenses/`](vendor/licenses/) 與 [`extension/licenses/`](licenses/)。專案自行撰寫的程式依附帶 MIT LICENSE 提供；第三方元件各自保留原授權。
 
 
-另提供[第三方建置來源包](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/videoPocket-third-party-sources-v1.0.0.zip)，包含隨附 FFmpeg core 的建置腳本、外部庫原始碼、原授權與 hash 清單，供開發者查閱；一般使用者不必下載。
+另提供[第三方建置來源包](https://github.com/g114056175/my_tools/releases/download/VideoPocket-v1.0.1/VideoPocket-third-party-sources-v1.0.1.zip)，包含隨附 FFmpeg core 的建置腳本、外部庫原始碼、原授權與 hash 清單，供開發者查閱；一般使用者不必下載。
 
 所有執行模組、解析器與 WASM 均隨 extension 附帶，使用者不需 npm、原生 FFmpeg 或本機服務。網站協定與 Chrome 行為可能改變，支援範圍不保證永久不變。
 

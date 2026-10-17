@@ -1,6 +1,8 @@
 # 游標光效
 
-**[下載 EXE（122.0KB）](https://github.com/g114056175/my_tools/releases/download/cursor-effects/BlueArchiveCursor.exe)**
+**[下載 EXE（122.5KB）](https://github.com/g114056175/my_tools/releases/download/cursor-effects/BlueArchiveCursor.exe)**
+
+> **防毒偵測提醒：** 部分建置可能被 Microsoft Defender 判為木馬並阻擋執行；相同原始碼重編譯後，偵測結果也可能不同。目前尚未確認是否為誤報，重新編譯後可執行不代表問題已解決。詳見下方技術說明。
 
 參考《蔚藍檔案》遊戲內鼠標粒子效果嘗試模擬。Windows桌面裝飾：拖曳顯示光跡，點擊產生波紋與碎片。
 
@@ -74,7 +76,7 @@ C#／WinForms 控制面板，C++／Direct2D + DirectComposition 繪製。僅更�
 
 選色視窗由WinForms及GDI+繪製HSL調色區：左側為色相／飽和度，右側為亮度，與HEX／RGB雙向同步。滴管只在選取期間以`WH_MOUSE_LL`接收選色點擊，透過`GetDC`／`GetPixel`讀取該處的即時RGB，隨即釋放監聽；選色面板保持可見，游標旁以110×126像素的提示窗顯示附近9×9像素的即時放大圖、色塊與HEX；提示窗不取得焦點，並穿透點擊。不擷取整張桌面，不建立全螢幕覆蓋視窗。結果先回到選色視窗，按確定才套用。編輯顏色時暫停特效，主面板與選單使用`WindowFromPoint`判斷滑鼠實際命中的視窗，只阻止在工具UI上的操作；面板被其他視窗覆蓋時，該位置仍可正常產生特效，不使用固定區域裁切。標題列採一般Windows原生視窗樣式。主要文字10pt，面板334×392，選色視窗312×348。
 
-透過Win32的`GetCursorPos`及`GetAsyncKeyState`讀取滑鼠位置與左鍵狀態，計算光跡、波紋及碎片的動畫。效果畫在不取得焦點、可穿透點擊的透明置頂視窗中：Direct2D繪圖，Direct3D 11提供圖形裝置，DirectComposition交由桌面視窗管理員（DWM）合成。
+以計時器讀取左鍵狀態：閒置時每50ms檢查一次，偵測到按住後改為每10ms追蹤點擊與拖曳；放開後維持高頻檢查250ms，再回到閒置。狀態輪詢可能漏掉短於當前檢查間隔的點擊。點擊動畫由獨立的按需影格時鐘推進，最多每秒60幀，不依賴輸入輪詢。效果畫在不取得焦點、可穿透點擊的透明置頂視窗中：Direct2D繪圖，Direct3D 11提供圖形裝置，DirectComposition交由桌面視窗管理員（DWM）合成。
 
 視覺上是「系統游標 → 光效 → 一般視窗」。光效依靠視窗置頂順序，並非取得Windows保留的游標專用層；其他置頂視窗、獨占全螢幕或安全桌面不保證相同結果。
 
@@ -107,6 +109,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File release.ps1
 
 可重建功能相同的程式，不保證 EXE 位元組完全一致。下載的工具鏈、產物與測試結果已列入 `.gitignore`。
 
+### 防毒偵測
+
+目前建置流程不保證每次輸出的位元組完全一致；編譯時間戳與模組識別碼（MVID）等資訊可使相同原始碼產生不同 SHA256。可參考微軟的 [C# 決定性編譯說明](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/code-generation#deterministic)。
+
+Microsoft Defender 結合本機防護、雲端分析與機器學習判定，結果可能隨檔案或掃描時點改變。曾觀察到相同原始碼的建置被偵測為 `Trojan:Script/Sabsik.TE.A!ml`，而另一次建置通過本機掃描與啟動檢查；目前尚未釐清具體觸發原因，也未取得微軟的誤報判定。一次掃描通過不保證其他環境或日後掃描不會攔截。[微軟雲端防護說明](https://learn.microsoft.com/en-us/defender-endpoint/cloud-protection-microsoft-defender-antivirus)
+
+若遇到攔截，請保留偵測名稱與檔案 SHA256，透過[微軟官方檔案分析平台](https://www.microsoft.com/en-us/wdsi/filesubmission)以軟體開發者身分提交確認。[開發者偵測申訴說明](https://learn.microsoft.com/en-us/defender-xdr/developer-faq)
+
 ### 驗證
 
 ```powershell
@@ -122,7 +132,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/performance.ps1
 ### 大小與效能
 
 
-**EXE：122.0 KiB（124,928 bytes）**；首次執行另釋出約 **25 KiB** 原生 DLL，使用者只需下載 EXE。
+**EXE：122.5 KiB（125,440 bytes）**；首次執行另釋出約 **25 KiB** 原生 DLL，使用者只需下載 EXE。
 
 測試電腦：**i5-12600K、RTX 4060、Windows 10 22H2**，桌面範圍 3840×1080。
 

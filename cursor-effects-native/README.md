@@ -2,7 +2,7 @@
 
 **[下載 EXE（122.5KB）](https://github.com/g114056175/my_tools/releases/download/cursor-effects/BlueArchiveCursor.exe)**
 
-> **防毒偵測提醒：** 部分建置可能被 Microsoft Defender 判為木馬並阻擋執行；相同原始碼重編譯後，偵測結果也可能不同。目前尚未確認是否為誤報，重新編譯後可執行不代表問題已解決。詳見下方技術說明。
+> **防毒偵測提醒：** 部分建置可能被 Microsoft Defender 判為木馬並阻擋執行；相同原始碼重編譯後，偵測結果也可能不同。目前尚未確認是否為誤報，重新編譯後可執行不代表問題已解決。詳見[防毒偵測說明](#user-content-防毒偵測)。
 
 參考《蔚藍檔案》遊戲內鼠標粒子效果嘗試模擬。Windows桌面裝飾：拖曳顯示光跡，點擊產生波紋與碎片。
 

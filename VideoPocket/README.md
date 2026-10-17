@@ -10,6 +10,8 @@
 
 <img src="docs/demo.png" width="360" alt="VideoPocket 操作介面：選擇影片、音檔或字幕，以及來源格式與品質">
 
+<img src="docs/demo.gif" width="556" alt="VideoPocket 操作示範：切換影片、音檔與字幕，選擇品質並開始下載">
+
 <details>
 <summary><strong>使用說明：第一次安裝 Chrome 擴充功能</strong></summary>
 

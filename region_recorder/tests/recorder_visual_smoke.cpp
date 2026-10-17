@@ -102,7 +102,14 @@ bool TestRegion(const RECT& roi, const std::vector<Monitor>& monitors, const std
     // while edges clipped at a desktop boundary are excluded by Windows.
     RECT marker=roi;
     lc::ShowRegionMarker(GetModuleHandleW(nullptr),marker,true);
-    HWND markerWindow=FindWindowW(L"LightCaptureRegionMarker",nullptr);
+    HWND markerWindow{};
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND window, LPARAM parameter) -> BOOL {
+        wchar_t name[128]{};
+        GetClassNameW(window,name,ARRAYSIZE(name));
+        if (lstrcmpW(name,L"LightCaptureRegionMarker") != 0) return TRUE;
+        *reinterpret_cast<HWND*>(parameter)=window;
+        return FALSE;
+    },reinterpret_cast<LPARAM>(&markerWindow));
     DWORD affinity=0;
     const LONG left=GetSystemMetrics(SM_XVIRTUALSCREEN), top=GetSystemMetrics(SM_YVIRTUALSCREEN);
     const bool edgeInside=roi.left-3<left || roi.top-3<top ||
@@ -112,21 +119,29 @@ bool TestRegion(const RECT& roi, const std::vector<Monitor>& monitors, const std
         affinity==(edgeInside?0x11u:0u);
     lc::DesktopCapture capture;
     std::vector<uint8_t> pixels; int width=0,height=0; std::wstring error;
+    const auto matchesPatches = [&] {
+        if (width!=roi.right-roi.left || height!=roi.bottom-roi.top) return false;
+        for(const auto& [crop,color]:patches)
+            for(int y=crop.top+2;y<crop.bottom-2;++y)
+                for(int x=crop.left+2;x<crop.right-2;++x)
+                    if(!Near(pixels,width,x-roi.left,y-roi.top,color)) return false;
+        return true;
+    };
     bool captured=false;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
     while (std::chrono::steady_clock::now()<deadline) {
         Pump();
-        if(capture.Capture(roi,false,pixels,width,height,error)) { captured=true; break; }
+        // UpdateWindow paints synchronously, but the compositor may still expose an older frame.
+        // Wait for our source windows to reach the desktop before checking their captured pixels.
+        if(capture.Capture(roi,false,pixels,width,height,error) && matchesPatches()) {
+            captured=true; break;
+        }
         if(!error.empty()) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     ok=ok && captured && width==roi.right-roi.left && height==roi.bottom-roi.top;
     if(ok) {
-        // Check the whole interior, including every marker edge and monitor seam.
-        for(const auto& [crop,color]:patches)
-            for(int y=crop.top+2;y<crop.bottom-2 && ok;++y)
-                for(int x=crop.left+2;x<crop.right-2;++x)
-                    if(!Near(pixels,width,x-roi.left,y-roi.top,color)) { ok=false; break; }
+        // The whole interior, including marker edges and monitor seams, matched above.
         lc::GifWriter writer; bool limit=false;
         ok=ok && writer.Open(path,width,height,100'000'000,error) &&
             writer.AddBgraFrame(pixels,10,limit,error) && writer.Close(&error);

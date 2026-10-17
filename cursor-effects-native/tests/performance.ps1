@@ -1,14 +1,16 @@
+param([ValidateSet(8,10,50)][int]$PollMilliseconds=50,[ValidateRange(1000,300000)][int]$PhaseMilliseconds=6000,[switch]$IdleOnly,[switch]$ActiveOnly)
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
 & (Join-Path $root 'build.ps1') -Test
 $null=Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue
 $exe=Join-Path $root '.build/test/BlueArchiveCursor.Native.exe'
 & (Join-Path $PSScriptRoot 'security-scan.ps1') -File $exe
-$process=Start-Process -FilePath $exe -ArgumentList '--performance-test' -WindowStyle Hidden -PassThru
+$arguments=@('--performance-test',"--poll-ms=$PollMilliseconds","--phase-ms=$PhaseMilliseconds");if($IdleOnly){$arguments+='--idle-only'};if($ActiveOnly){$arguments+='--active-only'}
+$process=Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
 $profile=Join-Path (Split-Path $exe) ('test-profile-'+$process.Id)
 $phasePath=Join-Path $profile 'performance-phase.json'
-$watch=[Diagnostics.Stopwatch]::StartNew();$samples=[Collections.Generic.List[object]]::new()
-while(!$process.HasExited -and $watch.ElapsedMilliseconds -lt 55000){
+$watch=[Diagnostics.Stopwatch]::StartNew();$samples=[Collections.Generic.List[object]]::new();$phaseCount=if($IdleOnly){1}elseif($ActiveOnly){2}else{6};$timeoutMs=$PhaseMilliseconds*$phaseCount+45000
+while(!$process.HasExited -and $watch.ElapsedMilliseconds -lt $timeoutMs){
     Start-Sleep -Milliseconds 750
     if(!(Test-Path -LiteralPath $phasePath)){continue}
     try{

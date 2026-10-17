@@ -32,15 +32,17 @@ sealed partial class CursorHost : ApplicationContext {
     public readonly bool Test=false;
 #if SELF_TEST
     readonly bool performanceTest;
+    bool performanceIdleOnly,performanceActiveOnly;int performancePhaseMilliseconds=6000;long performanceTimerTicks;
 #endif
     public readonly JavaScriptSerializer Json=new JavaScriptSerializer();
     readonly Overlay overlay;readonly ControlsWindow controls;D2DRenderer renderer;
     readonly CursorEffects effects=new CursorEffects();readonly Stopwatch clock=Stopwatch.StartNew();readonly string profile;
-    readonly System.Windows.Forms.Timer inputTimer=new System.Windows.Forms.Timer{Interval=8},healthTimer=new System.Windows.Forms.Timer{Interval=1000},configureTimer=new System.Windows.Forms.Timer{Interval=16},saveTimer=new System.Windows.Forms.Timer{Interval=350};
+    readonly System.Windows.Forms.Timer inputTimer=new System.Windows.Forms.Timer{Interval=50},healthTimer=new System.Windows.Forms.Timer{Interval=1000},configureTimer=new System.Windows.Forms.Timer{Interval=16},saveTimer=new System.Windows.Forms.Timer{Interval=350};
     readonly FrameClock frameTimer;
     NotifyIcon tray;ContextMenuStrip trayMenu;ToolStripMenuItem visibilityItem;Native.ZOrderObserver orderObserver;
     bool ready,failed,quitting,mouse,hasPoint,repairingLayer,suppressedPress,animating;Point previous;
-    long inputMessages,lastHealth;const int cursorFps=60;int layerRepairs,frameQueued;IntPtr blockedAbove;
+    long lastHealth;const int cursorFps=60;int layerRepairs,frameQueued;IntPtr blockedAbove;
+    const int idleInputInterval=50,activeInputInterval=10,inputGraceMilliseconds=250;long activeInputUntil;
     double lastFrame,nextFrame;int recoveryAttempts,editingColors;long recoveryWindow;
     public long Frames;
 #if SELF_TEST
@@ -53,13 +55,18 @@ sealed partial class CursorHost : ApplicationContext {
     public CursorHost(string[] args){
 #if SELF_TEST
         performanceTest=Array.IndexOf(args,"--performance-test")>=0;Test=Array.IndexOf(args,"--self-test")>=0||performanceTest;
+        if(performanceTest){inputTimer.Interval=TestOption(args,"--poll-ms",50,1,1000);performancePhaseMilliseconds=TestOption(args,"--phase-ms",6000,1000,300000);performanceIdleOnly=Array.IndexOf(args,"--idle-only")>=0;performanceActiveOnly=Array.IndexOf(args,"--active-only")>=0;}
 #endif
         profile=Test?Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"test-profile-"+Process.GetCurrentProcess().Id):Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BlueArchiveCursor.Native");Directory.CreateDirectory(profile);
         configureTimer.Tick+=(s,e)=>{configureTimer.Stop();Configure();};saveTimer.Tick+=(s,e)=>{saveTimer.Stop();SaveControls();};inputTimer.Tick+=(s,e)=>Tick();healthTimer.Tick+=(s,e)=>HealthCheck();
         overlay=new Overlay(this);var hwnd=overlay.Handle;frameTimer=new FrameClock(()=>{if(Interlocked.Exchange(ref frameQueued,1)==0&&!Native.PostMessage(hwnd,Program.FrameMessage,IntPtr.Zero,IntPtr.Zero))Interlocked.Exchange(ref frameQueued,0);});controls=new ControlsWindow(this);RestoreControls();if(!Test||Array.IndexOf(args,"--controls-test")>=0)controls.Show();overlay.BeginInvoke((Action)Start);
     }
+#if SELF_TEST
+    static int TestOption(string[] args,string name,int fallback,int minimum,int maximum){string prefix=name+"=";foreach(string arg in args)if(arg.StartsWith(prefix,StringComparison.Ordinal)){int value;if(int.TryParse(arg.Substring(prefix.Length),out value))return Math.Max(minimum,Math.Min(maximum,value));}return fallback;}
+#endif
     void Start(){try{
-        EmbeddedRuntime.Initialize(profile);renderer=new D2DRenderer(overlay.Handle);ready=true;
+        EmbeddedRuntime.Initialize(profile);renderer=new D2DRenderer(overlay.Handle);
+        ready=true;
         trayMenu=new ContextMenuStrip{BackColor=Color.White,ForeColor=Color.Black,Renderer=new SimpleTrayRenderer(),ShowImageMargin=false,ShowCheckMargin=false,Font=controls.Font};trayMenu.Items.Add("開啟面板",null,(s,e)=>ShowControls());
         visibilityItem=new ToolStripMenuItem();visibilityItem.Click+=(s,e)=>controls.VisibleValue.Checked=!controls.VisibleValue.Checked;trayMenu.Items.Add(visibilityItem);trayMenu.Items.Add(new ToolStripSeparator());trayMenu.Items.Add("退出",null,(s,e)=>Quit(0));trayMenu.Opening+=(s,e)=>UpdateVisibilityMenu();
         tray=new NotifyIcon{Icon=AppTheme.Icon,Text="滑鼠光跡",Visible=!Test,ContextMenuStrip=trayMenu};tray.DoubleClick+=(s,e)=>ShowControls();UpdateVisibilityMenu();
@@ -74,7 +81,7 @@ sealed partial class CursorHost : ApplicationContext {
 #endif
     }}
     public void ShowControls(){if(!quitting)controls.ShowPanel();}
-    internal void BeginColorEdit(){editingColors++;inputTimer.Stop();mouse=false;hasPoint=false;suppressedPress=false;StopAnimation(true);overlay.Display(false,false);}
+    internal void BeginColorEdit(){editingColors++;inputTimer.Stop();mouse=false;hasPoint=false;suppressedPress=false;activeInputUntil=0;StopAnimation(true);overlay.Display(false,false);}
     internal void EndColorEdit(){if(editingColors>0)editingColors--;if(editingColors==0)Configure();}
     // Block the actual window at the pointer, never a hidden panel rectangle.
     bool UiAt(Point point){
@@ -103,21 +110,59 @@ sealed partial class CursorHost : ApplicationContext {
             renderer.Appearance(controls.TrailColor.Value,controls.RippleColor.Value,controls.FragmentColor.Value);
             bool visible=editingColors==0&&controls.VisibleValue.Checked&&(controls.Trail.Checked||controls.ClickValue.Checked);blockedAbove=IntPtr.Zero;
             bool wasTop=(Native.GetWindowLongPtr(overlay.Handle,-20).ToInt64()&8)!=0;
+#if SELF_TEST
+            if(performanceTest){if(overlay.Visible)overlay.Display(false,false);}
+            else
+#endif
             if(overlay.Visible!=visible||visible&&!wasTop)overlay.Display(visible,true);
-            if(visible){inputTimer.Start();if(effects.Alive>0)Wake();else StopAnimation(true);}else{inputTimer.Stop();mouse=false;hasPoint=false;StopAnimation(true);}
+            if(visible){
+#if SELF_TEST
+                if(!performanceTest)inputTimer.Interval=idleInputInterval;
+#else
+                inputTimer.Interval=idleInputInterval;
+#endif
+                inputTimer.Start();if(effects.Alive>0)Wake();else StopAnimation(true);
+            }else{inputTimer.Stop();mouse=false;hasPoint=false;activeInputUntil=0;StopAnimation(true);}
             controls.Status.Visible=!renderer.Hardware;if(!renderer.Hardware)controls.Status.Text="目前使用軟體繪圖";
         }catch(Exception e){Fail(e.Message);}
     }
     public void DisplayChanged(){if(quitting)return;StopAnimation(true);hasPoint=false;Configure();}
     void HealthCheck(){long now=clock.ElapsedMilliseconds,gap=now-lastHealth;lastHealth=now;if(!ready||quitting||failed||!overlay.Visible)return;if(gap>4000)StopAnimation(true);if(Native.IsWindowEnabled(overlay.Handle)){Native.EnableWindow(overlay.Handle,false);if(Native.IsWindowEnabled(overlay.Handle))Fail("裝飾視窗輸入模式檢查失敗");}}
+    void SetInputInterval(int interval){if(inputTimer.Interval!=interval)inputTimer.Interval=interval;}
     void Tick(){
-        if(!ready||quitting||failed||!overlay.Visible)return;bool pressed=(Native.GetAsyncKeyState(1)&0x8000)!=0;
+#if SELF_TEST
+        if(performanceTest)performanceTimerTicks++;
+#endif
+        if(!ready||quitting||failed
+#if SELF_TEST
+        ||!overlay.Visible&&!performanceTest
+#else
+        ||!overlay.Visible
+#endif
+        )return;
+        // Poll the button directly even when the cursor is still: a click need not move it.
+        // State polling can miss a complete down/up pulse between idle samples.
+        bool pressed=(Native.GetAsyncKeyState(1)&0x8000)!=0;
 #if SELF_TEST
         if(performanceTest)return;
 #endif
-        if(!pressed&&!mouse)return;Point p;if(!Native.GetCursorPos(out p))return;if(pressed==mouse&&hasPoint&&p==previous)return;bool down=pressed&&!mouse;
-        bool blocked=UiAt(p);
-        if(down)suppressedPress=blocked;Pointer(p.X,p.Y,down,pressed,blocked||suppressedPress);inputMessages++;previous=p;hasPoint=true;mouse=pressed;if(!pressed)suppressedPress=false;
+        Point p=Point.Empty;bool positionValid=false;if(pressed||mouse)positionValid=Native.GetCursorPos(out p);
+        ProcessInputSample(pressed,positionValid,p,clock.ElapsedMilliseconds);
+    }
+    internal void ProcessInputSample(bool pressed,bool positionValid,Point p,long now){
+        if(pressed){
+            SetInputInterval(activeInputInterval);if(!positionValid)return;
+            bool down=!mouse,blocked=UiAt(p);
+            if(down)suppressedPress=blocked;
+            if(down||!hasPoint||p!=previous){Pointer(p.X,p.Y,down,true,blocked||suppressedPress);previous=p;hasPoint=true;}
+            mouse=true;return;
+        }
+        if(mouse){
+            if(!positionValid)p=hasPoint?previous:Point.Empty;bool blocked=UiAt(p);
+            Pointer(p.X,p.Y,false,false,blocked||suppressedPress);previous=p;hasPoint=true;mouse=false;suppressedPress=false;
+            activeInputUntil=now+inputGraceMilliseconds;SetInputInterval(activeInputInterval);return;
+        }
+        SetInputInterval(now<activeInputUntil?activeInputInterval:idleInputInterval);
     }
     void Pointer(double x,double y,bool down,bool pressed,bool blocked=false){effects.InputTimed(x,y,down,pressed,blocked,animating?(clock.Elapsed.TotalMilliseconds-lastFrame)/1000:0);Wake();}
     void Wake(){if(animating||failed||quitting||effects.Alive==0&&!effects.Dirty)return;animating=true;lastFrame=clock.Elapsed.TotalMilliseconds;nextFrame=lastFrame;frameTimer.Arm(0);}

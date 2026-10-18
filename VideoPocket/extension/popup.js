@@ -6,21 +6,23 @@ import {normalizePreferences,availableQuality} from './preferences.js';
 import {classifyFailure,briefFailure,visibleFailure,ERROR_VISIBILITY_MS} from './diagnostics.js';
 import {CAPTURE_PREFIX,CAPTURE_VERSION,captureScope as makeCaptureScope,captureKey as makeCaptureKey} from './subtitle-captures.js';
 import {FILENAME_HISTORY_KEY,filenameHistory,suggestedFilename} from './filenames.js';
+import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility} from './popup-state.js';
 import './destinations.js';
 const $=id=>document.getElementById(id);
 let tab,page,subtitle=null,kind='video',mediaIndex=0,info=null,tracks=[],probePromise,revision=0,chosenTrackId=null,jobTimer,jobRevision=0,captionPollTimer,captionPollActive=false,captionPollDeadline=0,captureScopeValue=null,captureRecords=[],captureRecord=null,currentCaptureKey=null,restoreRevision=0;
-let preferredKindPending=null,errorTimer,currentErrorId=null,usedFilenames=[];
+let preferredKindPending=null,errorTimer,currentErrorId=null,usedFilenames=[],sourceError='',sourceErrorDetail='';
 let sessionJobs=[];
 const openedAt=Date.now(),popupPort=chrome.runtime.connect({name:'popup'});
 const busyControls=new Set();
 let preferences=normalizePreferences(),preferenceWrites=Promise.resolve();
 function savePreference(key,value){preferences[key]=String(value);const stored={...preferences};preferenceWrites=preferenceWrites.catch(()=>{}).then(()=>chrome.storage.local.set({downloadPreferences:stored}));return preferenceWrites;}
 function sourceState(error='',detail=''){
-  const hasVideo=!!page?.videos?.length,multiple=hasVideo&&page.videos.length>1;
-  $('sourceLabel').textContent=error || '目前影片：';$('sourceLabel').classList.toggle('error',!!error);$('sourceLabel').title=detail;
-  $('pageTitle').hidden=!!error||multiple;$('mediaSelect').hidden=!multiple;
+  if(arguments.length){sourceError=error || '';sourceErrorDetail=detail || '';}
+  const hasVideo=!!page?.videos?.length,multiple=hasVideo&&page.videos.length>1,visibility=sourceVisibility({info,tracks,kind});
+  $('sourceLabel').textContent=sourceError || '目前影片：';$('sourceLabel').classList.toggle('error',!!sourceError);$('sourceLabel').title=sourceErrorDetail;
+  $('pageTitle').hidden=!!sourceError||!hasVideo||multiple;$('mediaSelect').hidden=!multiple;
   $('pageTitle').textContent=hasVideo?(page.videos[mediaIndex]?.title || page.title):'無影片';$('pageTitle').title=hasVideo?$('pageTitle').textContent:'';
-  $('downloadSection').hidden=!hasVideo;$('subtitleSection').hidden=!hasVideo||kind!=='subtitle';
+  $('downloadSection').hidden=!visibility.showDownloadSection;$('subtitleSection').hidden=!visibility.showSubtitleSection;
 }
 function notice(text='',error=false){if(error){showFailure({message:text});return;}$('notice').textContent=text;$('notice').hidden=!text;$('notice').classList.toggle('error',error);}
 async function send(action,data={}){const r=await chrome.runtime.sendMessage({action,...data});if(!r?.ok)throw Object.assign(new Error(r?.error || '操作失敗'),r?.failure || {});return r.result;}
@@ -41,11 +43,20 @@ function addTracks(){
   if(!tracks.length)$('language').add(new Option(captionPollActive?'讀取字幕中…':probePromise?'讀取中…':page?.captionStatus==='login-required'?'需要登入 Bilibili':'無字幕',''));
   if(!tracks.length&&!probePromise)subtitle=null;
   if(tracks.length&&preferredKindPending==='subtitle'){preferredKindPending=null;switchKind('subtitle',false);}
-  $('language').disabled=!tracks.length;updateSubtitleLabel();syncButtons();
+  syncModeTabs();sourceState();$('language').disabled=!tracks.length;updateSubtitleLabel();syncButtons();
 }
 function selectedCapability(){return kind==='video'?info?.choices?.video[$('videoFormat').value]:kind==='audio'?info?.choices?.audio[$('audioFormat').value]:null;}
 function activeDownloadJob(){return findActiveDownloadJob(sessionJobs,info?.downloadKey);}
-function syncButtons(){const active=activeDownloadJob(),locked=!!active;$('download').disabled=busyControls.has('download')||locked||!selectedCapability()?.enabled;$('download').title=locked?`${active.state==='queued'||active.state==='choosing'?'已加入下載':'下載中'}${selectedCapability()?.sizes?.[kind==='video'?$('height').value:$('audioQuality').value]?` · ${formatSize(selectedCapability().sizes[kind==='video'?$('height').value:$('audioQuality').value])}`:''}`:'';$('loadSubtitle').disabled=!tracks.length||busyControls.has('loadSubtitle')||captureRecord?.state==='running';$('language').disabled=!tracks.length||busyControls.has('loadSubtitle');$('subtitleFormat').disabled=busyControls.has('loadSubtitle');$('mediaSelect').disabled=busyControls.has('loadSubtitle');$('refresh').disabled=busyControls.has('loadSubtitle')||busyControls.has('refresh');$('copy').disabled=!subtitle||busyControls.has('copy');$('saveSubtitle').disabled=!subtitle||busyControls.has('saveSubtitle');$('subtitleTab').disabled=!tracks.length&&!captionPollActive||busyControls.has('loadSubtitle');$('subtitleTab').title=tracks.length?'字幕':captionPollActive?'等待字幕來源':probePromise?'讀取字幕來源中':page?.captionStatus==='login-required'?'請先登入 Bilibili':page?.captionStatus==='unavailable'?'字幕目前無法取得，請重新整理':'此影片沒有可下載字幕';updateDownloadLabel();}
+function syncModeTabs(){
+  const available=popupAvailability(info,tracks),busy=busyControls.has('loadSubtitle');
+  for(const name of ['video','audio','subtitle']){
+    const button=$(name+'Tab');button.disabled=!available[name]||busy;
+    button.title=available[name]?'':name==='subtitle'?(captionPollActive?'等待字幕來源':'此影片沒有可下載字幕'):'來源未提供可用格式';
+  }
+  const next=restoredKind(kind,available);
+  if(next!==kind){kind=next;for(const name of ['video','audio','subtitle']){$(name+'Tab').classList.toggle('active',name===kind);$(name+'Tab').setAttribute('aria-selected',String(name===kind));if(name!=='subtitle')$(name+'Settings').hidden=name!==kind;}$('subtitleSection').hidden=kind!=='subtitle';$('download').hidden=kind==='subtitle';}
+}
+function syncButtons(){const active=activeDownloadJob(),locked=!!active;syncModeTabs();const selected=selectedCapability();$('download').disabled=busyControls.has('download')||locked||!selected?.enabled;$('download').title=locked?`${active.state==='queued'||active.state==='choosing'?'已加入下載':'下載中'}${selected?.sizes?.[kind==='video'?$('height').value:$('audioQuality').value]?` · ${formatSize(selected.sizes[kind==='video'?$('height').value:$('audioQuality').value])}`:''}`:'';$('loadSubtitle').disabled=!tracks.length||busyControls.has('loadSubtitle')||captureRecord?.state==='running';$('language').disabled=!tracks.length||busyControls.has('loadSubtitle');$('subtitleFormat').disabled=busyControls.has('loadSubtitle');$('mediaSelect').disabled=busyControls.has('loadSubtitle');$('refresh').disabled=busyControls.has('loadSubtitle')||busyControls.has('refresh');$('copy').disabled=!subtitle||busyControls.has('copy');$('saveSubtitle').disabled=!subtitle||busyControls.has('saveSubtitle');$('subtitleTab').title=tracks.length?'字幕':captionPollActive?'等待字幕來源':probePromise?'讀取字幕來源中':page?.captionStatus==='login-required'?'請先登入 Bilibili':page?.captionStatus==='unavailable'?'字幕目前無法取得，請重新整理':'此影片沒有可下載字幕';sourceState();updateDownloadLabel();}
 function updateDownloadLabel(){if(kind==='subtitle')return;const capability=selectedCapability(),key=kind==='video'?$('height').value:$('audioQuality').value,size=capability?.sizes?.[key],ext=capability?.extensions?.[key],active=activeDownloadJob();if(ext)$(kind==='video'?'videoFormat':'audioFormat').options[0].textContent=ext.toUpperCase();$('download').textContent=active?(active.state==='queued'||active.state==='choosing'?'已加入下載':'下載中…'):(kind==='video'?'下載影片':'下載音檔')+(capability?.enabled?`（${formatSize(size)}）`:'');}
 function updateSubtitleLabel(){const end=subtitle?.cues?.reduce((n,c)=>Math.max(n,c.end),0);$('loadSubtitle').textContent=captureRecord?.state==='running'?'擷取中…':subtitle?('擷取（'+subtitle.cues.length+' 段 · '+clock(end).slice(0,-4)+(subtitle.partial?' · 部分':'')+'）'):'擷取';$('loadSubtitle').title=subtitle?.approximateEnds?'結束時間為推估':'';}
 function updatePreview(){if(subtitle)$('preview').value=exportSubtitle(subtitle,$('subtitleFormat').value).content;}
@@ -62,10 +73,10 @@ function applyInfo(){
     const desired=[...select.options].find(o=>o.value===preferences[id]&&!o.disabled),first=[...select.options].find(o=>!o.disabled);if(desired || first)select.value=(desired || first).value;
     select.disabled=![...select.options].some(o=>!o.disabled);
   }
-  updateQuality();addTracks();
+  updateQuality();syncModeTabs();addTracks();
 }
 async function inspect(token,force=false){
-  try{if(!sourceUrl()&&!page.platform)throw new Error('未找到此影片的個別下載網址');const selected=page.videos?.[mediaIndex] || {};const value=await send('inspect',{descriptor:{tabId:tab.id,documentId:page.documentId,url:sourceUrl(),referer:sourceReferer(),title:selected.title || page.title,duration:page.media?.duration,drm:page.media?.drm,platform:page.platform,mediaKey:selected.mediaKey ?? page.media?.mediaKey,frameId:selected.frameId ?? page.frameId,localMediaIndex:selected.localMediaIndex ?? page.localMediaIndex,mediaIndex},force});if(token!==revision)return;info=value;applyInfo();const usable=Object.values(info.choices.video).some(c=>c.enabled)||Object.values(info.choices.audio).some(c=>c.enabled);sourceState(usable?'':'未取得影片資訊',usable?'':'來源未提供可用影音格式',);notice();}
+  try{if(!sourceUrl()&&!page.platform)throw new Error('未找到此影片的個別下載網址');const selected=page.videos?.[mediaIndex] || {};const value=await send('inspect',{descriptor:{tabId:tab.id,documentId:page.documentId,url:sourceUrl(),referer:sourceReferer(),title:selected.title || page.title,duration:page.media?.duration,drm:page.media?.drm,platform:page.platform,mediaKey:selected.mediaKey ?? page.media?.mediaKey,frameId:selected.frameId ?? page.frameId,localMediaIndex:selected.localMediaIndex ?? page.localMediaIndex,mediaIndex},force});if(token!==revision)return;info=value;applyInfo();const usable=mediaAvailability(info).video||mediaAvailability(info).audio;sourceState(usable?'':'未取得影片資訊',usable?'':'來源未提供可用影音格式');notice();}
   catch(e){if(token===revision){info=null;applyInfo();sourceState('未取得影片資訊',e.message);notice();if(['HTTP_AUTH','HTTP_NOT_FOUND','HTTP_RATE_LIMIT','DRM_UNSUPPORTED','NETWORK_TIMEOUT','NETWORK_FAILURE'].includes(e.code))showFailure(e);}}
   finally{if(token===revision){probePromise=null;addTracks();}}
 }
@@ -132,9 +143,9 @@ async function refresh(force=false){
   stopBilibiliCaptionPolling();if(kind==='subtitle')preferredKindPending='subtitle';const token=++revision;page=null;info=null;tracks=[];subtitle=null;probePromise=null;captureScopeValue=null;captureRecords=[];captureRecord=null;currentCaptureKey=null;$('preview').value='';switchKind(kind==='subtitle'?'video':kind,false);applyInfo();
   notice();$('downloadSection').hidden=true;$('subtitleSection').hidden=true;$('sourceLabel').textContent='目前影片：';$('sourceLabel').classList.remove('error');$('pageTitle').hidden=false;$('pageTitle').textContent='讀取中…';$('mediaSelect').hidden=true;
   try{page=await send('snapshot',{tabId:tab.id,mediaIndex});}catch(e){if(token===revision)sourceState('未取得影片資訊',e.message);return;}
-  if(token!==revision)return;mediaIndex=page.mediaIndex || 0;sourceState();
+  if(token!==revision)return;mediaIndex=page.mediaIndex || 0;sourceState('','');
   $('mediaSelect').replaceChildren();for(const [i,v] of (page.videos || []).entries())$('mediaSelect').add(new Option(v.title,String(i)));$('mediaSelect').value=String(mediaIndex);$('mediaSelect').title=page.videos?.[mediaIndex]?.title || page.title;
-  if(!page.videos?.length){addTracks();return;}
+  if(!page.videos?.length){addTracks();if(!tracks.length)sourceState('未取得影片資訊','此分頁沒有可用媒體來源');return;}
   if(oldIdentity!==page.url+'|'+page.media?.url+'|'+page.mediaIndex)chosenTrackId=null;
   captureScopeValue=await makeCaptureScope(tab.id,page,mediaIndex);const all=await chrome.storage.session.get(null),prefix=CAPTURE_PREFIX+tab.id+':';captureRecords=Object.entries(all).filter(([key,record])=>key.startsWith(prefix)&&record?.version===CAPTURE_VERSION&&record.scope===captureScopeValue).map(([key,record])=>({key,...record}));
   const latest=[...captureRecords].filter(item=>['complete','running','failed'].includes(item.state)).sort((a,b)=>(b.finishedAt||b.startedAt||0)-(a.finishedAt||a.startedAt||0))[0];if(!chosenTrackId&&latest?.track?.trackId)chosenTrackId=latest.track.trackId;

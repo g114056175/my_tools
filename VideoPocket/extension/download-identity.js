@@ -5,6 +5,8 @@ export function downloadIdentity(descriptor = {}) {
   const site = String(platform.site || '').toLowerCase();
   const identity = site === 'youtube' && platform.id
     ? ['youtube', platform.id]
+    : ['instagram','twitch'].includes(site) && platform.id
+      ? [site, String(platform.id)]
     : site === 'bilibili' && (platform.bvid || platform.cid)
       ? ['bilibili', platform.bvid || '', Number(platform.cid) || 0, Number(platform.page) || 1]
       : [

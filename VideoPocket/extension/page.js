@@ -30,6 +30,35 @@ export async function pageSnapshot(mediaIndex=0){
     if(!Number.isFinite(Number(cid)) || Number(cid)<=0)return {valid:false,reason:'cid-missing',bvid:urlBvid,page:requested};
     return {valid:true,bvid:urlBvid,cid:Number(cid),page:requested};
   };
+  const instagramEmbedded=shortcode=>{
+    const wanted=String(shortcode||'');if(!wanted)return null;
+    const find=(value,depth=0)=>{
+      if(!value||depth>24)return null;
+      if(Array.isArray(value)){for(const item of value){const found=find(item,depth+1);if(found)return found;}return null;}
+      if(typeof value!=='object')return null;
+      const media=value.xig_polaris_media;
+      if(media&&typeof media==='object'){
+        const gated=media.if_not_gated_logged_out;
+        if(String(media.code||media.shortcode||'')===wanted||String(gated?.code||gated?.shortcode||'')===wanted)return gated||media;
+      }
+      for(const item of Object.values(value)){const found=find(item,depth+1);if(found)return found;}return null;
+    };
+    for(const node of document.querySelectorAll('script[type="application/json"][data-sjs]'))try{
+      const product=find(JSON.parse(node.textContent||''));if(!product)continue;
+      const versions=(Array.isArray(product.video_versions)?product.video_versions:[]).map(v=>({url:typeof v?.url==='string'?v.url:'',width:Number(v?.width)||0,height:Number(v?.height)||0,id:v?.id||v?.type})).filter(v=>/^https?:\/\//i.test(v.url)).sort((a,b)=>b.width*b.height-a.width*a.height);
+      return {versions,dash:typeof product.video_dash_manifest==='string'?product.video_dash_manifest:null,duration:Number(product.video_duration)||0,width:Number(product.original_width)||0,height:Number(product.original_height)||0};
+    }catch{}return null;
+  };
+  const twitchManifest=async raw=>{
+    let u;try{u=new URL(raw);}catch{return null;}if(!/(^|\.)twitch\.tv$/i.test(u.hostname))return null;
+    const id=u.pathname.match(/^\/videos\/(\d+)/i)?.[1];if(!id)return null;
+    const query='query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!, $platform: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isLive) { value signature } videoPlaybackAccessToken(id: $vodID, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isVod) { value signature } }';
+    try{
+      const response=await fetch('https://gql.twitch.tv/gql',{method:'POST',credentials:'include',headers:{Accept:'*/*','Client-ID':'kimne78kx3ncx6brgo4mv6wki5h1ko','Content-Type':'text/plain; charset=UTF-8'},body:JSON.stringify({operationName:'PlaybackAccessToken_Template',query,variables:{isLive:false,login:'',isVod:true,vodID:id,playerType:'site',platform:'web'}}),signal:AbortSignal.timeout(10000)});
+      if(!response?.ok)return {id,status:response?.status||0,errorCode:response?.status===401||response?.status===403?'TWITCH_ACCESS_DENIED':'TWITCH_API_HTTP'};const token=(await response.json())?.data?.videoPlaybackAccessToken;if(!token?.value||!token?.signature)return {id,unavailable:true,errorCode:'TWITCH_NO_TOKEN'};
+      const manifest=new URL(`https://usher.ttvnw.net/vod/${id}.m3u8`);manifest.search=new URLSearchParams({allow_source:'true',allow_audio_only:'true',allow_spectre:'true',p:String(Math.floor(1000000+Math.random()*9000000)),platform:'web',player:'twitchweb',supported_codecs:'av1,h265,h264',playlist_include_framerate:'true',sig:token.signature,token:token.value}).toString();return {id,url:manifest.href};
+    }catch(error){return {id,unavailable:true,errorCode:error?.name==='TimeoutError'?'TWITCH_API_TIMEOUT':'TWITCH_API_FAILED'};}
+  };
   const roots=[document];for(let i=0;i<roots.length;i++)for(const node of roots[i].querySelectorAll('*'))if(node.shadowRoot)roots.push(node.shadowRoot);
   const player=document.querySelector('#movie_player');
   const animePage=/(^|\.)ani\.gamer\.com\.tw$/.test(String(location.hostname).toLowerCase());
@@ -53,6 +82,19 @@ export async function pageSnapshot(mediaIndex=0){
   const source=v=>v.currentSrc || v.src || v.querySelector('source')?.src || '';
   const http=raw=>{try{const u=new URL(raw,location.href);return /^https?:$/.test(u.protocol)&&raw?u.href:null;}catch{return null;}};
   const resources=performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/\.(mpd|m3u8)(?:\?|$)/i.test(u));
+  let platform,captionStatus;
+  const currentUrl=new URL(location.href),igHost=/(^|\.)instagram\.com$/i.test(currentUrl.hostname),igCode=currentUrl.pathname.match(/^\/(?:reel|p|tv)\/([^/?#]+)/i)?.[1];
+  if(video&&videos.length===1&&igHost&&igCode){
+    const embedded=instagramEmbedded(igCode),best=embedded?.versions?.[0];
+    if(best?.url){candidates[0].adapterDownloadUrl=best.url;candidates[0].title=title;}
+    if(embedded)platform={site:'instagram',id:igCode,shortcode:igCode,title,duration:embedded.duration,width:embedded.width,height:embedded.height,versions:embedded.versions.map(v=>({url:v.url,width:v.width||embedded.width,height:v.height||embedded.height,id:v.id})),manifestXml:embedded.dash || undefined};
+  }
+  const twitchHost=/(^|\.)twitch\.tv$/i.test(currentUrl.hostname),twitchId=currentUrl.pathname.match(/^\/videos\/(\d+)/i)?.[1];
+  if(video&&videos.length===1&&twitchHost&&twitchId){
+    const twitch=await twitchManifest(currentUrl.href);
+    if(twitch?.url){candidates[0].adapterDownloadUrl=twitch.url;platform={site:'twitch',id:twitch.id,title,duration:Number.isFinite(video.duration)?video.duration:0,manifest:twitch.url};}
+    else if(twitch?.status || twitch?.errorCode)platform={site:'twitch',id:twitch.id,title,manifestUnavailable:true,status:twitch.status||0,errorCode:twitch.errorCode};
+  }
   const instances=[window.hls,window.player];try{if(typeof hls!=='undefined')instances.push(hls);if(typeof player!=='undefined')instances.push(player);}catch{}
   // Query existing Video.js players only. Calling videojs(id) would initialize
   // or alter a player; the registry and source getters leave playback alone.
@@ -113,7 +155,7 @@ export async function pageSnapshot(mediaIndex=0){
   const identities=window[Symbol.for('video-pocket.identities')] ||= {keys:new WeakMap(),next:0};
   for(const [i,v] of videos.entries()){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
-    const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=null;
+    const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
     if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{
@@ -146,7 +188,6 @@ export async function pageSnapshot(mediaIndex=0){
   }
   if(!captions.length){tracks.length=0;tracks.push(...(registry.tracks.get(video) || []));}
   window[Symbol.for('video-pocket.selection')]=registry;
-  let platform,captionStatus;
   if(video&&/(^|\.)anime1\.me$/.test(location.hostname)){
     const apiRequest=video.getAttribute('data-apireq');
     if(apiRequest&&apiRequest.length<=16384)platform={site:'anime1',apiRequest,title};

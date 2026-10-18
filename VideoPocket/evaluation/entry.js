@@ -1,0 +1,31 @@
+import {
+  ADTS,
+  BlobSource,
+  EncodedAudioPacketSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  Input,
+  MATROSKA,
+  MP3,
+  MP4,
+  MPEG_TS,
+  OGG,
+  Output,
+  AdtsOutputFormat,
+  MkvOutputFormat,
+  Mp3OutputFormat,
+  Mp4OutputFormat,
+  MpegTsOutputFormat,
+  OggOutputFormat,
+  StreamTarget,
+  WEBM,
+  WebMOutputFormat,
+} from 'mediabunny';
+
+globalThis.VideoPocketMediabunny = {
+  ADTS, BlobSource, EncodedAudioPacketSource,
+  EncodedPacketSink, EncodedVideoPacketSource, Input, MATROSKA, MP3,
+  MP4, MPEG_TS, OGG, Output, AdtsOutputFormat, MkvOutputFormat,
+  Mp3OutputFormat, Mp4OutputFormat, MpegTsOutputFormat, OggOutputFormat,
+  StreamTarget, WEBM, WebMOutputFormat,
+};

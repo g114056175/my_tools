@@ -12,6 +12,7 @@ import {parseTransportStreamCodecs} from './transport-stream.js';
 import {readMp4Metadata} from './mp4-metadata.js';
 import {createTransferProgress} from './transfer-progress.js';
 import {decryptHlsSample,hlsIv} from './hls-sample.js';
+import {assembleSegments} from './ordered-segments.js';
 const disk=globalThis.VideoPocketDiskMedia;
 const startupCleanup=disk.removeMediaFiles().catch(()=>{});
 
@@ -30,8 +31,8 @@ function playlistFormat(p,id,kind='video',ext='mp4'){
  const attrs=p.attributes || {},parsed=metadataCodecs(`codecs="${attrs.CODECS || ''}"`),height=attrs.RESOLUTION?.height || 0;
  return {id,url:p.resolvedUri || p.uri,segments:p.segments,mediaSequence:p.mediaSequence || 0,videoCodec:kind==='audio'?'':parsed.videoCodec || (height?'h264':''),audioCodec:kind==='audio'?parsed.audioCodec || 'aac':parsed.audioCodec,kind,height,ext,bitrate:attrs.BANDWIDTH || attrs['AVERAGE-BANDWIDTH'],averageBitrate:Number(attrs['AVERAGE-BANDWIDTH']) || 0,drm:protectedPlaylist(p)};
 }
-async function manifestSource(url,referer){
- const raw=await (await request(url,referer)).text(),formats=[],tracks=[];let duration;
+async function manifestSource(url,referer,inlineManifest){
+ const raw=inlineManifest ?? await (await request(url,referer)).text(),formats=[],tracks=[];let duration;
  if(raw.trimStart().startsWith('<')){
   if(/<ContentProtection\b/i.test(raw))throw new Error('此串流含 DRM 保護，未提供下載');
   const m=parseDash(raw,{manifestUri:url});if(!m.endList)throw new Error('目前僅支援已完成的影片串流');duration=m.duration;
@@ -118,6 +119,21 @@ async function inspect(m){
  let d=m.descriptor;if(d.drm)throw new Error('此影片含 DRM 保護，未提供下載');
  if(d.platform?.site==='anime1')d=await resolveAnime1(d,request);
  let source=d.platform?platformSource(d.platform):null;
+ if(d.platform?.site==='instagram'){
+  if(d.platform.manifestXml)try{source=await manifestSource(d.referer,d.referer,d.platform.manifestXml);}catch(error){if(classifyFailure(error).code==='DRM_UNSUPPORTED')throw error;}
+  if(!source?.formats?.length){
+   const formats=[];let firstError,duration=d.platform.duration || d.duration;
+   for(const [i,variant] of (d.platform.versions || []).slice(0,6).entries()){
+    try{const value=await progressive({...d,url:variant.url,height:variant.height || 0,duration});duration ||= value.duration;formats.push(...value.formats.map(f=>({...f,id:'instagram-'+i})));}catch(error){firstError ||= error;}
+   }
+   if(!formats.length&&firstError)throw firstError;
+   if(formats.length)source={title:d.title,duration,formats,tracks:[],requiresAudio:true};
+  }
+ }
+ if(d.platform?.site==='twitch'&&!d.platform.manifest){
+  const code=d.platform.errorCode;
+  throw Object.assign(new Error(code==='TWITCH_ACCESS_DENIED'?'來源拒絕存取':code==='TWITCH_API_TIMEOUT'?'來源讀取逾時':'未取得 Twitch 影片來源'),{code:code==='TWITCH_ACCESS_DENIED'?'HTTP_AUTH':code==='TWITCH_API_TIMEOUT'?'NETWORK_TIMEOUT':'SOURCE_UNAVAILABLE',status:d.platform.status});
+ }
  if(!source?.formats?.length){if(!d.url||/(youtube\.com|bilibili\.com)/.test(new URL(d.url).hostname))throw new Error('此播放器尚未提供可下載的原始來源');source=/\.(mpd|m3u8)(?:\?|$)/i.test(d.url)?await manifestSource(d.url,d.referer):await progressive(d);}
  source.id=crypto.randomUUID();source.referer=d.referer;source.descriptor=d;source.title ||= d.title;source.capability=mediaChoices(source);sources.set(source.id,source);if(sources.size>25){const removable=[...sources.values()].find(s=>!s.references&&s.id!==source.id);if(removable)sources.delete(removable.id);}
  return {id:source.id,title:source.title,duration:source.duration,platform:d.platform?.site || (/\.mpd(?:\?|$)/i.test(d.url || '')?'dash':/\.m3u8(?:\?|$)/i.test(d.url || '')?'hls':'html'),choices:source.capability.choices,tracks:source.tracks.map((t,i)=>({...t,source:'browser',pageTrackId:'browser:'+i,pageTrackIndex:i})),browserSourceId:source.id};
@@ -127,15 +143,16 @@ async function transfer(url,referer,signal,range,onBytes){
  while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;chunks.push(value);onBytes(value.length);}
  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return bytes;
 }
-async function downloadTrack(f,referer,signal,onBytes,scope,control,onSegment=()=>{}){
+async function downloadTrack(f,referer,signal,onBytes,scope,control,onSegment=()=>{},abortJob=()=>{}){
  const output=await disk.createMediaFile(scope,'input');
  if(!f.segments?.length){try{return await directTransfer(f,(url,options)=>request(url,referer,options),signal,onBytes,output,control);}catch(error){await output.abort();throw error;}}
- const jobs=[],seenMap=new Set(),keys=new Map();
+ const jobs=[],seenMap=new Set(),keys=new Map();let observedAssembly;
  for(const [i,s] of f.segments.entries()){if(s.map){const key=(s.map.resolvedUri || s.map.uri)+'|'+JSON.stringify(s.map.byterange);if(!seenMap.has(key)){jobs.push({url:s.map.resolvedUri || s.map.uri,range:s.map.byterange});seenMap.add(key);}}jobs.push({url:s.resolvedUri || absolute(s.uri,f.url),range:s.byterange,key:s.key,sequence:(f.mediaSequence || 0)+i,segmentIndex:i});}
- const parts=new Array(jobs.length);let cursor=0;
  try{
- await Promise.all(Array.from({length:Math.min(4,jobs.length)},async()=>{while(cursor<jobs.length){const index=cursor++,job=jobs[index];parts[index]=await control.run(async attemptSignal=>{
-  const partSink=await disk.createMediaFile(scope,'segment'),readSignal=AbortSignal.any([attemptSignal,AbortSignal.timeout(20000)]);
+ await assembleSegments(jobs,{concurrency:4,signal,wait:()=>control.wait(),download:async(job,index,assemblySignal)=>{
+  if(observedAssembly!==assemblySignal){observedAssembly=assemblySignal;assemblySignal.addEventListener('abort',()=>abortJob(assemblySignal.reason),{once:true});}
+  const result=await control.run(async attemptSignal=>{
+  const partSink=await disk.createMediaFile(scope,'segment'),readSignal=AbortSignal.any([attemptSignal,assemblySignal,AbortSignal.timeout(20000)]);
   try{if(job.key?.method==='AES-128'){
    let bytes=await transfer(job.url,referer,readSignal,job.range,()=>{}),url=job.key.resolvedUri || absolute(job.key.uri,f.url);
    if(!keys.has(url))keys.set(url,transfer(url,referer,readSignal,null,()=>{}).then(bytes=>crypto.subtle.importKey('raw',bytes,{name:'AES-CBC'},false,['decrypt'])).catch(error=>{keys.delete(url);throw error;}));
@@ -147,8 +164,12 @@ async function downloadTrack(f,referer,signal,onBytes,scope,control,onSegment=()
   }
   const result=await partSink.finish();onBytes(result.size);return result;
   }catch(error){await partSink.abort();throw error;}
- });if(job.segmentIndex!==undefined)onSegment(job.segmentIndex);}}));
- for(const part of parts){await control.wait();const reader=(await disk.readMediaFile(part.path)).stream().getReader();while(true){await control.wait();const {done,value}=await reader.read();if(done)break;await output.append(value);}await disk.removeMediaFile(part.path);}return await output.finish();
+  });if(job.segmentIndex!==undefined)onSegment(job.segmentIndex);return result;
+ },consume:async part=>{
+  const reader=(await disk.readMediaFile(part.path)).stream().getReader();
+  try{for(;;){await control.wait();const {done,value}=await reader.read();if(done)break;await output.append(value);}}catch(error){await reader.cancel().catch(()=>{});throw error;}finally{reader.releaseLock();}
+ },dispose:part=>disk.removeMediaFile(part.path)});
+ return await output.finish();
  }catch(error){await output.abort();throw error;}
 }
 
@@ -161,7 +182,7 @@ async function download(m){
  const controller=new AbortController();controllers.set(m.id,controller);const control=new TransferControl(controller.signal,state=>{void rpc('progress',{id:m.id,state}).catch(()=>{});},{interrupt:!source.sabr});controls.set(m.id,control);
  const progress=createTransferProgress([p.video,p.audio],p.size?.bytes);let last=0,lastPercent;
  const report=(force=false)=>{const percent=progress.percent();if(percent===lastPercent&&!force)return;if(force||Date.now()-last>250){last=Date.now();lastPercent=percent;void rpc('progress',{id:m.id,state:'running',progress:percent}).catch(()=>{});}};
- const trackDownload=async format=>{const result=await downloadTrack(format,source.referer,controller.signal,bytes=>{progress.bytes(format,bytes);report();},m.id,control,index=>{progress.segment(format,index);report();});progress.complete(format);report(true);return result;};
+ const trackDownload=async format=>{const result=await downloadTrack(format,source.referer,controller.signal,bytes=>{progress.bytes(format,bytes);report();},m.id,control,index=>{progress.segment(format,index);report();},reason=>controller.abort(reason));progress.complete(format);report(true);return result;};
  const onBytes=bytes=>{progress.bytes(p.video || p.audio,bytes);report();};
  try{
   // Storage estimates are advisory, not physical free space or a limit for unlimitedStorage.

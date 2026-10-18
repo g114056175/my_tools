@@ -9,6 +9,7 @@
 html{width:332px;min-width:332px}body{min-width:332px}#refresh{margin-left:auto}.source-label{max-width:calc(100% - 32px);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.job-row{grid-template-columns:minmax(0,1fr) auto 22px 22px}.job-row .icon-button{grid-column:4}.job-row .job-toggle{grid-column:3}.job-row progress{grid-column:1/-1}
 
 .diagnostic-row{display:flex;align-items:center;gap:5px;margin-top:7px;height:24px;font-size:10px;color:#a84040}.diagnostic-row span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.diagnostic-row .icon-button{font-size:15px;flex:0 0 22px}
+.source-label{max-width:calc(100% - 64px)}#pickMedia{font-size:20px;color:#477b69}#pickMedia:hover{background:#eaf5ef;color:#245842}
 
 /* Make the current-media selector read as an interactive control. */
 .source-row select:not([hidden]){height:28px;padding:0 8px;border:1px solid #86ad9d;border-radius:6px;background:#eff7f3;color:#214e3e;font-weight:600;cursor:pointer;box-shadow:0 1px 2px #214e3e12}

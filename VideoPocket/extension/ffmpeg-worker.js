@@ -1,7 +1,15 @@
 importScripts('destinations.js', 'disk-media.js', 'opfs-filesystem.js', 'vendor/ffmpeg-core.js');
 let core,cancelled=false;
 const disk=self.VideoPocketDiskMedia;
-async function initCore(){const coreURL=new URL('vendor/ffmpeg-core.js',self.location.href).href,wasmURL=new URL('vendor/ffmpeg-core.wasm',self.location.href).href;return core ||= await createFFmpegCore({mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL,workerURL:''})),print:()=>{},printErr:()=>{}});}
+async function initCore(){
+ const coreURL=new URL('vendor/ffmpeg-core.js',self.location.href).href,wasmURL=new URL('vendor/ffmpeg-core.wasm',self.location.href).href;let logger;
+ const instance=await createFFmpegCore({mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL,workerURL:''})),locateFile:name=>name.endsWith('.wasm')?wasmURL:new URL('vendor/'+name,self.location.href).href,noInitialRun:true,noExitRuntime:true,print:()=>{},printErr:message=>logger?.({message})});
+ if(typeof instance.exec!=='function'){
+  instance.exec=(...args)=>{try{const result=instance.callMain(['-nostdin','-y',...args]);return Number.isInteger(result)?result:0;}catch(error){if(error.name==='ExitStatus')return error.status;throw error;}};
+  instance.setLogger=callback=>{logger=callback;};instance.setProgress=()=>{};instance.reset=()=>{};
+ }
+ return instance;
+}
 onmessage=async({data})=>{
  if(data.action==='cancel'){cancelled=true;return;}cancelled=false;
  const mounts=[];let output,finished=false,failureCode;

@@ -42,5 +42,28 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "media-observer.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN",
+      "match_origin_as_fallback": true
+    }
+  ],
+  "commands": {
+    "pick-media": {
+      "suggested_key": {
+        "default": "Alt+Shift+V"
+      },
+      "description": "在網頁指定要下載的影片"
+    }
   }
 }

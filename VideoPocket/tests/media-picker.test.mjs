@@ -1,0 +1,61 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {MEDIA_PICKER_ACTIONS, matchRememberedMedia, rememberedMediaSelector, startMediaPicker} from '../extension/media-picker.js';
+
+class NodeMock {
+  constructor(tag, rect = {}) { this.tagName = tag.toUpperCase(); this.style = {}; this.attrs = {}; this.children = []; this.parentNode = null; this.rect = {left: 0, top: 0, width: 100, height: 60, ...rect}; }
+  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
+  remove() { this.parentNode?.children.splice(this.parentNode.children.indexOf(this), 1); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] || null; }
+  querySelectorAll(selector) { return selector === 'video' ? (this.videos || []) : []; }
+  querySelector() { return null; }
+  getBoundingClientRect() { return this.rect; }
+}
+
+function world(videos) {
+  const listeners = new Map();
+  const body = new NodeMock('body'); body.videos = videos;
+  const documentMock = {
+    body, documentElement: body,
+    querySelectorAll: selector => selector === 'video' ? videos : [],
+    addEventListener(type, fn) { const list = listeners.get(type) || []; list.push(fn); listeners.set(type, list); },
+    removeEventListener(type, fn) { listeners.set(type, (listeners.get(type) || []).filter(item => item !== fn)); },
+    dispatch(type, event = {}) { for (const fn of [...(listeners.get(type) || [])]) fn(event); },
+    createElement: tag => new NodeMock(tag),
+  };
+  const old = {document: globalThis.document, location: globalThis.location};
+  globalThis.document = documentMock; globalThis.location = {href: 'https://example.test/feed'};
+  return {documentMock, restore() { globalThis.document = old.document; globalThis.location = old.location; }};
+}
+
+test('selector remembers mediaKey/frame/document and matches a later snapshot', () => {
+  const selection = {mediaKey: 22, frameId: 3, documentId: 'doc-1', localMediaIndex: 1};
+  assert.deepEqual(rememberedMediaSelector(selection), {...selection, url: null});
+  assert.equal(matchRememberedMedia({frameId: 3, documentId: 'doc-1', videos: [{mediaKey: 11}, {mediaKey: 22, title: '第二部'}]}, selection).title, '第二部');
+  assert.equal(matchRememberedMedia({frameId: 2, documentId: 'doc-1', videos: [{mediaKey: 22}]}, selection), null);
+});
+
+test('picker selects the hovered second video and prevents site click', async () => {
+  const first = new NodeMock('video', {left: 0}); const second = new NodeMock('video', {left: 120});
+  second.title = '第二部'; const state = world([first, second]);
+  try {
+    const picked = startMediaPicker({requestId: 'r1', frameId: 4, documentId: 'doc'});
+    state.documentMock.dispatch('pointermove', {clientX: 130, clientY: 20, composedPath: () => [second]});
+    let prevented = false; let stopped = false;
+    state.documentMock.dispatch('click', {clientX: 130, clientY: 20, composedPath: () => [second], preventDefault: () => { prevented = true; }, stopImmediatePropagation: () => { stopped = true; }});
+    const result = await picked;
+    assert.equal(result.action, MEDIA_PICKER_ACTIONS.selected); assert.equal(result.localMediaIndex, 1); assert.equal(result.frameId, 4); assert.equal(result.documentId, 'doc');
+    assert.equal(prevented, true); assert.equal(stopped, true); assert.equal(state.documentMock.body.children.length, 0, 'picker overlay and label are cleaned up');
+  } finally { state.restore(); }
+});
+
+test('Escape cancels and removes the active overlay without touching playback', async () => {
+  const video = new NodeMock('video'); video.currentTime = 12; const state = world([video]);
+  try {
+    const pending = startMediaPicker({requestId: 'r2'});
+    state.documentMock.dispatch('keydown', {key: 'Escape', preventDefault() {}, stopImmediatePropagation() {}});
+    const result = await pending;
+    assert.equal(result.action, MEDIA_PICKER_ACTIONS.cancelled); assert.equal(video.currentTime, 12); assert.equal(state.documentMock.body.children.length, 0);
+  } finally { state.restore(); }
+});

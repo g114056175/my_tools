@@ -8,9 +8,12 @@ import {classifyFailure,ERROR_VISIBILITY_MS} from './diagnostics.js';
 import {CAPTURE_PREFIX,CAPTURE_VERSION,createSubtitleCaptureManager} from './subtitle-captures.js';
 import {loadBilibiliSubtitle} from './bilibili-subtitles.js';
 import {fileStem,createFilenameRecorder} from './filenames.js';
-import {downloadKey,createDownloadClaims} from './download-identity.js';
+import {downloadKey,createDownloadClaims,stableHash} from './download-identity.js';
 import {mediaRequestHeaders} from './media-request-headers.js';
+import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from './media-selection-controller.js';
 import './destinations.js';
+const mediaPicker=createMediaSelectionController(chrome);
+chrome.commands?.onCommand?.addListener(command=>{if(command==='pick-media')void chrome.tabs.query({active:true,lastFocusedWindow:true}).then(([tab])=>tab?.id&&mediaPicker.begin(tab.id)).catch(()=>{});});
 let creating,jobUpdates=Promise.resolve(),runningJob=null,headerWrites=Promise.resolve(),ruleId=100;
 const work=new Map(),queue=[],popupViews=new Set(),downloads=new Map(),headerRules=new Map();
 const downloadClaims=createDownloadClaims();
@@ -123,11 +126,15 @@ const captureRecoveryReady=chrome.storage.session.get(null).then(async all=>{
  if(remove.length)await chrome.storage.session.remove(remove);
  if(Object.keys(updates).length)await chrome.storage.session.set(updates);
 }).catch(()=>{});
-async function snapshot(tabId,index=0){
+async function snapshot(tabId,index=0,preferPicked=true){
+  await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',files:['media-observer.js']}).catch(()=>{});
   const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0]});
   frames.sort((a,b)=>a.frameId-b.frameId);
   const top=frames.find(f=>f.frameId===0)?.result;if(!top)throw new Error('無法讀取目前網頁');
   const videos=frames.flatMap(f=>(f.result?.videos || []).map((v,i)=>({...v,frameId:f.frameId,documentId:f.documentId,localMediaIndex:i})));
+  const key=selectionStorageKey(tabId),remembered=(await chrome.storage.session.get(key))[key];let selectionExpired=false;
+  if(remembered&&preferPicked){const rememberedIndex=selectedMediaIndex(videos,remembered,top.url);if(rememberedIndex>=0)index=rememberedIndex;else{selectionExpired=remembered.pageToken===stableHash(top.url);if(!selectionExpired)await chrome.storage.session.remove(key);}}
+  if(!preferPicked&&remembered)await chrome.storage.session.remove(key);
   index=Math.max(0,Math.min(Number(index)||0,videos.length-1));const selected=videos[index];
   let page=selected?frames.find(f=>f.frameId===selected.frameId)?.result:top;
   if(selected?.localMediaIndex)page=await script(tabId,pageSnapshot,[selected.localMediaIndex],selected.documentId);
@@ -139,7 +146,7 @@ async function snapshot(tabId,index=0){
    else if(discovery.error){page.captionStatus='unavailable';page.captionFailure=classifyFailure(discovery.error,'subtitle');}
    else page.captionStatus='loading';
   }
-  return {...page,url:top.url,videos,mediaIndex:index,frameId:selected?.frameId,documentId:selected?.documentId,localMediaIndex:selected?.localMediaIndex,preferredLanguages:top.preferredLanguages,language:top.language};
+  return {...page,url:top.url,videos,mediaIndex:index,selectionExpired,frameId:selected?.frameId,documentId:selected?.documentId,localMediaIndex:selected?.localMediaIndex,preferredLanguages:top.preferredLanguages,language:top.language};
 }
 
 const sessionReady=(async()=>{const {runSession}=await chrome.storage.session.get('runSession');if(!runSession){await chrome.storage.session.set({runSession:crypto.randomUUID()});await engine('cleanup');await VideoPocketDestinations.clear();}})().catch(()=>{});
@@ -147,7 +154,8 @@ async function handle(message,sender){
  if(!['assetHeaders','progress','heartbeat','youtubeSession'].includes(message.action))await Promise.all([sessionReady,captureRecoveryReady]);
  switch(message.action){
   case 'rememberFilename':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');await rememberFilename(message.name);return {};
-  case 'snapshot':return snapshot(message.tabId,message.mediaIndex || 0);
+  case 'pickMedia':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');return mediaPicker.begin(message.tabId);
+  case 'snapshot':return snapshot(message.tabId,message.mediaIndex || 0,message.preferPicked!==false);
   case 'bilibiliCaptions':return discoverBilibili(message.tabId,{bvid:message.expectedBvid,page:Number(message.expectedPage)||1,expectedCid:Number(message.expectedCid)||0},message.documentId).promise;
   case 'inspect':{const descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)};const result=await engine('inspect',{descriptor});result.downloadKey=descriptor.downloadKey;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:descriptor.downloadKey});if(sourceMeta.size>100)sourceMeta.delete(sourceMeta.keys().next().value);return result;}
   case 'browserSubtitle':return engine('subtitle',{sourceId:message.sourceId,index:message.index});
@@ -183,7 +191,7 @@ async function handle(message,sender){
  }
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{if(message.target==='offscreen'||sender.id!==chrome.runtime.id)return;handle(message,sender).then(result=>respond({ok:true,result})).catch(error=>{const stage=/Subtitle$/.test(message.action)?'subtitle':message.action==='snapshot'?'detect':'inspect';const failure=classifyFailure(error,stage);if(['pageSubtitle','browserSubtitle','download','prepareDownload'].includes(message.action)&&failure.code!=='CANCELLED')recordFailure(error,{stage,action:stage==='subtitle'?'subtitle':message.action==='snapshot'?'snapshot':'inspect',platform:message.platform || message.descriptor?.platform?.site || sourceMeta.get(message.sourceId)?.platform});respond({ok:false,error:failure.message,failure});});return true;});
-chrome.tabs.onRemoved.addListener(tabId=>{for(const key of biliDiscoveries.keys())if(JSON.parse(key)[0]===tabId)biliDiscoveries.delete(key);void subtitleCaptures.removeTab(tabId).catch(()=>{});});
+chrome.tabs.onRemoved.addListener(tabId=>{void mediaPicker.stop(tabId).catch(()=>{});void chrome.storage.session.remove(selectionStorageKey(tabId)).catch(()=>{});for(const key of biliDiscoveries.keys())if(JSON.parse(key)[0]===tabId)biliDiscoveries.delete(key);void subtitleCaptures.removeTab(tabId).catch(()=>{});});
 // Chrome restarts cannot resume in-memory signed sources or WebAssembly work.
 void chrome.storage.session.get('jobs').then(({jobs=[]})=>{if(jobs.some(j=>ACTIVE_STATES.has(j.state)))return chrome.storage.session.set({jobs:jobs.map(j=>ACTIVE_STATES.has(j.state)?{...j,state:'error',message:'擴充功能已重新載入，請重新下載',finishedAt:Date.now()}:j)});});
 void chrome.action.setBadgeText({text:''});

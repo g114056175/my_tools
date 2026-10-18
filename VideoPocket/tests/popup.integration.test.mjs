@@ -21,7 +21,7 @@ class Element {
   get clientHeight() { return 24; }
 }
 class DocumentMock {
-  constructor() { this.nodes = new Map(); for (const id of ['sourceLabel','pageTitle','mediaSelect','refresh','downloadSection','subtitleSection','videoTab','audioTab','subtitleTab','videoSettings','audioSettings','videoFormat','audioFormat','height','audioQuality','download','language','subtitleFormat','loadSubtitle','subtitleContent','preview','copy','saveSubtitle','job','notice','diagnosticRow','diagnosticText','dismissError']) this.nodes.set(id, new Element(id.includes('Select') || ['mediaSelect','videoFormat','audioFormat','height','audioQuality','language','subtitleFormat'].includes(id) ? 'select' : 'div')); }
+  constructor() { this.nodes = new Map(); for (const id of ['sourceLabel','pageTitle','mediaSelect','pickMedia','refresh','downloadSection','subtitleSection','videoTab','audioTab','subtitleTab','videoSettings','audioSettings','videoFormat','audioFormat','height','audioQuality','download','language','subtitleFormat','loadSubtitle','subtitleContent','preview','copy','saveSubtitle','job','notice','diagnosticRow','diagnosticText','dismissError']) this.nodes.set(id, new Element(id.includes('Select') || ['mediaSelect','videoFormat','audioFormat','height','audioQuality','language','subtitleFormat'].includes(id) ? 'select' : 'div')); }
   getElementById(id) { return this.nodes.get(id); }
   createElement(tag) { return new Element(tag); }
 }

@@ -4,9 +4,10 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 import {ACTIVE_STATES} from '../extension/jobs.js';
-import {downloadKey,createDownloadClaims} from '../extension/download-identity.js';
+import {downloadKey,createDownloadClaims,stableHash} from '../extension/download-identity.js';
+import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from '../extension/media-selection-controller.js';
 
-async function loadBackground() {
+async function loadBackground({frames=[]}={}) {
   const source=await fs.readFile(new URL('../extension/background.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const stored={};let listener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,retainRelease;
@@ -27,7 +28,7 @@ async function loadBackground() {
     offscreen:{createDocument:async()=>{}},
     declarativeNetRequest:{getSessionRules:async()=>[],updateSessionRules:async()=>{}},
     downloads:{onChanged:{addListener:()=>{}},search:async()=>[],cancel:async()=>{},pause:async()=>{},resume:async()=>{}},
-    scripting:{executeScript:async()=>[]},
+    scripting:{executeScript:async request=>request.files?[]:frames},
     tabs:{onRemoved:{addListener:()=>{}}},
     windows:{onRemoved:{addListener:()=>{}},getAll:async()=>[{}]},
     action:{setBadgeText:async()=>{}}
@@ -37,13 +38,24 @@ async function loadBackground() {
     ACTIVE_STATES, youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:e=>({code:e?.code||'INTERNAL_ERROR',message:e?.message||String(e)}),ERROR_VISIBILITY_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,createFilenameRecorder:()=>async()=>{},mediaRequestHeaders:()=>[],
     VideoPocketDestinations:{remove:async()=>{},clear:async()=>{},get:async()=>false},
-    downloadKey,createDownloadClaims};
+    downloadKey,createDownloadClaims,stableHash,createMediaSelectionController,selectionStorageKey,selectedMediaIndex};
   vm.runInNewContext(code,context,{filename:'background.js'});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(typeof listener,'function');
   const call=(message,sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:'popup-doc'})=>new Promise((resolve,reject)=>listener(message,sender,response=>response?.ok?resolve(response.result):reject(Object.assign(new Error(response?.error||'failed'),response?.failure||{}))));
-  return {call,get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
+  return {call,stored,get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
 }
+
+test('snapshot restores the exact picked frame and keeps a stale choice blocked across popup reopen',async()=>{
+ const url='https://example.test/feed',a={mediaKey:1,url:'blob:a',downloadUrl:'https://cdn/a.mp4'},b={mediaKey:1,url:'blob:b',downloadUrl:'https://cdn/b.mp4',mediaIdentity:'post-b'};
+ const frames=[{frameId:0,documentId:'top',result:{url,videos:[a],tracks:[]}},{frameId:2,documentId:'child',result:{url:'https://example.test/frame',videos:[b],tracks:[]}}];
+ const rt=await loadBackground({frames});
+ rt.stored[selectionStorageKey(7)]={frameId:2,documentId:'child',mediaKey:1,pageToken:stableHash(url),sourceToken:stableHash('blob:b'),modelToken:stableHash('post-b')};
+ const chosen=await rt.call({action:'snapshot',tabId:7});assert.equal(chosen.mediaIndex,1);assert.equal(chosen.documentId,'child');
+ b.mediaIdentity='post-c';
+ for(let i=0;i<2;i++){const stale=await rt.call({action:'snapshot',tabId:7});assert.equal(stale.selectionExpired,true);assert.ok(rt.stored[selectionStorageKey(7)]);}
+ const explicit=await rt.call({action:'snapshot',tabId:7,mediaIndex:0,preferPicked:false});assert.equal(explicit.selectionExpired,false);assert.equal(rt.stored[selectionStorageKey(7)],undefined);
+});
 
 test('background inspect sources atomically deduplicates same media and releases after cancel',async()=>{
   const rt=await loadBackground(),descriptor={tabId:7,documentId:'doc',frameId:0,mediaKey:22,url:'https://cdn/video',title:'Episode'};

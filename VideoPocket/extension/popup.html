@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VideoPocket</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <div class="source-row"><span id="sourceLabel" class="source-label">目前影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" hidden></select><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊">↻</button></div>
+  <div class="source-row"><span id="sourceLabel" class="source-label">目前影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" hidden></select><button id="pickMedia" class="icon-button" title="在網頁選取影片（Alt+Shift+V）" aria-label="在網頁選取影片">⌖</button><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊">↻</button></div>
   <main>
     <section id="downloadSection" aria-label="下載" hidden>
       <div class="section-heading"><h2>下載</h2><div class="switch" role="tablist" aria-label="下載類型"><button id="videoTab" role="tab" aria-selected="true" class="active">影片</button><button id="audioTab" role="tab" aria-selected="false">音檔</button><button id="subtitleTab" role="tab" aria-selected="false" disabled title="無字幕">字幕</button></div></div>

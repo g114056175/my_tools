@@ -28,10 +28,11 @@ function documentFor(videos,wrappers=[],title='MMOV'){
   };
 }
 
-async function snapshot({videos,players=[],wrappers=[],resources=[],mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV'}){
+async function snapshot({videos,players=[],wrappers=[],resources=[],observer,mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV'}){
   const saved=new Map();
   const values={document:documentFor(videos,wrappers,pageTitle),window:{videojs:players.length?{getAllPlayers:()=>players}:undefined},location:{href:'https://hk.mmov.io/vodplay/416398/6-1.html',hostname:'hk.mmov.io',origin:'https://hk.mmov.io',pathname:'/vodplay/416398/6-1.html',search:''},performance:{getEntriesByType:kind=>kind==='resource'?resources.map(name=>({name})):[]}};
   const url=new URL(pageUrl);values.location={href:url.href,hostname:url.hostname,origin:url.origin,pathname:url.pathname,search:url.search};
+  if(observer)values.window[Symbol.for('video-pocket.mediaObserver')]=observer;
   for(const [key,value] of Object.entries(values)){
     saved.set(key,Object.prototype.hasOwnProperty.call(globalThis,key)?globalThis[key]:absent);
     globalThis[key]=value;
@@ -40,6 +41,16 @@ async function snapshot({videos,players=[],wrappers=[],resources=[],mediaIndex=0
     for(const [key,value] of saved){if(value===absent)delete globalThis[key];else globalThis[key]=value;}
   }
 }
+
+test('generic observer source belongs to the selected video, not global resource guesses',{concurrency:false},async()=>{
+ const a=video(),b=video();
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:v=>({candidates:v===b?[{url:'https://cdn/endpoint',kind:'dash',downloadable:true}]:[],reason:'no-associated-source'})};
+ const page=await snapshot({videos:[a,b],observer,mediaIndex:1,resources:['https://ads/ad.m3u8'],pageUrl:'https://new.example/feed'});
+ assert.equal(page.videos[0].downloadUrl,null);assert.equal(page.videos[1].downloadUrl,'https://cdn/endpoint');assert.equal(page.videos[1].sourceType,'dash');
+ const model={id:'post-b',versions:[{url:'https://cdn/post-b.mp4'}]};observer.modelFor=v=>v===b?model:null;
+ const selected=await snapshot({videos:[a,b],observer,mediaIndex:1,pageUrl:'https://new.example/feed'});assert.equal(selected.platform.id,'post-b');assert.equal(selected.platform.site,'embedded');
+ const first=await snapshot({videos:[a,b],observer,mediaIndex:0,pageUrl:'https://new.example/feed'});assert.equal(first.platform,undefined);
+});
 
 function playerFor(v,source,{currentSrc=source,currentSource=()=>({src:source})}={}){
   return {el:()=>({contains:node=>node===v}),currentSource,currentSrc:()=>currentSrc,currentSources:()=>[],play:()=>{throw new Error('play must not be called')},pause:()=>{throw new Error('pause must not be called')},currentTime:()=>{throw new Error('seek must not be called')}};

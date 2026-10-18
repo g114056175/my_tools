@@ -4,7 +4,7 @@ All executable browser assets are local. No runtime npm install, CDN fetch, nati
 
 | Component | Version | License | Source |
 |---|---|---|---|
-| @ffmpeg/core (single-thread UMD JS + WASM, unmodified npm distribution) | 0.12.10 | GPL-2.0-or-later, plus underlying FFmpeg/external-library terms | https://github.com/ffmpegwasm/ffmpeg.wasm/tree/main/packages/core |
+| FFmpeg (custom single-thread WebAssembly, native codecs, stream-copy build) | 5.1.4 | LGPL-2.1-or-later; Emscripten runtime MIT | https://ffmpeg.org/releases/ffmpeg-5.1.4.tar.gz |
 | m3u8-parser | 7.2.0 | Apache-2.0 | https://github.com/videojs/m3u8-parser |
 | mpd-parser | 1.4.0 | Apache-2.0 | https://github.com/videojs/mpd-parser |
 | @videojs/vhs-utils | 4.1.2 | MIT | https://github.com/videojs/vhs-utils |
@@ -16,17 +16,14 @@ All executable browser assets are local. No runtime npm install, CDN fetch, nati
 
 Notices and license texts are in `licenses/`. `parsers.js` bundles the two manifest parsers and their listed dependencies. `sabr.js` bundles SabrStream and VideoPlaybackAbrRequest with their UMP/protobuf helpers. Application modules are provided as readable JavaScript. No dynamic attestation interpreter or remote download service is included.
 
-FFmpeg WebAssembly is a compiled browser library, not an installed FFmpeg program. The upstream core's license is distinct from the MIT JavaScript wrapper (the latter is not used here). Upstream explains this in https://ffmpegwasm.netlify.app/docs/faq/ . Core build sources, Dockerfiles, build scripts and pinned third-party source locations are at https://github.com/ffmpegwasm/ffmpeg.wasm ; original FFmpeg source and licenses are at https://ffmpeg.org/download.html and https://ffmpeg.org/legal.html . The distributed core files have not been modified.
+## FFmpeg WebAssembly build
 
-For development, bundle `Parser` from m3u8-parser and `parse` from mpd-parser with esbuild for an ESM browser target. Build the pinned googlevideo commit's protobuf/ESM sources and bundle SabrStream plus VideoPlaybackAbrRequest. Copy the two UMD core assets from @ffmpeg/core/dist/umd. These are build steps; extension users do not execute them.
+This local test build replaces @ffmpeg/core 0.12.10 with a custom FFmpeg 5.1.4 single-thread core. It includes WORKERFS input and an application OPFS output filesystem, and is loaded only when remuxing or extracting audio. Application code is MIT; FFmpeg retains LGPL-2.1-or-later. No external codec libraries or encoders are enabled. Emscripten runtime terms are in `licenses/emscripten.txt`, FFmpeg terms in `licenses/LGPL-2.1.txt`.
 
-## Corresponding build sources
+The separate corresponding-source archive accompanying this local delivery includes clean FFmpeg source, configuration/build scripts, source URLs, licenses and asset SHA-256. It is not required at runtime. The original stable extension retains its previous unchanged core and licensing notices. See the local optimization report for exact resulting binary sizes and hashes.
 
-The unchanged UMD core matches the official npm package `@ffmpeg/core@0.12.10` byte-for-byte:
+Build tools: Emscripten 3.1.40 and its wasm-opt, FFmpeg 5.1.4. Native FFmpeg/ffprobe used for QA are not shipped. The JavaScript adapter invokes callMain with `-nostdin -y` and the application's stream-copy arguments; it does not add transcoding.
 
-- `ffmpeg-core.js` SHA-256: `B266AB5B952555881DD6310663986994A182ACB2B7FF25CF10A25F7A37AC2B21`
-- `ffmpeg-core.wasm` SHA-256: `9F57947A5BD530D8F00C5B3F2CB2A3492FAA7E5D823315342D6A8656D0A6B7B7`
+## Other bundles
 
-Upstream build sources: [ffmpeg.wasm commit 71aa99d37c02a7b4c435275ca9ef50e612f6efa1](https://github.com/ffmpegwasm/ffmpeg.wasm/tree/71aa99d37c02a7b4c435275ca9ef50e612f6efa1), FFmpeg `n5.1.4`, Emscripten `3.1.40`, and the external libraries listed by its Dockerfile. A separate [source attachment](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/videoPocket-third-party-sources-v1.0.0.zip) accompanies the runtime ZIP on the same release. It includes those library source archives with their license files, upstream build scripts, fixed source revisions and SHA-256 manifest. It is not needed to install or use the extension.
-
-The Dockerfile's LAME and x264 branch inputs are pinned in that attachment to the same commits found in upstream history before the npm release and at packaging time. The build environment has not been reproduced, so this is not a bit-for-bit rebuild claim. Other bundled components retain their source links and license notices above and in `licenses/`.
+`parsers.js` and `sabr.js` retain the source and notices listed above. `media-observer.js` is a local IIFE bundle of this project's media-evidence, media-models and media-observer-source modules. Rebuild with the development-only esbuild script under `build/`; no CDN, downloaded runtime code, Python, native helper or server is used by extension users.

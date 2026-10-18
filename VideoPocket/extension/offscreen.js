@@ -119,8 +119,9 @@ async function inspect(m){
  let d=m.descriptor;if(d.drm)throw new Error('此影片含 DRM 保護，未提供下載');
  if(d.platform?.site==='anime1')d=await resolveAnime1(d,request);
  let source=d.platform?platformSource(d.platform):null;
- if(d.platform?.site==='instagram'){
-  if(d.platform.manifestXml)try{source=await manifestSource(d.referer,d.referer,d.platform.manifestXml);}catch(error){if(classifyFailure(error).code==='DRM_UNSUPPORTED')throw error;}
+ if(d.platform?.site==='instagram'||d.platform?.site==='embedded'){
+  if(d.platform.manifestXml)try{source=await manifestSource(d.platform.manifestUrl || d.referer,d.referer,d.platform.manifestXml);}catch(error){if(classifyFailure(error).code==='DRM_UNSUPPORTED')throw error;}
+  if(!source?.formats?.length&&d.platform.manifestUrl)try{source=await manifestSource(d.platform.manifestUrl,d.referer);}catch(error){if(classifyFailure(error).code==='DRM_UNSUPPORTED')throw error;}
   if(!source?.formats?.length){
    const formats=[];let firstError,duration=d.platform.duration || d.duration;
    for(const [i,variant] of (d.platform.versions || []).slice(0,6).entries()){
@@ -134,7 +135,7 @@ async function inspect(m){
   const code=d.platform.errorCode;
   throw Object.assign(new Error(code==='TWITCH_ACCESS_DENIED'?'來源拒絕存取':code==='TWITCH_API_TIMEOUT'?'來源讀取逾時':'未取得 Twitch 影片來源'),{code:code==='TWITCH_ACCESS_DENIED'?'HTTP_AUTH':code==='TWITCH_API_TIMEOUT'?'NETWORK_TIMEOUT':'SOURCE_UNAVAILABLE',status:d.platform.status});
  }
- if(!source?.formats?.length){if(!d.url||/(youtube\.com|bilibili\.com)/.test(new URL(d.url).hostname))throw new Error('此播放器尚未提供可下載的原始來源');source=/\.(mpd|m3u8)(?:\?|$)/i.test(d.url)?await manifestSource(d.url,d.referer):await progressive(d);}
+  if(!source?.formats?.length){if(!d.url||/(youtube\.com|bilibili\.com)/.test(new URL(d.url).hostname))throw new Error('此播放器尚未提供可下載的原始來源');source=['hls','dash'].includes(d.sourceType)||/\.(mpd|m3u8)(?:\?|$)/i.test(d.url)?await manifestSource(d.url,d.referer):await progressive(d);}
  source.id=crypto.randomUUID();source.referer=d.referer;source.descriptor=d;source.title ||= d.title;source.capability=mediaChoices(source);sources.set(source.id,source);if(sources.size>25){const removable=[...sources.values()].find(s=>!s.references&&s.id!==source.id);if(removable)sources.delete(removable.id);}
  return {id:source.id,title:source.title,duration:source.duration,platform:d.platform?.site || (/\.mpd(?:\?|$)/i.test(d.url || '')?'dash':/\.m3u8(?:\?|$)/i.test(d.url || '')?'hls':'html'),choices:source.capability.choices,tracks:source.tracks.map((t,i)=>({...t,source:'browser',pageTrackId:'browser:'+i,pageTrackIndex:i})),browserSourceId:source.id};
 }

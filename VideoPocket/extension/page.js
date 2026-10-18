@@ -83,8 +83,10 @@ export async function pageSnapshot(mediaIndex=0){
   const http=raw=>{try{const u=new URL(raw,location.href);return /^https?:$/.test(u.protocol)&&raw?u.href:null;}catch{return null;}};
   const resources=performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/\.(mpd|m3u8)(?:\?|$)/i.test(u));
   let platform,captionStatus;
+  const sourceObserver=window[Symbol.for('video-pocket.mediaObserver')];let embeddedModel;
+  try{sourceObserver?.scanDocument?.();embeddedModel=video&&sourceObserver?.modelFor?.(video);if(embeddedModel)platform={...embeddedModel,site:'embedded'};}catch{}
   const currentUrl=new URL(location.href),igHost=/(^|\.)instagram\.com$/i.test(currentUrl.hostname),igCode=currentUrl.pathname.match(/^\/(?:reel|p|tv)\/([^/?#]+)/i)?.[1];
-  if(video&&videos.length===1&&igHost&&igCode){
+  if(!platform&&video&&videos.length===1&&igHost&&igCode){
     const embedded=instagramEmbedded(igCode),best=embedded?.versions?.[0];
     if(best?.url){candidates[0].adapterDownloadUrl=best.url;candidates[0].title=title;}
     if(embedded)platform={site:'instagram',id:igCode,shortcode:igCode,title,duration:embedded.duration,width:embedded.width,height:embedded.height,versions:embedded.versions.map(v=>({url:v.url,width:v.width||embedded.width,height:v.height||embedded.height,id:v.id})),manifestXml:embedded.dash || undefined};
@@ -156,6 +158,7 @@ export async function pageSnapshot(mediaIndex=0){
   for(const [i,v] of videos.entries()){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
+    try{candidate.mediaIdentity=sourceObserver?.modelFor?.(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
     if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{
@@ -167,7 +170,8 @@ export async function pageSnapshot(mediaIndex=0){
       // A stale welcome/ad <source> must not preempt the active VHS playlist.
       candidate.downloadUrl ||= http(source(v)) || http(v.src) || [...v.querySelectorAll('source')].map(s=>http(s.src)).find(Boolean) || null;
       candidate.downloadUrl ||= ['data-hls-url','data-dash-url','data-src'].map(key=>http(v.getAttribute(key))).find(Boolean) || null;
-      if(!candidate.downloadUrl&&videos.length===1){const unique=[...new Set(resources)];if(unique.length===1)candidate.downloadUrl=unique[0];}
+      if(!candidate.downloadUrl)try{const discovered=sourceObserver?.sourcesFor?.(v);candidate.discoveryReason=discovered?.reason || '';const sources=discovered?.candidates?.filter(item=>item.downloadable!==false) || [];if(sources.length===1){candidate.downloadUrl=http(sources[0].url);candidate.sourceType=sources[0].kind;}else if(sources.length>1)candidate.discoveryReason='ambiguous-source';}catch{}
+      if(!candidate.downloadUrl&&videos.length===1&&!sourceObserver){const unique=[...new Set(resources)];if(unique.length===1)candidate.downloadUrl=unique[0];}
     }
     // Wikimedia intentionally renders a video placeholder before a user plays it.
     if(v.hasAttribute('data-mwtitle')&&/(^|\.)wikimedia\.org$/.test(location.hostname)){
@@ -222,7 +226,7 @@ export async function pageSnapshot(mediaIndex=0){
       registry.bilibiliIdentity={bvid,cid,page:pageNumber,videoData:detail,duration:Number(data?.timelength||0)/1000 || Number(part?.duration) || (detail.pages?.length===1?Number(detail.duration):0) || (Number.isFinite(video.duration)?video.duration:0)};
     }
   }
-  return {url:location.href,title,tracks,platform,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
+  return {url:location.href,title,tracks,platform,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
 }
 export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,automatic=false,selector={}){
   try{

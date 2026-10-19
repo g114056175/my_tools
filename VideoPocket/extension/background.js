@@ -11,6 +11,7 @@ import {fileStem,createFilenameRecorder} from './filenames.js';
 import {downloadKey,createDownloadClaims,stableHash} from './download-identity.js';
 import {mediaRequestHeaders} from './media-request-headers.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from './media-selection-controller.js';
+import {highlightMedia} from './media-highlight.js';
 import './destinations.js';
 const mediaPicker=createMediaSelectionController(chrome);
 let creating,jobUpdates=Promise.resolve(),runningJob=null,headerWrites=Promise.resolve(),ruleId=100;
@@ -155,6 +156,12 @@ async function handle(message,sender){
  switch(message.action){
   case 'rememberFilename':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');await rememberFilename(message.name);return {};
   case 'pickMedia':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');return mediaPicker.begin(message.tabId);
+  case 'highlightMedia':{
+    if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');
+    if(!message.documentId||message.mediaKey==null)return {highlighted:false};
+    const result=await chrome.scripting.executeScript({target:{tabId:message.tabId,documentIds:[message.documentId]},world:'MAIN',func:highlightMedia,args:[{mediaKey:message.mediaKey}]});
+    return result[0]?.result || {highlighted:false};
+  }
   case 'snapshot':return snapshot(message.tabId,message.mediaIndex || 0,message.preferPicked!==false);
   case 'bilibiliCaptions':return discoverBilibili(message.tabId,{bvid:message.expectedBvid,page:Number(message.expectedPage)||1,expectedCid:Number(message.expectedCid)||0},message.documentId).promise;
   case 'inspect':{const descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)};const result=await engine('inspect',{descriptor});result.downloadKey=descriptor.downloadKey;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:descriptor.downloadKey});if(sourceMeta.size>100)sourceMeta.delete(sourceMeta.keys().next().value);return result;}

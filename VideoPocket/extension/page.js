@@ -73,8 +73,9 @@ export async function pageSnapshot(mediaIndex=0){
   const http=raw=>{try{const u=new URL(raw,location.href);return /^https?:$/.test(u.protocol)&&raw?u.href:null;}catch{return null;}};
   const resources=performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/\.(mpd|m3u8)(?:\?|$)/i.test(u));
   let platform,captionStatus;
-  const sourceObserver=window[Symbol.for('video-pocket.mediaObserver')];let embeddedModel;
-  try{sourceObserver?.scanDocument?.();embeddedModel=video&&sourceObserver?.modelFor?.(video);if(embeddedModel)platform={...embeddedModel,site:'embedded'};}catch{}
+  const sourceObserver=window[Symbol.for('video-pocket.mediaObserver')],snapshotModels=new WeakMap();let embeddedModel;
+  const observedModel=v=>{if(!v)return null;if(!snapshotModels.has(v)){let model=null;try{model=sourceObserver?.modelFor?.(v) || null;}catch{}snapshotModels.set(v,model);}return snapshotModels.get(v);};
+  try{sourceObserver?.scanDocument?.();embeddedModel=observedModel(video);if(embeddedModel)platform={...embeddedModel,site:'embedded'};}catch{}
   const currentUrl=new URL(location.href),igHost=/(^|\.)instagram\.com$/i.test(currentUrl.hostname),igCode=currentUrl.pathname.match(/^\/(?:reel|p|tv)\/([^/?#]+)/i)?.[1];
   if(!platform&&video&&videos.length===1&&igHost&&igCode){
     const embedded=instagramEmbedded(igCode),best=embedded?.versions?.[0];
@@ -157,7 +158,13 @@ export async function pageSnapshot(mediaIndex=0){
   for(const [i,v] of videos.entries()){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
-    try{candidate.mediaIdentity=sourceObserver?.modelFor?.(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
+    try{const model=observedModel(v);if(model?.title?.trim())candidate.title=model.title.trim();}catch{}
+    candidate.title=String(candidate.title || '').trim();
+    if(!candidate.title){
+      const raw=source(v);let filename='';try{const u=raw?new URL(raw,location.href):null;if(u&&/^https?:$/.test(u.protocol))filename=decodeURIComponent(u.pathname.split('/').pop() || '').replace(/\.[a-z0-9]{2,5}$/i,'').replace(/[_-]+/g,' ').trim();}catch{}
+      candidate.title=filename || String(document.title || '').trim() || `影片 ${i+1}`;
+    }
+    try{candidate.mediaIdentity=observedModel(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
     if(twitchId&&twitchPlayers.includes(v))candidate.mediaIdentity='twitch-vod:'+twitchId;
     if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){

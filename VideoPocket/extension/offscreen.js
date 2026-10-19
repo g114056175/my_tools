@@ -43,8 +43,12 @@ async function manifestSource(url,referer,inlineManifest){
  }else{
   const m=hls(raw,url);
   if(m.playlists?.length){
-   for(const [i,p] of m.playlists.entries()){const media=hls(await (await request(p.uri,referer)).text(),p.uri);if(!media.endList)continue;formats.push({...playlistFormat({...p,segments:media.segments,mediaSequence:media.mediaSequence},'v'+i,'video','mp4'),duration:media.segments.reduce((n,s)=>n+s.duration,0)});duration ||= formats.at(-1).duration;}
-   for(const group of Object.values(m.mediaGroups?.AUDIO || {}))for(const item of Object.values(group)){if(!item.uri)continue;const u=absolute(item.uri,url),p=hls(await (await request(u,referer)).text(),u);formats.push(playlistFormat({...p,uri:u,attributes:{CODECS:'mp4a'}},'a'+formats.length,'audio'));}
+   for(const [i,p] of m.playlists.entries()){const media=hls(await (await request(p.uri,referer)).text(),p.uri);if(!media.endList)continue;const f={...playlistFormat({...p,segments:media.segments,mediaSequence:media.mediaSequence},'v'+i,'video','mp4'),duration:media.segments.reduce((n,s)=>n+s.duration,0)};
+    // Master CODECS describes the full variant including its external AUDIO
+    // rendition. It does not prove that audio is muxed into the video file.
+    const group=p.attributes?.AUDIO;if(group&&Object.values(m.mediaGroups?.AUDIO?.[group] || {}).some(item=>item.uri)){f.audioCodec='';f.audioGroup=group;}
+    formats.push(f);duration ||= f.duration;}
+   for(const [audioGroup,group] of Object.entries(m.mediaGroups?.AUDIO || {}))for(const item of Object.values(group)){if(!item.uri)continue;const u=absolute(item.uri,url),p=hls(await (await request(u,referer)).text(),u);formats.push({...playlistFormat({...p,uri:u,attributes:{CODECS:'mp4a'}},'a'+formats.length,'audio'),audioGroup});}
    for(const group of Object.values(m.mediaGroups?.SUBTITLES || {}))for(const item of Object.values(group))if(item.uri)tracks.push({language:item.language || 'und',name:item.name || item.language || '字幕',url:absolute(item.uri,url),playlist:true});
   }else{if(!m.endList)throw new Error('目前僅支援已完成的影片串流');duration=m.segments.reduce((n,s)=>n+s.duration,0);formats.push(playlistFormat({...m,uri:url,attributes:{CODECS:'avc1,mp4a'}},'v0','video','mp4'));}
  }

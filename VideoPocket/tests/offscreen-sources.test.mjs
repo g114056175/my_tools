@@ -126,3 +126,17 @@ test('large MP4 metadata seeks beyond the initial 128 KiB and enables audio/vide
   assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,true);
   assert.ok(rt.fetchLog.some(x=>x.options.headers.Range==='bytes=196608-219999'));
 });
+
+test('HLS master CODECS with an external AUDIO group must produce a two-input plan',async()=>{
+ const rt=await makeRuntime([
+ {match:u=>u==='https://cdn.example/master.m3u8',reply:response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Audio",DEFAULT=YES,URI="audio.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2",AUDIO="a"\nvideo.m3u8\n')},
+ {match:u=>u==='https://cdn.example/video.m3u8',reply:response('#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MAP:URI="video-init.mp4"\n#EXTINF:10,\nv.m4s\n#EXT-X-ENDLIST\n')},
+ {match:u=>u==='https://cdn.example/audio.m3u8',reply:response('#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\na.m4s\n#EXT-X-ENDLIST\n')},
+ {match:u=>u==='https://cdn.example/video-init.mp4',reply:response(mp4Box('avc1',new Uint8Array(28)),{type:'video/mp4'})}
+ ]);
+ const info=await rt.inspect({url:'https://cdn.example/master.m3u8',referer:'https://example.test',sourceType:'hls'});
+ assert.equal(info.choices.video.auto.enabled,true);assert.equal(info.choices.audio.original.enabled,true);
+ // Two sizes are unknown independently; selecting video must not advertise a
+ // direct video-only file or silently assume that it contains AAC.
+ assert.equal(info.choices.video.auto.sizes[360],null);
+});

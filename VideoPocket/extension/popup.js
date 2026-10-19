@@ -77,7 +77,7 @@ function applyInfo(){
 }
 async function inspect(token,force=false){
   try{if(!sourceUrl()&&!page.platform)throw new Error(page.media?.discoveryReason==='ambiguous-source'?'此影片有多個無法確認的來源；請進入單篇貼文再試':'尚未取得此影片來源；請正常播放後更新，或進入單篇貼文再試');const selected=page.videos?.[mediaIndex] || {};const value=await send('inspect',{descriptor:{tabId:tab.id,documentId:page.documentId,url:sourceUrl(),sourceType:selected.sourceType,referer:sourceReferer(),title:selected.title || page.title,duration:page.media?.duration,drm:page.media?.drm,platform:page.platform,mediaKey:selected.mediaKey ?? page.media?.mediaKey,frameId:selected.frameId ?? page.frameId,localMediaIndex:selected.localMediaIndex ?? page.localMediaIndex,mediaIndex},force});if(token!==revision)return;info=value;applyInfo();const usable=mediaAvailability(info).video||mediaAvailability(info).audio;sourceState(usable?'':'未取得影片資訊',usable?'':'來源未提供可用影音格式');notice();}
-  catch(e){if(token===revision){info=null;applyInfo();sourceState('未取得影片資訊',e.message);notice();if(['HTTP_AUTH','HTTP_NOT_FOUND','HTTP_RATE_LIMIT','DRM_UNSUPPORTED','NETWORK_TIMEOUT','NETWORK_FAILURE'].includes(e.code))showFailure(e);}}
+  catch(e){if(token===revision){info=null;applyInfo();sourceState('未取得下載來源',e.message);notice('已找到影片元素，但無法取得可下載來源。'+(e.message || '請播放後更新，或開啟單篇影片再試。'));if(['HTTP_AUTH','HTTP_NOT_FOUND','HTTP_RATE_LIMIT','DRM_UNSUPPORTED','NETWORK_TIMEOUT','NETWORK_FAILURE'].includes(e.code))showFailure(e);}}
   finally{if(token===revision){probePromise=null;addTracks();}}
 }
 function stopBilibiliCaptionPolling(){clearTimeout(captionPollTimer);captionPollTimer=null;captionPollActive=false;}
@@ -147,6 +147,7 @@ async function refresh(force=false,explicitMedia=false){
   $('mediaSelect').replaceChildren();for(const [i,v] of (page.videos || []).entries())$('mediaSelect').add(new Option(v.title,String(i)));$('mediaSelect').value=String(mediaIndex);$('mediaSelect').title=page.videos?.[mediaIndex]?.title || page.title;
   if(page.selectionExpired){const placeholder=new Option('原選取已變更，請重新選取','');placeholder.disabled=true;$('mediaSelect').add(placeholder);$('mediaSelect').value='';sourceState('請重新選取影片','原選取的影片已離開畫面或來源更新，請重新指定');return;}
   if(!page.videos?.length){addTracks();if(!tracks.length)sourceState('未取得影片資訊','此分頁沒有可用媒體來源');return;}
+  const target=page.videos[mediaIndex];if(target?.mediaKey!=null&&target.documentId)void send('highlightMedia',{tabId:tab.id,documentId:target.documentId,mediaKey:target.mediaKey}).catch(()=>{});
   if(oldIdentity!==page.url+'|'+page.media?.url+'|'+page.mediaIndex)chosenTrackId=null;
   captureScopeValue=await makeCaptureScope(tab.id,page,mediaIndex);const all=await chrome.storage.session.get(null),prefix=CAPTURE_PREFIX+tab.id+':';captureRecords=Object.entries(all).filter(([key,record])=>key.startsWith(prefix)&&record?.version===CAPTURE_VERSION&&record.scope===captureScopeValue).map(([key,record])=>({key,...record}));
   const latest=[...captureRecords].filter(item=>['complete','running','failed'].includes(item.state)).sort((a,b)=>(b.finishedAt||b.startedAt||0)-(a.finishedAt||a.startedAt||0))[0];if(!chosenTrackId&&latest?.track?.trackId)chosenTrackId=latest.track.trackId;

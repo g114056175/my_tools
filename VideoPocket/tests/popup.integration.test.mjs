@@ -38,12 +38,13 @@ const pageFor = () => {
   if (state.phase === 0) return {url:'https://example.test/empty',title:'Empty',videos:[],tracks:[]};
   if (state.phase === 1) return {url:'https://example.test/no-source',title:'No source',videos:[{title:'only video element'}],tracks:[]};
   if (state.phase === 2) return {url:'https://example.test/subtitle',title:'Subtitle only',videos:[{title:'captioned',downloadUrl:''}],tracks:[{language:'en',name:'English',source:'native'}]};
-  return {url:'https://example.test/multi',title:'Multiple',mediaIndex:state.phase === 3 ? 0 : 1,videos:[{title:'first',downloadUrl:'https://cdn.test/first.mp4',url:'https://cdn.test/first.mp4'},{title:'second',downloadUrl:'https://cdn.test/second.mp4',url:'https://cdn.test/second.mp4'}],tracks:[]};
+  return {url:'https://example.test/multi',title:'Multiple',mediaIndex:state.phase === 3 ? 0 : 1,videos:[{title:'first',documentId:'doc-first',mediaKey:1,downloadUrl:'https://cdn.test/first.mp4',url:'https://cdn.test/first.mp4'},{title:'second',documentId:'doc-second',mediaKey:2,downloadUrl:'https://cdn.test/second.mp4',url:'https://cdn.test/second.mp4'}],tracks:[]};
 };
 globalThis.chrome = {
   runtime:{connect:()=>({}),sendMessage:async message => {
     if (message.action === 'snapshot') { state.snapshotCalls++;state.lastSnapshot=message; return {ok:true,result:pageFor()}; }
     if (message.action === 'inspect') { state.inspectCalls++; if (state.phase < 3) return {ok:false,error:'inspect failed',failure:{code:'NETWORK_FAILURE'}}; return {ok:true,result:{title:'usable',downloadKey:'k',choices:{video:{auto:{enabled:true,heights:[360],extensions:{360:'mp4'},sizes:{360:{bytes:1}}}},audio:{original:{enabled:false}}},tracks:[]}}; }
+    if(message.action==='highlightMedia')state.lastHighlight=message;
     if (message.action === 'lastError') return {ok:true,result:null};
     return {ok:true,result:{}};
   }},
@@ -63,9 +64,10 @@ test('popup integration hides unusable media UI, preserves subtitle-only UI, and
 
   state.phase = 1; await documentMock.getElementById('refresh').click();
   assert.equal(state.lastSnapshot.preferPicked,false,'explicit refresh clears the previous picker choice instead of preserving stale selection');
-  await wait(() => state.snapshotCalls >= 2 && documentMock.getElementById('sourceLabel').textContent === '未取得影片資訊');
+  await wait(() => state.snapshotCalls >= 2 && documentMock.getElementById('sourceLabel').textContent === '未取得下載來源');
   assert.equal(documentMock.getElementById('downloadSection').hidden, true);
   assert.equal(documentMock.getElementById('mediaSelect').hidden, true);
+  assert.match(documentMock.getElementById('notice').textContent,/已找到影片元素/);
 
   state.phase = 2; await documentMock.getElementById('refresh').click();
   await wait(() => !documentMock.getElementById('downloadSection').hidden && !documentMock.getElementById('subtitleTab').disabled);
@@ -80,4 +82,6 @@ test('popup integration hides unusable media UI, preserves subtitle-only UI, and
   documentMock.getElementById('mediaSelect').value = '1'; state.phase = 4; await documentMock.getElementById('mediaSelect').dispatch('change');
   await wait(() => state.snapshotCalls >= 5 && !documentMock.getElementById('downloadSection').hidden);
   assert.equal(documentMock.getElementById('job').children.length, 1);
+  assert.equal(state.lastHighlight.documentId,'doc-second');assert.equal(state.lastHighlight.mediaKey,2);
 });
+

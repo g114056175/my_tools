@@ -43,6 +43,7 @@ function identityFromUrl(pageUrl) {
   const parts = url.pathname.split('/').filter(Boolean);
   const match = url.pathname.match(/\/(?:reel|p|tv|videos?|watch)\/([^/?#]+)/i);
   if (match) { id ||= match[1]; kind = /reel/i.test(match[0]) ? 'reel' : /watch/i.test(match[0]) ? 'watch' : 'post'; }
+  if(!id&&/(^|\.)vimeo\.com$/i.test(host))id=url.pathname.match(/^\/(\d+)(?:\/|$)/)?.[1] || '';
   if (!id && /instagram\.com$/i.test(host)) id = parts.find(p => p && !/^(reel|p|tv)$/i.test(p)) || '';
   return id ? { id, kind, host, key: `${host}:${id}` } : { host };
 }

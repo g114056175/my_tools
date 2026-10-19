@@ -15,7 +15,7 @@ export function mediaChoices(source){
  const plans={video:{auto:{}},audio:{original:{}}};
  const compatible=(v,a)=>v.ext==='mp4'&&a.audioCodec==='aac'||v.ext==='webm'&&['opus','vorbis'].includes(a.audioCodec);
  video.sort((a,b)=>(b.height||0)-(a.height||0)||(a.videoCodec==='h264'?-1:b.videoCodec==='h264'?1:0)||(b.bitrate||0)-(a.bitrate||0));
- for(const v of video){const a=v.audioCodec?null:audio.find(a=>compatible(v,a)) || audio[0];if(!v.audioCodec&&source.requiresAudio&&!a)continue;
+ for(const v of video){const candidates=v.audioGroup?audio.filter(a=>a.audioGroup===v.audioGroup):audio;const a=v.audioCodec?null:candidates.find(a=>compatible(v,a)) || candidates[0];if(!v.audioCodec&&source.requiresAudio&&!a)continue;
   const ext=a?(compatible(v,a)?v.ext:'mkv'):v.ext==='ts'?'mp4':v.ext || 'mp4';
   const p={video:v,audio:a,ext,size:combinedSize(v,a,source.duration),direct:!source.sabr&&!a&&!v.segments?.length&&v.ext!=='ts'};
   if(!plans.video.auto[v.height||0])plans.video.auto[v.height||0]=p;

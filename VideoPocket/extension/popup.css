@@ -19,3 +19,8 @@ html{width:332px;min-width:332px}body{min-width:332px}#refresh{margin-left:auto}
 select:not(:disabled){cursor:pointer;border-color:#c6d1db;background-color:#f8fafb;transition:border-color .12s,background-color .12s}
 select:not(:disabled):hover{border-color:#91ad9f;background-color:#f1f7f3}
 
+/* Equal-size, optically centered header controls independent of font glyphs. */
+.source-row #pickMedia,.source-row #refresh{display:inline-flex;align-items:center;justify-content:center;width:24px;height:26px;flex:0 0 24px;padding:0;line-height:1;color:#788894}
+.source-row .icon-button svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.source-row #pickMedia{margin-left:auto}.source-row #refresh{margin-left:0}
+.source-row .source-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

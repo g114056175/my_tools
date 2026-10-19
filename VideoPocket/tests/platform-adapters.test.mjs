@@ -77,3 +77,11 @@ test('Twitch token failures preserve HTTP, GraphQL and timeout causes',async()=>
  await assert.rejects(twitchVodManifest(url,async()=>{throw Object.assign(new Error(),{name:'TimeoutError'});}),e=>e.code==='NETWORK_TIMEOUT');
  await assert.rejects(twitchVodManifest(url,async()=>({ok:true,json:async()=>{throw new SyntaxError();}})),e=>e.code==='SOURCE_UNAVAILABLE');
 });
+
+test('blank frame titles fall back to a source filename instead of blank options',async()=>{
+ const video={currentSrc:'https://cdn.example/flower.webm',src:'',textTracks:[],mediaKeys:null,hasAttribute:()=>false,getAttribute:()=>null,querySelector:()=>null,querySelectorAll:()=>[],closest:()=>null};
+ globalThis.location={href:'https://example.test/frame',hostname:'example.test',pathname:'/frame'};globalThis.window={};globalThis.performance={getEntriesByType:()=>[]};
+ globalThis.document={title:'  ',documentElement:{lang:'en'},scripts:[],querySelectorAll:s=>s==='video'?[video]:[],querySelector:()=>null};
+ const snapshot=await pageSnapshot();assert.equal(snapshot.videos[0].title,'flower');
+ video.currentSrc='';const noName=await pageSnapshot();assert.equal(noName.videos[0].title,'影片 1');
+});

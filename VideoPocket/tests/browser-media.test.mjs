@@ -21,3 +21,8 @@ test('Large sources remain available for both disk merge and extraction without 
 test('YouTube completeness requires init data and uninterrupted coverage, not just the last timestamp',()=>{
  const track={formatInitializationMetadata:{endSegmentNumber:3,durationUnits:20000,durationTimescale:1000},downloadedSegments:new Map([[0,{durationMs:0}],[1,{durationMs:5000}],[3,{durationMs:5000}]])};assert.throws(()=>assertComplete(track,20000),/片段不完整/);track.downloadedSegments.set(2,{durationMs:10000});assert.doesNotThrow(()=>assertComplete(track,20000));track.downloadedSegments.delete(0);assert.throws(()=>assertComplete(track,20000),/片段不完整/);
 });
+
+test('separate HLS audio follows the selected video rendition group',()=>{
+ const source={requiresAudio:true,duration:10,formats:[{id:'v',url:'v',kind:'video',ext:'mp4',videoCodec:'h264',height:360,audioGroup:'correct'},{id:'wrong',url:'wrong',kind:'audio',ext:'mp4',audioCodec:'aac',audioGroup:'other',bitrate:900000},{id:'right',url:'right',kind:'audio',ext:'mp4',audioCodec:'aac',audioGroup:'correct',bitrate:128000}]};
+ const c=mediaChoices(source),p=selectedPlan(c,{kind:'video',height:360});assert.equal(p.audio.id,'right');assert.equal(p.direct,false);
+});

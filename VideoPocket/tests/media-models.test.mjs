@@ -163,3 +163,13 @@ test('an unchanged live document repopulates model data after its bounded cache 
   store.scanDocument(doc,'https://example/reel/post');assert.equal(store.modelFor(video,'https://example/reel/post').id,'post');
  }finally{Date.now=before;}
 });
+
+test('Vimeo API play response retains route identity and prefers HLS over JSON DASH',()=>{
+ const [model]=extractMediaModels({uri:'/videos/1084537',name:'Big Buck Bunny',duration:597,play:{hls:{link:'https://cdn.example/master.m3u8'},dash:{link:'https://cdn.example/master.json'},progressive:[{link:'https://cdn.example/720.mp4',height:720}]} });
+ assert.equal(model.id,'1084537');assert.equal(model.manifestUrl,'https://cdn.example/master.m3u8');assert.equal(model.versions[0].height,720);
+ const store=createMediaModelStore();store.merge([model]);const video={closest:()=>null};assert.equal(store.modelFor(video,'https://vimeo.com/1084537').id,'1084537');
+});
+test('player config files preserve their own video ID and CDN choice',()=>{
+ const [model]=extractMediaModels({video:{id:1084537,title:'Big Buck Bunny'},request:{files:{hls:{default_cdn:'ak',cdns:{ak:{url:'https://cdn.example/master.m3u8'}}},progressive:[{url:'https://cdn.example/high.mp4',height:1080}]}}});
+ assert.equal(model.id,'1084537');assert.equal(model.title,'Big Buck Bunny');assert.equal(model.manifestUrl,'https://cdn.example/master.m3u8');
+});

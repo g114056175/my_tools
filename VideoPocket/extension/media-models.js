@@ -1,10 +1,11 @@
 import { collectMediaEvidence } from "./media-evidence.js";
+import {ownedPlayerMetadata} from './media-binding.js';
 
 const MAX_MODELS = 128;
 const MAX_VALUE = 1024 * 1024;
 const TTL = 5 * 60 * 1000;
 const MAX_MODEL_BYTES = 2 * 1024 * 1024;
-const ID_KEYS = ["id", "videoId", "video_id", "media_id", "shortcode", "code"];
+const ID_KEYS = ["id", "videoId", "videoID", "video_id", "media_id", "shortcode", "code"];
 const URL_KEYS = [
   "contentUrl",
   "video_url",
@@ -24,6 +25,8 @@ const marker = (value) =>
     value.videoDeliveryLegacyFields ||
     value.video_versions ||
     value.video_dash_manifest ||
+    value.request?.files ||
+    value.play?.hls || value.play?.dash || value.play?.progressive ||
     value.contentUrl ||
     value.video_url ||
     value.playable_url);
@@ -45,7 +48,7 @@ const url = (value, base) => {
 
 function aliasesOf(value) {
   return [
-    ...new Set(ID_KEYS.map((key) => string(value?.[key]).slice(0,256)).filter(Boolean)),
+    ...new Set(ID_KEYS.map((key) => typeof value?.[key]==='number'?String(value[key]):string(value?.[key]).slice(0,256)).filter(Boolean)),
   ];
 }
 
@@ -68,7 +71,8 @@ function descriptor(value, base, parentAliases = []) {
     typeof value.videoDeliveryLegacyFields === "object"
       ? value.videoDeliveryLegacyFields
       : null;
-  const ownAliases = aliasesOf(value);
+  const playerFiles=value.request?.files,play=value.play;
+  const ownAliases = [...new Set([...aliasesOf(value),...(playerFiles?aliasesOf(value.video):[]),...(String(value.uri||'').match(/^\/videos\/(\d+)$/)?.slice(1)||[])])];
   const deliveryAliases = aliasesOf(rawDelivery);
   const deliveryMatches =
     !deliveryAliases.length ||
@@ -81,6 +85,8 @@ function descriptor(value, base, parentAliases = []) {
   const versions = [
     ...(Array.isArray(value.video_versions) ? value.video_versions : []),
     ...(Array.isArray(delivery?.video_versions) ? delivery.video_versions : []),
+    ...(Array.isArray(playerFiles?.progressive)?playerFiles.progressive:[]),
+    ...(Array.isArray(play?.progressive)?play.progressive:[]).map(v=>({...v,url:v.link || v.url})),
   ]
     .map((item) => version(item, base))
     .filter(Boolean).slice(0,32);
@@ -101,6 +107,7 @@ function descriptor(value, base, parentAliases = []) {
       delivery?.dash_manifest_xml_string,
   );
   const manifestXml=rawManifestXml.length<=512*1024?rawManifestXml:'';
+  const cdnUrl=group=>group?.cdns?.[group.default_cdn]?.url || Object.values(group?.cdns || {}).find(c=>c?.url)?.url;
   const manifestUrl = url(
     value.video_dash_manifest_url ||
       value.manifestUrl ||
@@ -108,7 +115,7 @@ function descriptor(value, base, parentAliases = []) {
       value.dash ||
       value.hls,
     base,
-  );
+  ) || url(play?.hls?.link || cdnUrl(playerFiles?.hls) || play?.dash?.link || cdnUrl(playerFiles?.dash),base);
   if (!versions.length && !manifestXml && !manifestUrl)
     return null;
   return {
@@ -133,7 +140,7 @@ function descriptor(value, base, parentAliases = []) {
       : undefined,
     width: number(value.width || value.original_width || delivery?.width),
     height: number(value.height || value.original_height || delivery?.height),
-    title: string(value.name || value.title).slice(0,512),
+    title: string(value.name || value.title || value.video?.title).slice(0,512),
     updatedAt: Date.now(),
   };
 }
@@ -226,7 +233,7 @@ export function createMediaModelStore({
     )) {
       const text = String(script.textContent || "");
       if (text.length > MAX_VALUE) continue;
-      if(!/video_versions|videoDelivery|video_dash_manifest|contentUrl|video_url|playable_url|VideoObject/.test(text))continue;
+      if(!/video_versions|videoDelivery|video_dash_manifest|contentUrl|video_url|playable_url|VideoObject|"progressive"|"play"\s*:|"files"\s*:/.test(text))continue;
       let hash=2166136261;for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619);
       const fingerprint = `${text.length}:${hash>>>0}`;
       const cached = scriptCache.get(script);
@@ -269,6 +276,15 @@ export function createMediaModelStore({
     prune();
     const root = video?.ownerDocument || undefined;
     const identity = collectMediaEvidence({ video, root, pageUrl }).identity;
+    const owned=ownedPlayerMetadata(video);
+    if(owned.payloads.length)merge(owned.payloads.flatMap(value=>extractMediaModels(value,{baseUrl:pageUrl})));
+    if(owned.ids.length>1)return null;
+    if(owned.ids.length===1){
+      const exact=models.filter(model=>model.aliases.includes(owned.ids[0]));
+      // A real player's explicit ID outranks the route (feeds and reels can
+      // retain the old URL). Never fall back to a different route model.
+      return exact.length===1?exact[0]:null;
+    }
     const associated = associations.get(video);
     if (associated && Date.now()-associated.model.updatedAt<ttl && associated.key === (identity.key || identity.id || "") && associated.source===(video?.currentSrc || video?.src || ''))
       return associated.model;

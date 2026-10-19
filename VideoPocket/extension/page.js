@@ -49,16 +49,6 @@ export async function pageSnapshot(mediaIndex=0){
       return {versions,dash:typeof product.video_dash_manifest==='string'?product.video_dash_manifest:null,duration:Number(product.video_duration)||0,width:Number(product.original_width)||0,height:Number(product.original_height)||0};
     }catch{}return null;
   };
-  const twitchManifest=async raw=>{
-    let u;try{u=new URL(raw);}catch{return null;}if(!/(^|\.)twitch\.tv$/i.test(u.hostname))return null;
-    const id=u.pathname.match(/^\/videos\/(\d+)/i)?.[1];if(!id)return null;
-    const query='query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!, $platform: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isLive) { value signature } videoPlaybackAccessToken(id: $vodID, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isVod) { value signature } }';
-    try{
-      const response=await fetch('https://gql.twitch.tv/gql',{method:'POST',credentials:'include',headers:{Accept:'*/*','Client-ID':'kimne78kx3ncx6brgo4mv6wki5h1ko','Content-Type':'text/plain; charset=UTF-8'},body:JSON.stringify({operationName:'PlaybackAccessToken_Template',query,variables:{isLive:false,login:'',isVod:true,vodID:id,playerType:'site',platform:'web'}}),signal:AbortSignal.timeout(10000)});
-      if(!response?.ok)return {id,status:response?.status||0,errorCode:response?.status===401||response?.status===403?'TWITCH_ACCESS_DENIED':'TWITCH_API_HTTP'};const token=(await response.json())?.data?.videoPlaybackAccessToken;if(!token?.value||!token?.signature)return {id,unavailable:true,errorCode:'TWITCH_NO_TOKEN'};
-      const manifest=new URL(`https://usher.ttvnw.net/vod/${id}.m3u8`);manifest.search=new URLSearchParams({allow_source:'true',allow_audio_only:'true',allow_spectre:'true',p:String(Math.floor(1000000+Math.random()*9000000)),platform:'web',player:'twitchweb',supported_codecs:'av1,h265,h264',playlist_include_framerate:'true',sig:token.signature,token:token.value}).toString();return {id,url:manifest.href};
-    }catch(error){return {id,unavailable:true,errorCode:error?.name==='TimeoutError'?'TWITCH_API_TIMEOUT':'TWITCH_API_FAILED'};}
-  };
   const roots=[document];for(let i=0;i<roots.length;i++)for(const node of roots[i].querySelectorAll('*'))if(node.shadowRoot)roots.push(node.shadowRoot);
   const player=document.querySelector('#movie_player');
   const animePage=/(^|\.)ani\.gamer\.com\.tw$/.test(String(location.hostname).toLowerCase());
@@ -92,10 +82,17 @@ export async function pageSnapshot(mediaIndex=0){
     if(embedded)platform={site:'instagram',id:igCode,shortcode:igCode,title,duration:embedded.duration,width:embedded.width,height:embedded.height,versions:embedded.versions.map(v=>({url:v.url,width:v.width||embedded.width,height:v.height||embedded.height,id:v.id})),manifestXml:embedded.dash || undefined};
   }
   const twitchHost=/(^|\.)twitch\.tv$/i.test(currentUrl.hostname),twitchId=currentUrl.pathname.match(/^\/videos\/(\d+)/i)?.[1];
-  if(video&&videos.length===1&&twitchHost&&twitchId){
-    const twitch=await twitchManifest(currentUrl.href);
-    if(twitch?.url){candidates[0].adapterDownloadUrl=twitch.url;platform={site:'twitch',id:twitch.id,title,duration:Number.isFinite(video.duration)?video.duration:0,manifest:twitch.url};}
-    else if(twitch?.status || twitch?.errorCode)platform={site:'twitch',id:twitch.id,title,manifestUnavailable:true,status:twitch.status||0,errorCode:twitch.errorCode};
+  let twitchMain=null;
+  if(twitchHost&&twitchId){
+    // Resolve playback access inside the extension, not through the site's
+    // fetch implementation or its page CSP. Other videos/ads do not disable
+    // the identified main player.
+    const owned=videos.filter(v=>{try{return !!v.closest('[data-a-target="video-player"]');}catch{return false;}});
+    twitchMain=owned.length===1?owned[0]:videos.length===1?videos[0]:null;
+    if(twitchMain)candidates[videos.indexOf(twitchMain)].adapterDownloadUrl=currentUrl.href;
+    if(!videos.length || video===twitchMain){
+      platform={site:'twitch',id:twitchId,title,duration:Number.isFinite(video?.duration)?video.duration:0};
+    }
   }
   const instances=[window.hls,window.player];try{if(typeof hls!=='undefined')instances.push(hls);if(typeof player!=='undefined')instances.push(player);}catch{}
   // Query existing Video.js players only. Calling videojs(id) would initialize
@@ -159,6 +156,7 @@ export async function pageSnapshot(mediaIndex=0){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
     try{candidate.mediaIdentity=sourceObserver?.modelFor?.(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
+    if(twitchId&&v===twitchMain)candidate.mediaIdentity='twitch-vod:'+twitchId;
     if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{
@@ -226,6 +224,7 @@ export async function pageSnapshot(mediaIndex=0){
       registry.bilibiliIdentity={bvid,cid,page:pageNumber,videoData:detail,duration:Number(data?.timelength||0)/1000 || Number(part?.duration) || (detail.pages?.length===1?Number(detail.duration):0) || (Number.isFinite(video.duration)?video.duration:0)};
     }
   }
+  if(!videos.length&&platform?.site==='twitch')candidates.push({title,url:location.href,downloadUrl:location.href,referer:location.href,mediaKey:'twitch-vod:'+platform.id,mediaIdentity:platform.id});
   return {url:location.href,title,tracks,platform,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
 }
 export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,automatic=false,selector={}){

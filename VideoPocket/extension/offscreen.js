@@ -13,6 +13,7 @@ import {readMp4Metadata} from './mp4-metadata.js';
 import {createTransferProgress} from './transfer-progress.js';
 import {decryptHlsSample,hlsIv} from './hls-sample.js';
 import {assembleSegments} from './ordered-segments.js';
+import {twitchVodManifest} from './twitch-adapter.js';
 const disk=globalThis.VideoPocketDiskMedia;
 const startupCleanup=disk.removeMediaFiles().catch(()=>{});
 
@@ -131,9 +132,11 @@ async function inspect(m){
    if(formats.length)source={title:d.title,duration,formats,tracks:[],requiresAudio:true};
   }
  }
- if(d.platform?.site==='twitch'&&!d.platform.manifest){
-  const code=d.platform.errorCode;
-  throw Object.assign(new Error(code==='TWITCH_ACCESS_DENIED'?'來源拒絕存取':code==='TWITCH_API_TIMEOUT'?'來源讀取逾時':'未取得 Twitch 影片來源'),{code:code==='TWITCH_ACCESS_DENIED'?'HTTP_AUTH':code==='TWITCH_API_TIMEOUT'?'NETWORK_TIMEOUT':'SOURCE_UNAVAILABLE',status:d.platform.status});
+ if(d.platform?.site==='twitch'){
+  const resolved=await twitchVodManifest(d.referer,fetch);
+  if(!resolved?.url || resolved.id!==String(d.platform.id))throw Object.assign(new Error('未取得目前 Twitch VOD 的播放來源'),{code:'SOURCE_UNAVAILABLE'});
+  d={...d,url:resolved.url,sourceType:'hls',platform:{...d.platform,manifest:resolved.url}};
+  source=await manifestSource(resolved.url,d.referer);
  }
   if(!source?.formats?.length){if(!d.url||/(youtube\.com|bilibili\.com)/.test(new URL(d.url).hostname))throw new Error('此播放器尚未提供可下載的原始來源');source=['hls','dash'].includes(d.sourceType)||/\.(mpd|m3u8)(?:\?|$)/i.test(d.url)?await manifestSource(d.url,d.referer):await progressive(d);}
  source.id=crypto.randomUUID();source.referer=d.referer;source.descriptor=d;source.title ||= d.title;source.capability=mediaChoices(source);sources.set(source.id,source);if(sources.size>25){const removable=[...sources.values()].find(s=>!s.references&&s.id!==source.id);if(removable)sources.delete(removable.id);}

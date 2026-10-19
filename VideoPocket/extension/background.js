@@ -13,7 +13,6 @@ import {mediaRequestHeaders} from './media-request-headers.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from './media-selection-controller.js';
 import './destinations.js';
 const mediaPicker=createMediaSelectionController(chrome);
-chrome.commands?.onCommand?.addListener(command=>{if(command==='pick-media')void chrome.tabs.query({active:true,lastFocusedWindow:true}).then(([tab])=>tab?.id&&mediaPicker.begin(tab.id)).catch(()=>{});});
 let creating,jobUpdates=Promise.resolve(),runningJob=null,headerWrites=Promise.resolve(),ruleId=100;
 const work=new Map(),queue=[],popupViews=new Set(),downloads=new Map(),headerRules=new Map();
 const downloadClaims=createDownloadClaims();
@@ -127,6 +126,7 @@ const captureRecoveryReady=chrome.storage.session.get(null).then(async all=>{
  if(Object.keys(updates).length)await chrome.storage.session.set(updates);
 }).catch(()=>{});
 async function snapshot(tabId,index=0,preferPicked=true){
+  if(!preferPicked)await mediaPicker.clear(tabId);
   await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',files:['media-observer.js']}).catch(()=>{});
   const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0]});
   frames.sort((a,b)=>a.frameId-b.frameId);

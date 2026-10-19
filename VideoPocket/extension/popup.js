@@ -159,7 +159,7 @@ for(const id of ['videoFormat','audioFormat','height','audioQuality','subtitleFo
 $('language').addEventListener('change',()=>{chosenTrackId=$('language').value;void restoreSelectedCapture();$('language').title=$('language').selectedOptions[0]?.textContent || '';});
 $('mediaSelect').addEventListener('change',()=>{mediaIndex=Number($('mediaSelect').value);refresh(false,true).catch(e=>notice(e.message,true));});
 bind('pickMedia',async()=>{await send('pickMedia',{tabId:tab.id});window.close();});
-bind('refresh',()=>refresh(true));
+bind('refresh',()=>refresh(true,true));
 bind('download',async()=>{const cap=selectedCapability();if(!cap?.enabled)throw new Error('請先讀取來源資訊');notice();const title=[page.videos?.[mediaIndex]?.title,info.title,page.title].map(value=>String(value || '').trim()).find(value=>value&&!/^影片\s*\d+$/i.test(value)) || '',key=kind==='video'?$('height').value:$('audioQuality').value,ext=cap.extensions[key],message={sourceId:info.browserSourceId,downloadKey:info.downloadKey,title,platform:page.platform?.site,kind,height:Number($('height').value),audioQuality:$('audioQuality').value};
  if(typeof showSaveFilePicker==='function'){const name=suggestedFilename(title,ext,usedFilenames),destinationId=crypto.randomUUID(),reservation=send('prepareDownload',{...message,destinationId});
   try{const handle=await showSaveFilePicker({suggestedName:name});const result=await reservation;if(result?.duplicate)return;usedFilenames=filenameHistory([...usedFilenames,handle.name]);void send('rememberFilename',{name:handle.name}).catch(()=>{});VideoPocketDestinations.putNow(handle,destinationId);}catch(error){const job=await reservation.catch(()=>null);if(job?.id&&!job.duplicate)await send('cancel',{id:job.id});throw error;}

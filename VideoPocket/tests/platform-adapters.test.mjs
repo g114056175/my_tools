@@ -43,16 +43,35 @@ test('serialized page snapshot keeps Instagram adapter output after generic sour
   assert.equal(page.videos[0].downloadUrl, 'https://cdninstagram.com/reel.mp4');
 });
 
-test('page snapshot exposes the Twitch VOD manifest, not the empty MSE source', async () => {
+test('page snapshot identifies Twitch VOD without calling page fetch', async () => {
   const video = { currentSrc:'',src:'',textTracks:[],duration:20,mediaKeys:null,hasAttribute:()=>false,getAttribute:()=>null,querySelector:()=>null,querySelectorAll:()=>[],closest:()=>null };
   globalThis.location={href:'https://www.twitch.tv/videos/2891894094',pathname:'/videos/2891894094',hostname:'www.twitch.tv'};
   globalThis.window={};globalThis.performance={getEntriesByType:()=>[]};
   globalThis.document={title:'VOD',documentElement:{lang:'en'},scripts:[],querySelectorAll:selector=>selector==='video'?[video]:[],querySelector:()=>null};
   const previous=globalThis.fetch;
   try {
-    globalThis.fetch=async url=>{assert.equal(url,'https://gql.twitch.tv/gql');return {ok:true,json:async()=>({data:{videoPlaybackAccessToken:{value:'test-token',signature:'test-sig'}}})};};
+    globalThis.fetch=async()=>{throw new Error('page fetch must not be used');};
     const snapshot=await pageSnapshot(0);
     assert.equal(snapshot.platform.site,'twitch');assert.equal(snapshot.platform.id,'2891894094');
-    assert.equal(new URL(snapshot.videos[0].downloadUrl).pathname,'/vod/2891894094.m3u8');
+    assert.equal(snapshot.videos[0].downloadUrl,location.href);
+    assert.equal(snapshot.videos[0].mediaIdentity,'twitch-vod:2891894094');
+    const ad={...video,src:'https://ads.example/ad.mp4',currentSrc:'https://ads.example/ad.mp4'};
+    video.closest=selector=>selector==='[data-a-target="video-player"]'?{}:null;
+    document.querySelectorAll=selector=>selector==='video'?[video,ad]:[];
+    const multiple=await pageSnapshot(0);assert.equal(multiple.platform.id,'2891894094');assert.equal(multiple.videos[1].downloadUrl,ad.src);
+    const selectedAd=await pageSnapshot(1);assert.equal(selectedAd.platform,undefined);
+    document.querySelectorAll=selector=>selector==='video'?[ad,video]:[];
+    const adFirst=await pageSnapshot(0);assert.equal(adFirst.platform,undefined);assert.equal(adFirst.videos[1].mediaIdentity,'twitch-vod:2891894094');assert.equal(adFirst.videos[1].downloadUrl,location.href);
+    document.querySelectorAll=()=>[];const beforeMount=await pageSnapshot(0);assert.equal(beforeMount.videos.length,1);assert.equal(beforeMount.platform.id,'2891894094');
   } finally {globalThis.fetch=previous;}
+});
+
+test('Twitch token failures preserve HTTP, GraphQL and timeout causes',async()=>{
+ const url='https://www.twitch.tv/videos/2891894094';
+ await assert.rejects(twitchVodManifest(url,async()=>({ok:false,status:403})),e=>e.status===403);
+ await assert.rejects(twitchVodManifest(url,async()=>({ok:true,json:async()=>({errors:[{extensions:{code:'FORBIDDEN'}}]})})),e=>e.code==='HTTP_AUTH');
+ await assert.rejects(twitchVodManifest(url,async()=>({ok:true,json:async()=>({data:{videoPlaybackAccessToken:null}})})),e=>e.code==='SOURCE_UNAVAILABLE');
+ await assert.rejects(twitchVodManifest(url,async()=>({ok:true,json:async()=>({errors:{}})})),e=>e.code==='SOURCE_UNAVAILABLE');
+ await assert.rejects(twitchVodManifest(url,async()=>{throw Object.assign(new Error(),{name:'TimeoutError'});}),e=>e.code==='NETWORK_TIMEOUT');
+ await assert.rejects(twitchVodManifest(url,async()=>({ok:true,json:async()=>{throw new SyntaxError();}})),e=>e.code==='SOURCE_UNAVAILABLE');
 });

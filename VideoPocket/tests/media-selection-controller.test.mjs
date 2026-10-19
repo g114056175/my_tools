@@ -30,6 +30,26 @@ test('selectedMediaIndex requires page, frame, document, media identity and sour
   assert.equal(selectedMediaIndex([{...videos[0], url: 'https://cdn/new-post.mp4'}], selection, url), -1);
 });
 
+test('Twitch selection survives player replacement for the same VOD but never another VOD or frame',()=>{
+ const url='https://www.twitch.tv/videos/123',id='twitch-vod:123',selection={pageToken:stableHash(url),frameId:0,documentId:'doc',mediaKey:1,sourceToken:stableHash('blob:old'),modelToken:stableHash(id)};
+ const video={frameId:0,documentId:'doc',mediaKey:99,url:'blob:new',mediaIdentity:id};
+ assert.equal(selectedMediaIndex([video],selection,url),0);
+ assert.equal(selectedMediaIndex([{...video,mediaIdentity:'twitch-vod:456'}],selection,url),-1);
+ assert.equal(selectedMediaIndex([{...video,frameId:2}],selection,url),-1);
+});
+
+test('explicit clear cancels the picker and waits for a pending selection write before removal',async()=>{
+ const order=[];let selected,release;
+ const api={action:{setBadgeText:async()=>{}},storage:{session:{set:async()=>{order.push('write-start');await new Promise(r=>release=r);order.push('write-end');},remove:async()=>order.push('remove')}},scripting:{executeScript:async request=>{
+  if(!request.args)return [frames[0]];
+  if(request.func.name==='cancelMediaPicker')return [];
+  return new Promise(resolve=>{selected=()=>resolve([{result:{ok:true,requestId:request.args[0].requestId,mediaKey:1}}]);});
+ }}};
+ const controller=createMediaSelectionController(api);await controller.begin(3);selected();await new Promise(r=>setImmediate(r));
+ const clearing=controller.clear(3);await new Promise(r=>setImmediate(r));assert.deepEqual(order,['write-start']);
+ release();await clearing;assert.deepEqual(order,['write-start','write-end','remove']);
+});
+
 test('begin claims tab before frame discovery and a later begin owns the tab', async () => {
   const api = apiMock(); const controller = createMediaSelectionController(api);
   let firstDiscoveryResolve; let discoveryCount = 0; api.scripting.executeScript = async request => {

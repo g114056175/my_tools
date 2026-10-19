@@ -4,7 +4,10 @@ import {stableHash} from './download-identity.js';
 export const selectionStorageKey=tabId=>`mediaSelection:${tabId}`;
 export function selectedMediaIndex(videos,selection,pageUrl){
   if(!selection || selection.pageToken!==stableHash(pageUrl))return -1;
-  return videos.findIndex(video=>String(video.documentId ?? '')===String(selection.documentId ?? '') && Number(video.frameId)===Number(selection.frameId) && String(video.mediaKey)===String(selection.mediaKey) && (!selection.modelToken || stableHash(video.mediaIdentity || '')===selection.modelToken) && (!selection.sourceToken || stableHash(video.url || '')===selection.sourceToken));
+  return videos.findIndex(video=>{
+    const sameVod=String(video.mediaIdentity||'').startsWith('twitch-vod:')&&selection.modelToken===stableHash(video.mediaIdentity);
+    return String(video.documentId ?? '')===String(selection.documentId ?? '') && Number(video.frameId)===Number(selection.frameId) && (sameVod||String(video.mediaKey)===String(selection.mediaKey)) && (!selection.modelToken || stableHash(video.mediaIdentity || '')===selection.modelToken) && (sameVod||!selection.sourceToken || stableHash(video.url || '')===selection.sourceToken);
+  });
 }
 
 export function createMediaSelectionController(api){
@@ -60,5 +63,10 @@ export function createMediaSelectionController(api){
     }
     return {started:true};
   };
-  return {begin,stop};
+  const clear=async tabId=>{
+    await stop(tabId);
+    await selectionWrites.get(tabId)?.catch(()=>{});
+    await api.storage.session.remove(selectionStorageKey(tabId));
+  };
+  return {begin,stop,clear};
 }

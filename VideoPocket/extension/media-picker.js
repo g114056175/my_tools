@@ -72,6 +72,7 @@ export function startMediaPicker(options = {}) {
     const source = () => { try { return video.currentSrc || video.src || video.querySelector?.('source')?.src || ''; } catch { return ''; } };
     const title = String(entry?.title || video.getAttribute?.('aria-label') || video.title || document.title || `影片 ${index + 1}`).trim();
     let mediaIdentity='';try{mediaIdentity=globalThis[Symbol.for('video-pocket.mediaObserver')]?.modelFor?.(video)?.id || globalThis[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
+    try{const page=new URL(location.href),id=page.pathname.match(/^\/videos\/(\d+)/)?.[1];if(/(^|\.)twitch\.tv$/i.test(page.hostname)&&id&&(video.closest?.('[data-a-target="video-player"]')||videos.length===1))mediaIdentity='twitch-vod:'+id;}catch{}
     return {mediaKey: keyOf(video), localMediaIndex: index, frameId, documentId, frameUrl: location.href, title, url: source(),mediaIdentity};
   };
   let highlighted = null;

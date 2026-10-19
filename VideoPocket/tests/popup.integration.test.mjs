@@ -42,7 +42,7 @@ const pageFor = () => {
 };
 globalThis.chrome = {
   runtime:{connect:()=>({}),sendMessage:async message => {
-    if (message.action === 'snapshot') { state.snapshotCalls++; return {ok:true,result:pageFor()}; }
+    if (message.action === 'snapshot') { state.snapshotCalls++;state.lastSnapshot=message; return {ok:true,result:pageFor()}; }
     if (message.action === 'inspect') { state.inspectCalls++; if (state.phase < 3) return {ok:false,error:'inspect failed',failure:{code:'NETWORK_FAILURE'}}; return {ok:true,result:{title:'usable',downloadKey:'k',choices:{video:{auto:{enabled:true,heights:[360],extensions:{360:'mp4'},sizes:{360:{bytes:1}}}},audio:{original:{enabled:false}}},tracks:[]}}; }
     if (message.action === 'lastError') return {ok:true,result:null};
     return {ok:true,result:{}};
@@ -62,6 +62,7 @@ test('popup integration hides unusable media UI, preserves subtitle-only UI, and
   assert.equal(documentMock.getElementById('job').children.length, 1);
 
   state.phase = 1; await documentMock.getElementById('refresh').click();
+  assert.equal(state.lastSnapshot.preferPicked,false,'explicit refresh clears the previous picker choice instead of preserving stale selection');
   await wait(() => state.snapshotCalls >= 2 && documentMock.getElementById('sourceLabel').textContent === '未取得影片資訊');
   assert.equal(documentMock.getElementById('downloadSection').hidden, true);
   assert.equal(documentMock.getElementById('mediaSelect').hidden, true);

@@ -10,6 +10,7 @@ import {resolveAnime1,mediaCredentials} from '../extension/anime1.js';
 import {parseTransportStreamCodecs} from '../extension/transport-stream.js';
 import {readMp4Metadata} from '../extension/mp4-metadata.js';
 import {decryptHlsSample,hlsIv} from '../extension/hls-sample.js';
+import {twitchVodManifest} from '../extension/twitch-adapter.js';
 
 const EMPTY={videoCodec:'',audioCodec:''};
 function response(body,{status=200,type='application/octet-stream',length,contentRange=null}={}){
@@ -40,7 +41,7 @@ async function makeRuntime(routes){
   const source=await fs.readFile(new URL('../extension/offscreen.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const context={HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,AbortSignal,Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout,clearTimeout,queueMicrotask,console};
-  vm.runInNewContext(code,context,{filename:'offscreen.js'});
+    vm.runInNewContext(code,{...context,twitchVodManifest},{filename:'offscreen.js'});
   assert.equal(typeof listener,'function');
   async function inspect(descriptor){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
   return {inspect,fetchLog,messages};
@@ -62,6 +63,18 @@ test('HEAD failure followed by bounded GET can still inspect a source',async()=>
   const url='https://cdn.example/video.mp4',rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>o.method==='HEAD'?response('',{status:405}):response(new Uint8Array([0,1,2]),{type:'video/mp4'})}]);
   const result=await rt.inspect({url,referer:'https://example.test/watch',title:'x'});
   assert.equal(result.choices.video.auto.enabled,true);assert.ok(rt.fetchLog.some(x=>x.options.headers.Range==='bytes=0-131071'));
+});
+
+test('Twitch playback lookup runs in offscreen and renews the manifest for the selected VOD',async()=>{
+ const referer='https://www.twitch.tv/videos/2891894094',child='https://cdn.example/vod/index.m3u8';
+ const rt=await makeRuntime([
+  {match:u=>u==='https://gql.twitch.tv/gql',reply:(u,o)=>{assert.equal(JSON.parse(o.body).variables.vodID,'2891894094');return response(JSON.stringify({data:{videoPlaybackAccessToken:{value:'new-token',signature:'sig'}}}),{type:'application/json'});}},
+  {match:u=>u.startsWith('https://usher.ttvnw.net/vod/2891894094.m3u8?'),reply:(u)=>{assert.equal(new URL(u).searchParams.get('token'),'new-token');return response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2"\n'+child+'\n');}},
+  {match:u=>u===child,reply:response('#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\n0.ts\n#EXT-X-ENDLIST\n')}
+ ]);
+ const result=await rt.inspect({url:'https://old.example/stale.m3u8',referer,platform:{site:'twitch',id:'2891894094',manifest:'old'}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.deepEqual([...result.choices.video.auto.heights],[360]);
+ assert.equal(rt.fetchLog.some(r=>r.url.includes('old.example')),false);
 });
 
 test('GET 403 is reported as HTTP_AUTH rather than unknown MP4',async()=>{

@@ -64,10 +64,10 @@ test('popup integration hides unusable media UI, preserves subtitle-only UI, and
 
   state.phase = 1; await documentMock.getElementById('refresh').click();
   assert.equal(state.lastSnapshot.preferPicked,false,'explicit refresh clears the previous picker choice instead of preserving stale selection');
-  await wait(() => state.snapshotCalls >= 2 && documentMock.getElementById('sourceLabel').textContent === '未取得下載來源');
+  await wait(() => state.snapshotCalls >= 2 && documentMock.getElementById('sourceLabel').textContent === '找到影片，但無法下載');
   assert.equal(documentMock.getElementById('downloadSection').hidden, true);
   assert.equal(documentMock.getElementById('mediaSelect').hidden, true);
-  assert.match(documentMock.getElementById('notice').textContent,/已找到影片元素/);
+  assert.equal(documentMock.getElementById('notice').hidden,true);assert.equal(documentMock.getElementById('diagnosticRow').hidden,true);
 
   state.phase = 2; await documentMock.getElementById('refresh').click();
   await wait(() => !documentMock.getElementById('downloadSection').hidden && !documentMock.getElementById('subtitleTab').disabled);

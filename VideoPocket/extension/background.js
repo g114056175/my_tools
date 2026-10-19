@@ -159,7 +159,7 @@ async function handle(message,sender){
   case 'highlightMedia':{
     if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');
     if(!message.documentId||message.mediaKey==null)return {highlighted:false};
-    const result=await chrome.scripting.executeScript({target:{tabId:message.tabId,documentIds:[message.documentId]},world:'MAIN',func:highlightMedia,args:[{mediaKey:message.mediaKey}]});
+    const result=await chrome.scripting.executeScript({target:{tabId:message.tabId,documentIds:[message.documentId]},world:'MAIN',func:highlightMedia,args:[{mediaKey:message.mediaKey,title:String(message.title || "").slice(0,200)}]});
     return result[0]?.result || {highlighted:false};
   }
   case 'snapshot':return snapshot(message.tabId,message.mediaIndex || 0,message.preferPicked!==false);

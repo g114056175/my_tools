@@ -59,3 +59,16 @@ test('Escape cancels and removes the active overlay without touching playback', 
     assert.equal(result.action, MEDIA_PICKER_ACTIONS.cancelled); assert.equal(video.currentTime, 12); assert.equal(state.documentMock.body.children.length, 0);
   } finally { state.restore(); }
 });
+
+test('picker never chooses a video hidden behind a login dialog',async()=>{
+ const video=new NodeMock('video');const state=world([video]);const query=state.documentMock.querySelectorAll;
+ const modal=new NodeMock('div');modal.contains=()=>false;
+ state.documentMock.querySelectorAll=selector=>selector.includes('[role="dialog"]')?[modal]:query(selector);
+ try{
+  const pending=startMediaPicker({requestId:'blocked'});let prevented=false;
+  state.documentMock.dispatch('pointermove',{clientX:20,clientY:20,composedPath:()=>[video]});
+  assert.equal(state.documentMock.body.children[0].style.display,'none');
+  state.documentMock.dispatch('click',{clientX:20,clientY:20,composedPath:()=>[video],preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+  assert.equal(prevented,false);state.documentMock.dispatch('keydown',{key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal((await pending).ok,false);
+ }finally{state.restore();}
+});

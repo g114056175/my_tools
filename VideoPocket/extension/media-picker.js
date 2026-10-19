@@ -78,6 +78,7 @@ export function startMediaPicker(options = {}) {
   let highlighted = null;
   let closed = false;
   let timer;
+  let visibilityTimer;
   let resolveResult;
   const promise = new Promise(resolve => { resolveResult = resolve; });
   const overlay = document.createElement('div');
@@ -94,7 +95,7 @@ export function startMediaPicker(options = {}) {
   let observer;
   const cleanup = reason => {
     if (closed) return;
-    closed = true; clearTimeout(timer);
+    closed = true; clearTimeout(timer);clearInterval(visibilityTimer);
     document.removeEventListener('pointermove', onPointerMove, true);
     document.removeEventListener('pointerdown', onPointerDown, true);
     document.removeEventListener('click', onClick, true);
@@ -106,13 +107,21 @@ export function startMediaPicker(options = {}) {
     else if (reason === 'expired') resolveResult({ok: false, action: ACTIONS.expired, requestId, reason});
   };
   const rect = video => { try { const r = video.getBoundingClientRect(); return r.width > 0 && r.height > 0 ? r : null; } catch { return null; } };
+  const blockedByDialog = video => {
+    try{return [...document.querySelectorAll('dialog[open],[role="dialog"],[aria-modal="true"]')].some(dialog=>{
+      if(dialog.contains?.(video))return false;
+      const r=dialog.getBoundingClientRect?.();if(!r||r.width<=0||r.height<=0)return false;
+      const style=globalThis.getComputedStyle?.(dialog);
+      return !style || style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;
+    });}catch{return false;}
+  };
   const isInteractive = node => {
     try { return !!node?.closest?.('a,button,[role="button"],input,select,textarea'); } catch { return false; }
   };
   const chooseFromEvent = (event,force=false) => {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
     refreshVideos(force||path.some(node=>String(node?.tagName).toLowerCase()==='video'&&!videos.includes(node)));
-    const direct = path.find(node => videos.includes(node));
+    const direct = path.find(node => videos.includes(node)&&!blockedByDialog(node));
     if (direct) return direct;
     const x = Number(event.clientX), y = Number(event.clientY);
     let stack = [];
@@ -125,18 +134,18 @@ export function startMediaPicker(options = {}) {
       let parent = top.parentElement;
       while (parent && parent !== document.documentElement) {
         const owned = videos.filter(video => { try { return parent.contains(video); } catch { return false; } });
-        if (owned.length === 1 && top.tagName?.toLowerCase() === 'button') return owned[0];
+        if (owned.length === 1 && top.tagName?.toLowerCase() === 'button'&&!blockedByDialog(owned[0])) return owned[0];
         parent = parent.parentElement;
       }
       return null;
     }
-    const fromStack = stack.find(node => videos.includes(node));
+    const fromStack = stack.find(node => videos.includes(node)&&!blockedByDialog(node));
     if (fromStack) return fromStack;
-    return videos.find(video => { const r = rect(video); return r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }) || null;
+    return videos.find(video => { const r = rect(video); return r && !blockedByDialog(video) && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }) || null;
   };
   const paint = video => {
     highlighted = video || null;
-    const r = video && rect(video);
+    const r = video && !blockedByDialog(video) && rect(video);
     if (!r) { overlay.style.display = 'none'; label.style.display = 'none'; return; }
     Object.assign(overlay.style, {display: 'block', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`});
     Object.assign(label.style, {display: 'block', left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top - 24)}px`});
@@ -165,6 +174,7 @@ export function startMediaPicker(options = {}) {
   document.addEventListener('keydown', onKeyDown, true);
   try { observer = new MutationObserver(() => {videosDirty=true;}); observer.observe(document.documentElement || document, {subtree: true, childList: true}); } catch {}
   timer = setTimeout(() => cleanup('expired'), timeoutMs);
+  visibilityTimer=setInterval(()=>{if(highlighted&&blockedByDialog(highlighted))paint(null);},200);
   globalThis[stateKey] = {requestId, cancel: () => cleanup('replaced')};
   return promise;
 }

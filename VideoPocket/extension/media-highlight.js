@@ -38,27 +38,44 @@ export function highlightMedia(options = {}) {
     }
   } catch { return {highlighted: false}; }
 
-  const host = globalThis.document?.body || globalThis.document?.documentElement;
+  // Keep the marker in the player's own stacking context, rather than a
+  // body-level maximum z-index overlay above site dialogs.
+  const host = video.parentElement || globalThis.document?.body || globalThis.document?.documentElement;
   if (!host?.append || !globalThis.document?.createElement) return {highlighted: false};
   const frame = globalThis.document.createElement('div');
   frame.setAttribute?.('data-video-pocket-media-highlight', '1');
   Object.assign(frame.style, {
-    position: 'fixed', zIndex: '2147483647', pointerEvents: 'none',
-    border: '2px solid #16a34a', boxSizing: 'border-box', display: 'none',
+    position: 'absolute', zIndex: '2', pointerEvents: 'none',
+    border: '3px solid #16856b', outline:'1px solid #ffffffb3', boxSizing: 'border-box', display: 'none',
   });
-  const rect = () => {
-    try {
-      const value = video.getBoundingClientRect?.();
-      return value && value.width > 0 && value.height > 0 ? value : null;
-    } catch { return null; }
+  const label=globalThis.document.createElement('div');
+  label.textContent=String(options.title || video.getAttribute?.('aria-label') || video.title || globalThis.document.title || '影片').trim() || '影片';
+  Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'calc(100% - 6px)',padding:'3px 6px',borderRadius:'3px',background:'#16856b',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
+  frame.append(label);
+  const blockedByDialog=()=>{
+    try{return [...globalThis.document.querySelectorAll('dialog[open],[role="dialog"],[aria-modal="true"]')].some(dialog=>{
+      if(dialog.contains?.(video))return false;
+      const r=dialog.getBoundingClientRect?.();if(!r||r.width<=0||r.height<=0)return false;
+      const style=globalThis.getComputedStyle?.(dialog);
+      return !style || style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;
+    });}catch{return false;}
   };
+  let timer,updateTimer;
   const paint = () => {
-    const value = rect();
-    if (!value) { frame.style.display = 'none'; return; }
-    Object.assign(frame.style, {display: 'block', left: `${value.left}px`, top: `${value.top}px`, width: `${value.width}px`, height: `${value.height}px`});
+    try{
+      const value=video.getBoundingClientRect?.();
+      if(video.isConnected===false||!value||value.width<=0||value.height<=0||blockedByDialog()){frame.style.display='none';return;}
+      let parent=frame.offsetParent;
+      if(parent===globalThis.document.body&&globalThis.getComputedStyle?.(parent)?.position==='static')parent=null;
+      const bounds=parent?.getBoundingClientRect?.();
+      const sx=bounds&&parent.offsetWidth?bounds.width/parent.offsetWidth:1,sy=bounds&&parent.offsetHeight?bounds.height/parent.offsetHeight:1;
+      const left=parent?(value.left-(bounds?.left||0))/sx+(parent.scrollLeft||0)-(parent.clientLeft||0):value.left+(globalThis.scrollX||0);
+      const top=parent?(value.top-(bounds?.top||0))/sy+(parent.scrollTop||0)-(parent.clientTop||0):value.top+(globalThis.scrollY||0);
+      Object.assign(frame.style,{display:'block',left:`${left}px`,top:`${top}px`,width:`${value.width/sx}px`,height:`${value.height/sy}px`});
+    }catch{frame.style.display='none';}
   };
   const clear = () => {
-    clearTimeout(timer);
+    clearTimeout(timer);clearInterval(updateTimer);
     globalThis.removeEventListener?.('scroll', paint, true);
     globalThis.removeEventListener?.('resize', paint, true);
     frame.remove?.();
@@ -68,7 +85,8 @@ export function highlightMedia(options = {}) {
   globalThis.addEventListener?.('scroll', paint, true);
   globalThis.addEventListener?.('resize', paint, true);
   paint();
-  const timer = setTimeout(clear, 1800);
+  updateTimer=setInterval(paint,200);
+  timer = setTimeout(clear, 8000);
   globalThis[stateKey] = {clear, timer};
   return {highlighted: true};
 }

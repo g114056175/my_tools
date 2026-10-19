@@ -67,3 +67,21 @@ test('open shadow video uses composed root when isConnected is unavailable', () 
     assert.equal(state.body.children.length, 1);
   } finally { highlightMedia({clear: true}); state.restore(); }
 });
+
+test('name badge lasts eight seconds and hides while a different modal covers the page',()=>{
+ const video=new NodeMock('video'),state=world([video]);const old={setTimeout,clearTimeout,setInterval,clearInterval};let tick,expire,duration;
+ globalThis.setTimeout=(fn,ms)=>{expire=fn;duration=ms;return 1;};globalThis.clearTimeout=()=>{};
+ globalThis.setInterval=fn=>{tick=fn;return 2;};globalThis.clearInterval=()=>{};
+ try{
+  identities([[video,5]]);highlightMedia({mediaKey:5,title:'flower'});const frame=state.body.children[0];
+  assert.equal(frame.children[0].textContent,'flower');assert.equal(frame.style.border,'3px solid #16856b');assert.equal(frame.style.position,'absolute');assert.equal(frame.style.zIndex,'2');assert.equal(duration,8000);
+  const modal=new NodeMock('div');state.body.nodes=[modal];tick();assert.equal(frame.style.display,'none');
+  modal.rect.width=0;tick();assert.equal(frame.style.display,'block');expire();assert.equal(state.body.children.length,0);
+ }finally{highlightMedia({clear:true});Object.assign(globalThis,old);state.restore();}
+});
+
+test('marker is positioned within its local scaled containing block',()=>{
+ const video=new NodeMock('video',{left:140,top:100,width:240,height:140}),state=world([video]);const parent=new NodeMock('div',{left:100,top:80,width:400,height:300});parent.offsetWidth=200;parent.offsetHeight=150;parent.scrollLeft=5;parent.scrollTop=7;parent.clientLeft=1;parent.clientTop=2;
+ const create=state.body.append.bind(state.body);state.body.append=(frame)=>{frame.offsetParent=parent;create(frame);};
+ try{identities([[video,8]]);highlightMedia({mediaKey:8});const f=state.body.children[0];assert.equal(f.style.left,'24px');assert.equal(f.style.top,'15px');assert.equal(f.style.width,'120px');assert.equal(f.style.height,'70px');}finally{highlightMedia({clear:true});state.restore();}
+});

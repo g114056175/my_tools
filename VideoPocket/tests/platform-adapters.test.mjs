@@ -62,6 +62,8 @@ test('page snapshot identifies Twitch VOD without calling page fetch', async () 
     const selectedAd=await pageSnapshot(1);assert.equal(selectedAd.platform,undefined);
     document.querySelectorAll=selector=>selector==='video'?[ad,video]:[];
     const adFirst=await pageSnapshot(0);assert.equal(adFirst.platform,undefined);assert.equal(adFirst.videos[1].mediaIdentity,'twitch-vod:2891894094');assert.equal(adFirst.videos[1].downloadUrl,location.href);
+    const replacement={...video};document.querySelectorAll=selector=>selector==='video'?[video,replacement,ad]:[];
+    const switching=await pageSnapshot(1);assert.equal(switching.platform.id,'2891894094');assert.equal(switching.videos[0].mediaIdentity,switching.videos[1].mediaIdentity);
     document.querySelectorAll=()=>[];const beforeMount=await pageSnapshot(0);assert.equal(beforeMount.videos.length,1);assert.equal(beforeMount.platform.id,'2891894094');
   } finally {globalThis.fetch=previous;}
 });

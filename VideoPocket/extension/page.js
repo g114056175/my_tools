@@ -82,15 +82,17 @@ export async function pageSnapshot(mediaIndex=0){
     if(embedded)platform={site:'instagram',id:igCode,shortcode:igCode,title,duration:embedded.duration,width:embedded.width,height:embedded.height,versions:embedded.versions.map(v=>({url:v.url,width:v.width||embedded.width,height:v.height||embedded.height,id:v.id})),manifestXml:embedded.dash || undefined};
   }
   const twitchHost=/(^|\.)twitch\.tv$/i.test(currentUrl.hostname),twitchId=currentUrl.pathname.match(/^\/videos\/(\d+)/i)?.[1];
-  let twitchMain=null;
+  let twitchPlayers=[];
   if(twitchHost&&twitchId){
     // Resolve playback access inside the extension, not through the site's
     // fetch implementation or its page CSP. Other videos/ads do not disable
     // the identified main player.
     const owned=videos.filter(v=>{try{return !!v.closest('[data-a-target="video-player"]');}catch{return false;}});
-    twitchMain=owned.length===1?owned[0]:videos.length===1?videos[0]:null;
-    if(twitchMain)candidates[videos.indexOf(twitchMain)].adapterDownloadUrl=currentUrl.href;
-    if(!videos.length || video===twitchMain){
+    // Twitch can keep old/new internal video elements during a player swap.
+    // They belong to the same route VOD, not separate posts in a feed.
+    twitchPlayers=owned.length?owned:videos.length===1?videos:[];
+    for(const v of twitchPlayers)candidates[videos.indexOf(v)].adapterDownloadUrl=currentUrl.href;
+    if(!videos.length || twitchPlayers.includes(video)){
       platform={site:'twitch',id:twitchId,title,duration:Number.isFinite(video?.duration)?video.duration:0};
     }
   }
@@ -156,7 +158,7 @@ export async function pageSnapshot(mediaIndex=0){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
     try{candidate.mediaIdentity=sourceObserver?.modelFor?.(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
-    if(twitchId&&v===twitchMain)candidate.mediaIdentity='twitch-vod:'+twitchId;
+    if(twitchId&&twitchPlayers.includes(v))candidate.mediaIdentity='twitch-vod:'+twitchId;
     if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{

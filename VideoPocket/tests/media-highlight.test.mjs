@@ -85,3 +85,12 @@ test('marker is positioned within its local scaled containing block',()=>{
  const create=state.body.append.bind(state.body);state.body.append=(frame)=>{frame.offsetParent=parent;create(frame);};
  try{identities([[video,8]]);highlightMedia({mediaKey:8});const f=state.body.children[0];assert.equal(f.style.left,'24px');assert.equal(f.style.top,'15px');assert.equal(f.style.width,'120px');assert.equal(f.style.height,'70px');}finally{highlightMedia({clear:true});state.restore();}
 });
+
+test('a stale marker owner cannot clear or renew a newer marker',()=>{
+ const video=new NodeMock('video'),state=world([video]);try{
+  identities([[video,9]]);highlightMedia({mediaKey:9,requestId:'old'});highlightMedia({mediaKey:9,requestId:'new'});
+  assert.equal(highlightMedia({clear:true,requestId:'old'}).highlighted,false);assert.equal(state.body.children.length,1);
+  assert.equal(highlightMedia({renew:true,requestId:'new'}).highlighted,true);assert.equal(state.body.children.length,1);
+  highlightMedia({clear:true,requestId:'new'});assert.equal(state.body.children.length,0);
+ }finally{highlightMedia({clear:true});state.restore();}
+});

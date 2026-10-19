@@ -4,6 +4,8 @@
 export function highlightMedia(options = {}) {
   const stateKey = Symbol.for('video-pocket.media-highlight');
   const old = globalThis[stateKey];
+  if((options.clear||options.renew)&&options.requestId&&old?.requestId!==options.requestId)return {highlighted:false};
+  if(options.renew){old?.renew?.();return {highlighted:!!old};}
   if (old?.clear) old.clear();
   if (options.clear) return {highlighted: false};
 
@@ -86,7 +88,8 @@ export function highlightMedia(options = {}) {
   globalThis.addEventListener?.('resize', paint, true);
   paint();
   updateTimer=setInterval(paint,200);
-  timer = setTimeout(clear, 8000);
-  globalThis[stateKey] = {clear, timer};
+  const renew=()=>{clearTimeout(timer);timer=setTimeout(clear,8000);};
+  renew();
+  globalThis[stateKey] = {clear,renew,requestId:options.requestId,timer};
   return {highlighted: true};
 }

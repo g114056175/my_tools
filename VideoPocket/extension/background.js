@@ -11,9 +11,10 @@ import {fileStem,createFilenameRecorder} from './filenames.js';
 import {downloadKey,createDownloadClaims,stableHash} from './download-identity.js';
 import {mediaRequestHeaders} from './media-request-headers.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from './media-selection-controller.js';
-import {highlightMedia} from './media-highlight.js';
+import {createPopupMarkerController} from './popup-marker.js';
 import './destinations.js';
 const mediaPicker=createMediaSelectionController(chrome);
+const popupMarkers=createPopupMarkerController(chrome);
 let creating,jobUpdates=Promise.resolve(),runningJob=null,headerWrites=Promise.resolve(),ruleId=100;
 const work=new Map(),queue=[],popupViews=new Set(),downloads=new Map(),headerRules=new Map();
 const downloadClaims=createDownloadClaims();
@@ -28,7 +29,7 @@ setInterval(()=>{if(work.size)void chrome.storage.session.get('jobs');},20000);
 headerWrites=chrome.declarativeNetRequest.getSessionRules().then(rules=>chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:rules.map(r=>r.id)}));
 function updateJob(id,patch){jobUpdates=jobUpdates.catch(()=>{}).then(async()=>{const {jobs=[]}=await chrome.storage.session.get('jobs');const entry=jobs.find(j=>j.id===id);if(entry)Object.assign(entry,patch);else jobs.unshift({id,...patch});await chrome.storage.session.set({jobs:[...jobs.filter(j=>ACTIVE_STATES.has(j.state)),...(popupViews.size?jobs.filter(j=>!ACTIVE_STATES.has(j.state)).slice(0,10):[])]});});return jobUpdates;}
 function dismissFinished(){jobUpdates=jobUpdates.catch(()=>{}).then(async()=>{const {jobs=[]}=await chrome.storage.session.get('jobs');await chrome.storage.session.set({jobs:jobs.filter(j=>ACTIVE_STATES.has(j.state))});});return jobUpdates;}
-chrome.runtime.onConnect.addListener(view=>{if(view.name!=='popup')return;popupViews.add(view);void dismissFinished();view.onDisconnect.addListener(()=>{popupViews.delete(view);if(!popupViews.size){void dismissFinished();void failureTask(()=>chrome.storage.session.remove('lastError'));}for(const job of work.values())if(job.picking&&job.owner===view.sender?.documentId)job.pickDeadline=Date.now()+3000;});});
+chrome.runtime.onConnect.addListener(view=>{if(view.name!=='popup')return;popupMarkers.attach(view);popupViews.add(view);void dismissFinished();view.onDisconnect.addListener(()=>{popupViews.delete(view);if(!popupViews.size){void dismissFinished();void failureTask(()=>chrome.storage.session.remove('lastError'));}for(const job of work.values())if(job.picking&&job.owner===view.sender?.documentId)job.pickDeadline=Date.now()+3000;});});
 async function engine(action,data={}){
  if(!(await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[chrome.runtime.getURL('offscreen.html')]})).length){creating ||= chrome.offscreen.createDocument({url:'offscreen.html',reasons:['BLOBS','WORKERS','DOM_PARSER'],justification:'下載原始影音，在瀏覽器合併與抽取音訊'}).finally(()=>creating=null);await creating;}
  const r=await chrome.runtime.sendMessage({target:'offscreen',action,...data});if(!r?.ok)throw Object.assign(new Error(r?.error || '瀏覽器處理失敗'),r?.failure || {});return r.result;
@@ -156,12 +157,6 @@ async function handle(message,sender){
  switch(message.action){
   case 'rememberFilename':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');await rememberFilename(message.name);return {};
   case 'pickMedia':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');return mediaPicker.begin(message.tabId);
-  case 'highlightMedia':{
-    if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');
-    if(!message.documentId||message.mediaKey==null)return {highlighted:false};
-    const result=await chrome.scripting.executeScript({target:{tabId:message.tabId,documentIds:[message.documentId]},world:'MAIN',func:highlightMedia,args:[{mediaKey:message.mediaKey,title:String(message.title || "").slice(0,200)}]});
-    return result[0]?.result || {highlighted:false};
-  }
   case 'snapshot':return snapshot(message.tabId,message.mediaIndex || 0,message.preferPicked!==false);
   case 'bilibiliCaptions':return discoverBilibili(message.tabId,{bvid:message.expectedBvid,page:Number(message.expectedPage)||1,expectedCid:Number(message.expectedCid)||0},message.documentId).promise;
   case 'inspect':{const descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)};const result=await engine('inspect',{descriptor});result.downloadKey=descriptor.downloadKey;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:descriptor.downloadKey});if(sourceMeta.size>100)sourceMeta.delete(sourceMeta.keys().next().value);return result;}

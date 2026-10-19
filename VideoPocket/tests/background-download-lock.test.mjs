@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 import {ACTIVE_STATES} from '../extension/jobs.js';
 import {downloadKey,createDownloadClaims,stableHash} from '../extension/download-identity.js';
+import {createPopupMarkerController} from '../extension/popup-marker.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex} from '../extension/media-selection-controller.js';
 
 async function loadBackground({frames=[]}={}) {
@@ -38,7 +39,7 @@ async function loadBackground({frames=[]}={}) {
     ACTIVE_STATES, youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:e=>({code:e?.code||'INTERNAL_ERROR',message:e?.message||String(e)}),ERROR_VISIBILITY_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,createFilenameRecorder:()=>async()=>{},mediaRequestHeaders:()=>[],
     VideoPocketDestinations:{remove:async()=>{},clear:async()=>{},get:async()=>false},
-    downloadKey,createDownloadClaims,stableHash,createMediaSelectionController,selectionStorageKey,selectedMediaIndex};
+    downloadKey,createDownloadClaims,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex};
   vm.runInNewContext(code,context,{filename:'background.js'});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(typeof listener,'function');

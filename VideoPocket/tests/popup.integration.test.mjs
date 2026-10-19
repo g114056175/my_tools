@@ -32,7 +32,8 @@ globalThis.Option = class Option { constructor(text, value = '') { this.textCont
 Object.defineProperty(globalThis, 'navigator', {configurable:true, value:{clipboard:{writeText:async()=>{}}}});
 globalThis.indexedDB = {open() { const request = {}; setTimeout(() => { request.result = {createObjectStore(){}, transaction(){ return {objectStore(){return {put(){},delete(){}}}, commit(){}}; }}; request.onsuccess?.(); }, 0); return request; }};
 
-const state = {phase:0, snapshotCalls:0, inspectCalls:0};
+const state = {phase:0, snapshotCalls:0, inspectCalls:0};let disconnectPopup;
+test.after(()=>disconnectPopup?.());
 const jobs = [{id:'job-1', state:'running', title:'existing download', progress:42, createdAt:Date.now()}];
 const pageFor = () => {
   if (state.phase === 0) return {url:'https://example.test/empty',title:'Empty',videos:[],tracks:[]};
@@ -41,7 +42,7 @@ const pageFor = () => {
   return {url:'https://example.test/multi',title:'Multiple',mediaIndex:state.phase === 3 ? 0 : 1,videos:[{title:'first',documentId:'doc-first',mediaKey:1,downloadUrl:'https://cdn.test/first.mp4',url:'https://cdn.test/first.mp4'},{title:'second',documentId:'doc-second',mediaKey:2,downloadUrl:'https://cdn.test/second.mp4',url:'https://cdn.test/second.mp4'}],tracks:[]};
 };
 globalThis.chrome = {
-  runtime:{connect:()=>({}),sendMessage:async message => {
+  runtime:{connect:()=>({postMessage:message=>{if(message.action==='highlightMedia')state.lastHighlight=message;},onDisconnect:{addListener:fn=>{disconnectPopup=fn;}}}),sendMessage:async message => {
     if (message.action === 'snapshot') { state.snapshotCalls++;state.lastSnapshot=message; return {ok:true,result:pageFor()}; }
     if (message.action === 'inspect') { state.inspectCalls++; if (state.phase < 3) return {ok:false,error:'inspect failed',failure:{code:'NETWORK_FAILURE'}}; return {ok:true,result:{title:'usable',downloadKey:'k',choices:{video:{auto:{enabled:true,heights:[360],extensions:{360:'mp4'},sizes:{360:{bytes:1}}}},audio:{original:{enabled:false}}},tracks:[]}}; }
     if(message.action==='highlightMedia')state.lastHighlight=message;

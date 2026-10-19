@@ -13,6 +13,8 @@ let tab,page,subtitle=null,kind='video',mediaIndex=0,info=null,tracks=[],probePr
 let preferredKindPending=null,errorTimer,currentErrorId=null,usedFilenames=[],sourceError='',sourceErrorDetail='';
 let sessionJobs=[];
 const openedAt=Date.now(),popupPort=chrome.runtime.connect({name:'popup'});
+const markerHeartbeat=setInterval(()=>{try{popupPort.postMessage?.({action:'renewHighlight'});}catch{clearInterval(markerHeartbeat);}},3000);
+popupPort.onDisconnect?.addListener(()=>clearInterval(markerHeartbeat));
 const busyControls=new Set();
 let preferences=normalizePreferences(),preferenceWrites=Promise.resolve();
 function savePreference(key,value){preferences[key]=String(value);const stored={...preferences};preferenceWrites=preferenceWrites.catch(()=>{}).then(()=>chrome.storage.local.set({downloadPreferences:stored}));return preferenceWrites;}
@@ -141,13 +143,14 @@ function updateCaptureRecord(key,record){
 async function refresh(force=false,explicitMedia=false){
   const oldIdentity=page?page.url+'|'+page.media?.url+'|'+page.mediaIndex:'';
   stopBilibiliCaptionPolling();if(kind==='subtitle')preferredKindPending='subtitle';const token=++revision;page=null;info=null;tracks=[];subtitle=null;probePromise=null;captureScopeValue=null;captureRecords=[];captureRecord=null;currentCaptureKey=null;$('preview').value='';switchKind(kind==='subtitle'?'video':kind,false);applyInfo();
+  popupPort.postMessage?.({action:'highlightMedia'});
   notice();$('downloadSection').hidden=true;$('subtitleSection').hidden=true;$('sourceLabel').textContent='目前影片：';$('sourceLabel').classList.remove('error');$('pageTitle').hidden=false;$('pageTitle').textContent='讀取中…';$('mediaSelect').hidden=true;
   try{page=await send('snapshot',{tabId:tab.id,mediaIndex,preferPicked:!explicitMedia});}catch(e){if(token===revision)sourceState('未取得影片資訊',e.message);return;}
   if(token!==revision)return;mediaIndex=page.mediaIndex || 0;sourceState('','');
   $('mediaSelect').replaceChildren();for(const [i,v] of (page.videos || []).entries())$('mediaSelect').add(new Option(v.title,String(i)));$('mediaSelect').value=String(mediaIndex);$('mediaSelect').title=page.videos?.[mediaIndex]?.title || page.title;
   if(page.selectionExpired){const placeholder=new Option('原選取已變更，請重新選取','');placeholder.disabled=true;$('mediaSelect').add(placeholder);$('mediaSelect').value='';sourceState('請重新選取影片','原選取的影片已離開畫面或來源更新，請重新指定');return;}
   if(!page.videos?.length){addTracks();if(!tracks.length)sourceState('未取得影片資訊','此分頁沒有可用媒體來源');return;}
-  const target=page.videos[mediaIndex];if(target?.mediaKey!=null&&target.documentId)void send('highlightMedia',{tabId:tab.id,documentId:target.documentId,mediaKey:target.mediaKey,title:target.title || page.title}).catch(()=>{});
+  const target=page.videos[mediaIndex];if(target?.mediaKey!=null&&target.documentId)popupPort.postMessage?.({action:'highlightMedia',tabId:tab.id,documentId:target.documentId,mediaKey:target.mediaKey,title:target.title || page.title});
   if(oldIdentity!==page.url+'|'+page.media?.url+'|'+page.mediaIndex)chosenTrackId=null;
   captureScopeValue=await makeCaptureScope(tab.id,page,mediaIndex);const all=await chrome.storage.session.get(null),prefix=CAPTURE_PREFIX+tab.id+':';captureRecords=Object.entries(all).filter(([key,record])=>key.startsWith(prefix)&&record?.version===CAPTURE_VERSION&&record.scope===captureScopeValue).map(([key,record])=>({key,...record}));
   const latest=[...captureRecords].filter(item=>['complete','running','failed'].includes(item.state)).sort((a,b)=>(b.finishedAt||b.startedAt||0)-(a.finishedAt||a.startedAt||0))[0];if(!chosenTrackId&&latest?.track?.trackId)chosenTrackId=latest.track.trackId;

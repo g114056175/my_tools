@@ -157,7 +157,7 @@ std::wstring SettingsPath() {
         return overridePath;
     PWSTR path{};
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path))) return {};
-    const auto directory = std::wstring(path) + L"\\LightCapture";
+    const auto directory = std::wstring(path) + L"\\LightCaptureDXGI";
     CoTaskMemFree(path);
     CreateDirectoryW(directory.c_str(), nullptr);
     return directory + L"\\recorder.ini";
@@ -935,6 +935,24 @@ void FinishCapture(DoneReason reason, const std::wstring& detail) {
             Status(detail.empty() ? L"未取得錄影畫格，請重新框選。" : L"未取得錄影畫格：" + detail);
             return;
         }
+    }
+    if (reason == DoneTimeLimit || reason == DoneSizeLimit) {
+        const std::wstring type = g_app.outputGif ? L"GIF" : L"Video";
+        const bool timeLimit = reason == DoneTimeLimit;
+        const std::wstring limit = timeLimit
+                                      ? (g_app.outputGif ? L"1 分鐘" : L"30 分鐘")
+                                      : (g_app.outputGif ? L"300 MB" : L"4 GB");
+        const std::wstring message =
+            type + L" 錄製已達" + (timeLimit ? L"時間" : L"容量") + L"上限（" + limit +
+            L"），已自動停止。\n\n" +
+            (g_app.autoSave ? L"按「確定」保存至預設位置。" : L"按「確定」選擇保存位置。");
+        // Keep the finalized recording in the result state until the user acknowledges the limit.
+        // The visible toolbar owns the dialog even when the settings window is hidden in the tray.
+        g_app.dialogActive = true;
+        const int answer = MessageBoxW(g_app.toolbar, message.c_str(), L"錄製已自動停止",
+                                      MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
+        g_app.dialogActive = false;
+        if (answer != IDOK) return;
     }
     if (g_app.copyToClipboard) CopyTemporaryOutput();
     SaveOutput(g_app.autoSave);

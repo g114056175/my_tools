@@ -2,11 +2,11 @@
 
 把桌面指定範圍錄成 MP4 或 GIF。
 
-**[下載 region_recorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe)** · [發布頁](https://github.com/g114056175/my_tools/releases/tag/region_recorder-v1.0.0)
+**[下載 region_recorder.exe（DXGI）](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe)** · [發布頁](https://github.com/g114056175/my_tools/releases/tag/region_recorder-v1.0.0)
 
 適用 Windows 10 2004 以上／Windows 11，x64。單一 EXE 即可執行，不需安裝；Windows N 版本需先安裝 Media Feature Pack。
 
-支援跨螢幕框選與錄製；框線和錄製工具列不會出現在成品中。
+支援跨螢幕框選與錄製；採用 DXGI，不會產生 WGC 的系統黃色擷取框。選區框線和錄製工具列不會出現在成品中。
 
 ![設定面板](images/setup.png)
 
@@ -29,8 +29,9 @@
 最小化保留工作列；「隱藏至通知區」收起主面板。
 主視窗的 × 會結束程式；錄製中會先確認，確認後停止錄影並清除未保存的暫存檔。
 
-錄製限制固定為 **GIF：300 MB／1 分鐘；Video：4 GB／30 分鐘**，任一條件先到即自動停止並進入保存流程。
-手動暫停不計時，容量以十進位計算；為了完成檔案收尾，可能略早於容量上限停止。
+錄製限制固定為 **GIF：300 MB／1 分鐘；Video：4 GB／30 分鐘**。**容量或時間任一先達上限，就會強制停止錄製，不會繼續錄影。**
+停止後會先彈出原因提示；按「確定」才開啟保存介面，開啟自動保存時則存到預設位置。
+手動暫停不計時，容量以十進位計算；為下一幀及檔案收尾預留空間，可能略早於容量上限停止。**大範圍 GIF 可能未滿 1 分鐘就先達容量限制。**
 MP4 使用 H.264 壓縮；GIF 依每一畫格建立最多 256 色的自適應色盤，改善深色介面的色偏。
 GIF 仍有色數限制，照片或漸層畫面建議使用 MP4。**目前只錄畫面，不錄系統聲音或麥克風。**
 
@@ -38,7 +39,7 @@ GIF 仍有色數限制，照片或漸層畫面建議使用 MP4。**目前只錄�
 
 ![GIF 示範](images/demo.gif)
 
-採用原生 Win32、Windows Graphics Capture 與 Media Foundation。錄到的是桌面可見內容；其他視窗的遮擋也會錄入。
+採用原生 Win32、DXGI Desktop Duplication 與 Media Foundation。錄到的是桌面可見內容；其他視窗的遮擋也會錄入。
 跨螢幕範圍以桌面實體像素拼接；螢幕排列間的空隙填黑。錄製中重新框選時，成品尺寸維持開始錄製時的大小。
 剪貼簿以檔案方式複製，適用檔案總管及支援檔案貼上的程式。
 
@@ -50,7 +51,20 @@ powershell -ExecutionPolicy Bypass -File .\src\build.ps1
 
 EXE 產生在 `region_recorder/`。
 
-開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。包含 GIF 色彩、跨螢幕拼接、框線排除、MP4／GIF 上限及檔名編號測試；跨螢幕實測需要兩個相鄰螢幕。
+開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。包含 DXGI 游標、旋轉像素、GIF 色彩、跨螢幕拼接、框線排除、MP4／GIF 上限及檔名編號測試；跨螢幕實測需要兩個相鄰螢幕。
 
 UI 與保存流程可分別執行 `tests/region_ui_smoke.ps1`、`tests/recording_save_ui_smoke.ps1`，以 `-Executable .\region_recorder.exe` 指定待測程式。UI 測試會操作桌面視窗並暫時使用剪貼簿，結束後恢復原內容。
 關閉與程序清理可執行 `tests/recorder_shutdown_smoke.ps1 -Executable .\region_recorder.exe`。
+上限提示與保存順序可執行 `tests/limit_notice_ui_smoke.ps1`。
+
+<details>
+<summary>WGC 備用版本與差異</summary>
+
+**[下載原版 region_recorder_wgc.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder_wgc.exe)** · [原版原始碼](https://github.com/g114056175/my_tools/tree/04f9a32e1cb2073bf682935ee50568474c5c2e05/region_recorder)
+
+- **DXGI（目前預設）**：擷取螢幕當下可見內容，不產生 WGC 系統黃色擷取框，適合桌面區域錄影。
+- **WGC（備用）**：部分 Windows 環境會顯示系統黃色擷取框。WGC API 也支援指定視窗擷取，可用於取得被其他視窗遮住的內容；但**此備用區域錄影器仍擷取桌面可見內容，不會穿透遮擋**。
+
+兩版的主要 UI、錄影格式與基本操作相同；設定各自保存，首次切換需重新設定。WGC 備用版保留原本的上限處理，未包含新版的停止原因彈窗。
+
+</details>

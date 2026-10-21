@@ -181,6 +181,7 @@ function Check-File([string]$Path,[bool]$Gif) {
 try {
     [RecorderClipboardTest]::Backup()
     $main = Wait-TestWindow 'LightRegionRecorderWindow' $app.Id $false
+    if(!$app.WaitForInputIdle(5000)){throw 'Recorder did not finish UI initialization'}
     Start-Sleep -Milliseconds 250
     [void][CaptureUiNative]::ShowWindow($main,5)
     [void][CaptureUiNative]::SetForegroundWindow($main)
@@ -222,6 +223,7 @@ try {
     [CaptureUiNative]::Snapshot($main,(Join-Path $screenshots 'recorder-setup.png'),$false)
     Set-ControlText $main 111 $outputDirectory
     $before = Get-Region
+    Write-Output ('Initial shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
     foreach ($entry in @(@(114,54,309),@(131,360,309),@(135,230,108))) {
         $switch=[CaptureUiNative]::GetDlgItem($main,$entry[0])
         $state=[CaptureUiNative]::SendMessage($switch,0x00F0,[IntPtr]::Zero,[IntPtr]::Zero)
@@ -237,9 +239,11 @@ try {
     if (![CaptureUiNative]::IsWindowVisible($main) -or ![CaptureUiNative]::IsIconic($main)) { throw 'Minimize should retain the taskbar window' }
     Send-Command $main 201
     [void](Wait-Control $main 133)
+    Write-Output ('Before hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
     [void][CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($main,133),0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if ([CaptureUiNative]::IsWindowVisible($main)) { throw 'Explicit collapse did not hide the settings window' }
+    Write-Output ('After hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
     [CaptureUiNative]::Hotkey(82,[byte[]]@(17,16))
     $selector = Wait-TestWindow 'LightCaptureRegionSelector' $app.Id
     [void][CaptureUiNative]::PostMessage($selector,0x0100,[IntPtr]27,[IntPtr]::Zero)
@@ -492,8 +496,11 @@ try {
     $app=Start-Process -FilePath $Executable -WindowStyle Hidden -PassThru
     $env:LIGHTCAPTURE_SETTINGS_PATH=$previousSettings
     $main=Wait-TestWindow 'LightRegionRecorderWindow' $app.Id $false
+    if(!$app.WaitForInputIdle(5000)){throw 'Restarted recorder did not finish UI initialization'}
     Start-Sleep -Milliseconds 200
     [void][CaptureUiNative]::ShowWindow($main,5)
+    [void][CaptureUiNative]::SetForegroundWindow($main)
+    Start-Sleep -Milliseconds 250
     [void](Wait-Control $main 105)
     $toolbar=Wait-TestWindow 'LightCaptureRegionToolbar' $app.Id $false
     Assert-Equal (Get-ControlText $main 113) '測試保存名稱' 'Unicode setting persistence'
@@ -501,8 +508,16 @@ try {
     Assert-Equal ([CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($main,129),0x0402,[IntPtr]::Zero,[IntPtr]::Zero).ToInt32()) (0x0674) 'Hotkey persistence'
     Check-NoFrame
     [void][CaptureUiNative]::PostMessage($main,0x0010,[IntPtr]::Zero,[IntPtr]::Zero)
-    if(!$app.WaitForExit(3000)){throw 'Main X did not terminate the idle recorder'}
+    if(!$app.WaitForExit(5000)){throw 'Main X did not terminate the idle recorder'}
     Write-Output 'idle-no-frame=ok live-border-pixels=ok ready-toolbar=ok cancel-exact=ok minimize-taskbar=ok explicit-tray=ok hotkey-edit=ok global-hotkeys=ok esc-recording-safe=ok resize-paused=ok fixed-canvas=ok temp-staging=ok save-dialog=ok gif=ok mp4=ok auto-save=ok unique=ok temporary-clipboard=ok close-cleanup=ok preserve-new-clipboard=ok clipboard-file=ok save-failure=ok discard=ok edge-placement=ok unicode-settings=ok result=PASS'
+}
+catch {
+    Write-Output $_.ScriptStackTrace
+    if($main -ne [IntPtr]::Zero -and !$app.HasExited) {
+        Write-Output ('Failure status='+(Get-ControlText $main 118)+' focus='+[CaptureUiNative]::FocusedWindow($main))
+        Write-Output ('CtrlShiftR available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' CtrlAltF5 available='+[CaptureUiNative]::HotkeyAvailable(3,116))
+    }
+    throw
 }
 finally {
     [RecorderClipboardTest]::Restore()

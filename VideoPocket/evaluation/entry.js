@@ -1,6 +1,12 @@
 import {
   ADTS,
   BlobSource,
+  Conversion,
+  canEncodeVideo,
+  Quality,
+  VideoSampleSink,
+  AudioSampleSink,
+  QUALITY_HIGH,
   EncodedAudioPacketSource,
   EncodedPacketSink,
   EncodedVideoPacketSource,
@@ -23,9 +29,11 @@ import {
 } from 'mediabunny';
 
 globalThis.VideoPocketMediabunny = {
-  ADTS, BlobSource, EncodedAudioPacketSource,
+  ADTS, BlobSource, Conversion, canEncodeVideo, Quality, VideoSampleSink,
+  AudioSampleSink,
+  EncodedAudioPacketSource,
   EncodedPacketSink, EncodedVideoPacketSource, Input, MATROSKA, MP3,
   MP4, MPEG_TS, OGG, Output, AdtsOutputFormat, MkvOutputFormat,
   Mp3OutputFormat, Mp4OutputFormat, MpegTsOutputFormat, OggOutputFormat,
-  StreamTarget, WEBM, WebMOutputFormat,
+  StreamTarget, WEBM, WebMOutputFormat, QUALITY_HIGH,
 };

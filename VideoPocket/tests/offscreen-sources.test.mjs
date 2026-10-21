@@ -1,3 +1,8 @@
+import {parseByteRange as byteRange,rangeCapability,formatRangeCapability} from '../extension/range-capability.js';
+import {createMediaTransfer} from '../extension/media-transfer.js';
+import {resolveNetworkCandidates} from '../extension/source-candidates.js';
+import {platformSource} from '../extension/platform-formats.js';
+import {assembleSegments} from '../extension/ordered-segments.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -6,16 +11,21 @@ import {HlsParser,parseDash} from '../extension/vendor/parsers.js';
 import {mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs} from '../extension/browser-media.js';
 import {parseSubtitles} from '../extension/subtitles.js';
 import {classifyFailure} from '../extension/diagnostics.js';
-import {resolveAnime1,mediaCredentials} from '../extension/anime1.js';
+import {resolveAnime1} from '../extension/anime1.js';
+import {mediaCredentials} from '../extension/media-credentials.js';
 import {parseTransportStreamCodecs} from '../extension/transport-stream.js';
 import {readMp4Metadata} from '../extension/mp4-metadata.js';
 import {decryptHlsSample,hlsIv} from '../extension/hls-sample.js';
 import {twitchVodManifest} from '../extension/twitch-adapter.js';
+import {verifiedSocialSource} from '../extension/social-source.js';
+import {socialPageResponse} from '../extension/social-page-fetch.js';
+import {resolveDailymotion} from '../extension/dailymotion.js';
+import {resolveLinkedMedia} from '../extension/linked-media.js';
 
 const EMPTY={videoCodec:'',audioCodec:''};
-function response(body,{status=200,type='application/octet-stream',length,contentRange=null}={}){
+function response(body,{status=200,type='application/octet-stream',length,contentRange=null,url=''}={}){
   const bytes=typeof body==='string'?new TextEncoder().encode(body):new Uint8Array(body||[]);
-  let read=false;return {ok:status>=200&&status<300,status,headers:{get:k=>k.toLowerCase()==='content-type'?type:k.toLowerCase()==='content-length'?String(length ?? bytes.length):k.toLowerCase()==='content-range'?contentRange:null},text:async()=>new TextDecoder().decode(bytes),json:async()=>JSON.parse(new TextDecoder().decode(bytes)),body:{cancel:async()=>{},getReader:()=>({read:async()=>read?{done:true}:{done:(read=true,false),value:bytes},cancel:async()=>{}})},arrayBuffer:async()=>bytes.buffer, _bytes:bytes};
+  let read=false;return {url,ok:status>=200&&status<300,status,headers:{get:k=>k.toLowerCase()==='content-type'?type:k.toLowerCase()==='content-length'?String(length ?? bytes.length):k.toLowerCase()==='content-range'?contentRange:null},text:async()=>new TextDecoder().decode(bytes),json:async()=>JSON.parse(new TextDecoder().decode(bytes)),body:{cancel:async()=>{},getReader:()=>({read:async()=>read?{done:true}:{done:(read=true,false),value:bytes},cancel:async()=>{}})},arrayBuffer:async()=>bytes.buffer, _bytes:bytes};
 }
 function ts(){
   const psi=(table,body)=>{const n=body.length+4,s=new Uint8Array(3+body.length+4);s[0]=table;s[1]=0xb0|n>>8;s[2]=n;s.set(body,3);return s;};
@@ -33,18 +43,35 @@ function largeMp4(){
   const total=220000,out=new Uint8Array(total);out.set([0,0,0,8,102,116,121,112]);const freeSize=200000-8;out.set([freeSize>>>24,(freeSize>>>16)&255,(freeSize>>>8)&255,freeSize&255,102,114,101,101],8);out.set(moov,200000);return out;
 }
 
-async function makeRuntime(routes){
+function timedMp4(duration){
+ const join=(...parts)=>Uint8Array.from(parts.flatMap(p=>[...p]));
+ const movie=new Uint8Array(32),mv=new DataView(movie.buffer);mv.setUint32(12,1000);mv.setUint32(16,Math.round(duration*1000));
+ const avcPayload=new Uint8Array(28);avcPayload[26]=1;avcPayload[27]=104;
+ const avc=mp4Box('avc1',avcPayload),aac=mp4Box('mp4a',new Uint8Array(20));
+ const stsd=join(new Uint8Array([0,0,0,0,0,0,0,2]),avc,aac);
+ const trak=mp4Box('trak',mp4Box('mdia',mp4Box('minf',mp4Box('stbl',mp4Box('stsd',stsd)))));
+ return join(mp4Box('ftyp',new Uint8Array(8)),mp4Box('moov',join(mp4Box('mvhd',movie),trak)));
+}
+
+function silentMp4(){
+ const join=(...parts)=>Uint8Array.from(parts.flatMap(part=>[...part]));
+ const handler=new Uint8Array(12);handler.set([118,105,100,101],8);
+ const video=new Uint8Array(28),sample=mp4Box('avc1',video),table=join(new Uint8Array([0,0,0,0,0,0,0,1]),sample);
+ return join(mp4Box('ftyp',new Uint8Array(8)),mp4Box('moov',mp4Box('trak',mp4Box('mdia',join(mp4Box('hdlr',handler),mp4Box('minf',mp4Box('stbl',mp4Box('stsd',table))))))));
+}
+
+async function makeRuntime(routes,{inspectionTimeoutMs=25000,pageReply,parseDocument,manifestReply}={}){
   const messages=[];let listener;
-  const chrome={runtime:{id:'test-extension',sendMessage:async message=>{messages.push({kind:'rpc',message});return {ok:true,result:{}}},onMessage:{addListener:fn=>{listener=fn}}}};
+  const chrome={runtime:{id:'test-extension',sendMessage:async message=>{messages.push({kind:'rpc',message});return {ok:true,result:message.action==='observedManifest'&&manifestReply?await manifestReply(message):message.action==='socialPageFetch'&&pageReply?await pageReply(message):{}}},onMessage:{addListener:fn=>{listener=fn}}}};
   const fetchLog=[];
   const fetch=async (url,options={})=>{const u=String(url),opts={...options,headers:{...(options.headers||{})}};fetchLog.push({url:u,options:opts,credentials:opts.credentials});const route=routes.find(r=>r.match(u,opts));if(!route)throw new Error('unmocked '+u);if(typeof route.reply==='function')return route.reply(u,opts);return route.reply;};
   const source=await fs.readFile(new URL('../extension/offscreen.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
-  const context={HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,AbortSignal,Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout,clearTimeout,queueMicrotask,console};
-    vm.runInNewContext(code,{...context,twitchVodManifest},{filename:'offscreen.js'});
+  const context={byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,AbortSignal:{any:signals=>AbortSignal.any(signals),timeout:ms=>AbortSignal.timeout(ms===25000?inspectionTimeoutMs:ms)},Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout,clearTimeout,queueMicrotask,console};
+    vm.runInNewContext(code,{...context,Response,twitchVodManifest,verifiedSocialSource,socialPageResponse,resolveDailymotion,resolveLinkedMedia:(link,referer,request,options)=>resolveLinkedMedia(link,referer,request,{...options,...(parseDocument?{parseDocument}:{})})},{filename:'offscreen.js'});
   assert.equal(typeof listener,'function');
-  async function inspect(descriptor){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
-  return {inspect,fetchLog,messages};
+  async function inspect(descriptor,inspectionId){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor,inspectionId},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
+  return {inspect,fetchLog,messages,cancel:inspectionId=>new Promise(resolve=>listener({target:'offscreen',action:'cancelInspect',inspectionId},{id:'test-extension'},resolve))};
 }
 
 test('Anime1 API and CDN requests use include credentials and produce a video choice',async()=>{
@@ -59,10 +86,41 @@ test('Anime1 API and CDN requests use include credentials and produce a video ch
   assert.ok(rt.fetchLog.filter(x=>x.url.startsWith('https://v.anime1.me/')).every(x=>x.credentials==='include'));
 });
 
+test('Bilibili playurl source failures stay classified instead of becoming empty generic media',async()=>{
+ const rt=await makeRuntime([]);
+ await assert.rejects(rt.inspect({referer:'https://www.bilibili.com/video/BVfailure01/',title:'bili',platform:{site:'bilibili',bvid:'BVfailure01',cid:18,page:1,sourceFailure:{code:'HTTP_AUTH',message:'Bilibili 播放來源拒絕請求',sourceStage:'bilibili-playurl',httpStatus:403}}}),error=>error.code==='HTTP_AUTH'&&error.sourceStage==='bilibili-playurl'&&error.httpStatus===403);
+});
+
 test('HEAD failure followed by bounded GET can still inspect a source',async()=>{
   const url='https://cdn.example/video.mp4',rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>o.method==='HEAD'?response('',{status:405}):response(new Uint8Array([0,1,2]),{type:'video/mp4'})}]);
   const result=await rt.inspect({url,referer:'https://example.test/watch',title:'x'});
   assert.equal(result.choices.video.auto.enabled,true);assert.ok(rt.fetchLog.some(x=>x.options.headers.Range==='bytes=0-131071'));
+});
+
+test('an exact feed permalink provides missing FB metadata before the normal media pipeline',async()=>{
+ const referer='https://www.facebook.com/kfctaiwan/',link={url:'https://www.facebook.com/reel/123/',id:'123'},media='https://video.xx.fbcdn.net/clip.mp4';
+ const scripts=[JSON.stringify({require:[{data:{video:{id:'123',length_in_second:14.06,videoDeliveryLegacyFields:{id:'123',browser_native_sd_url:media}}}}]})];
+ const rt=await makeRuntime([
+  {match:u=>u===link.url,reply:(u,o)=>{assert.equal(o.method,'GET');assert.equal(o.credentials,'include');return response('<html/>',{type:'text/html'});}},
+  {match:u=>u===media,reply:(u,o)=>o.method==='HEAD'?response('',{type:'video/mp4',length:1000}):response(timedMp4(14.06),{type:'video/mp4'})},
+ ],{parseDocument:()=>({querySelectorAll:()=>scripts.map(textContent=>({textContent}))})});
+ const result=await rt.inspect({referer,linkedMedia:link,title:'Selected post',tabId:7,documentId:'fb-doc'});
+ assert.equal(result.choices.video.auto.enabled,true);
+ assert.equal(rt.fetchLog.filter(r=>r.url===link.url).length,1);
+});
+
+test('a complete silent social MP4 remains downloadable without inventing an audio track',async()=>{
+ const url='https://video.xx.fbcdn.net/silent.mp4',bytes=silentMp4();
+ const rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>o.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const result=await rt.inspect({referer:'https://www.facebook.com/feed',title:'Silent',platform:{site:'embedded',id:'silent',versions:[{url}]}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,false);
+});
+
+test('a complete DASH manifest explicitly declaring video-only adaptations allows silent download',async()=>{
+ const init='https://video.xx.fbcdn.net/init.mp4',xml='<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S"><Period><AdaptationSet contentType="video" mimeType="video/mp4" codecs="avc1.42E01E"><Representation id="v" bandwidth="100000" width="320" height="180"><SegmentTemplate timescale="1" duration="10" initialization="init.mp4" media="$Number$.m4s" startNumber="1"/></Representation></AdaptationSet></Period></MPD>';
+ const rt=await makeRuntime([{match:u=>u===init,reply:response(silentMp4(),{type:'video/mp4'})}]);
+ const result=await rt.inspect({referer:'https://video.xx.fbcdn.net/master.mpd',title:'Silent',platform:{site:'embedded',id:'silent',manifestXml:xml}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,false);
 });
 
 test('Twitch playback lookup runs in offscreen and renews the manifest for the selected VOD',async()=>{
@@ -77,10 +135,172 @@ test('Twitch playback lookup runs in offscreen and renews the manifest for the s
  assert.equal(rt.fetchLog.some(r=>r.url.includes('old.example')),false);
 });
 
+test('Dailymotion metadata resolves to HLS capabilities and preserves HTTP refusal diagnostics',async()=>{
+ const metadata='https://www.dailymotion.com/player/metadata/video/x9qh9tw?app=com.dailymotion.neon',master='https://vod.dmcdn.net/main.m3u8',child='https://vod.dmcdn.net/360.m3u8';
+ const descriptor={referer:'https://geo.dailymotion.com/player/xtv3w.html?',title:'Playlist',platform:{site:'dailymotion',id:'x9qh9tw'}};
+ const rt=await makeRuntime([
+  {match:u=>u===metadata,reply:response(JSON.stringify({id:'x9qh9tw',title:'Episode',duration:30,qualities:{auto:[{type:'application/x-mpegURL',url:master}]}}),{type:'application/json'})},
+  {match:u=>u===master,reply:response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2"\n360.m3u8\n')},
+  {match:u=>u===child,reply:response('#EXTM3U\n#EXTINF:30,\nmain.ts\n#EXT-X-ENDLIST\n')},
+ ]);
+ const result=await rt.inspect(descriptor);assert.equal(result.title,'Episode');assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,true);
+ const blocked=await makeRuntime([
+  {match:u=>u===metadata,reply:response(JSON.stringify({id:'x9qh9tw',qualities:{auto:[{type:'application/x-mpegURL',url:master}]}}),{type:'application/json'})},
+  {match:u=>u===master,reply:response('',{status:403})},
+ ]);
+ await assert.rejects(blocked.inspect(descriptor),error=>error.code==='HTTP_AUTH'&&error.httpStatus===403);
+ const deniedMetadata=await makeRuntime([{match:u=>u===metadata,reply:response('',{status:403})}]);
+ await assert.rejects(deniedMetadata.inspect(descriptor),error=>error.code==='HTTP_AUTH'&&error.httpStatus===403);
+ const bridge=await makeRuntime([
+  {match:u=>u===metadata,reply:response(JSON.stringify({id:'x9qh9tw',qualities:{auto:[{type:'application/x-mpegURL',url:master}]}}),{type:'application/json'})},
+  {match:u=>u===master,reply:response('',{status:403})},
+  {match:u=>u===child,reply:response('#EXTM3U\n#EXTINF:30,\nmain.ts\n#EXT-X-ENDLIST\n')},
+ ],{pageReply:async message=>{
+  assert.equal(message.context.documentId,'dm-frame');assert.equal(message.context.referer,descriptor.referer);
+  if(message.operation==='open')return {status:200,headers:{'content-type':'application/x-mpegURL'},handle:'h',done:false};
+  if(message.operation==='read')return {done:true,data:[...new TextEncoder().encode('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2"\n360.m3u8\n')]};
+  return {done:true};
+ }});
+ const recovered=await bridge.inspect({...descriptor,tabId:7,documentId:'dm-frame'});
+ assert.equal(recovered.choices.video.auto.enabled,true);assert.ok(bridge.messages.some(m=>m.message.action==='socialPageFetch'));
+ assert.equal(mediaCredentials(master,descriptor.referer),'include');assert.equal(mediaCredentials('https://evil.example/a.mp4',descriptor.referer),'omit');
+});
+
+test('Dailymotion first uses the actual main-player manifest without a second metadata request',async()=>{
+ const manifest='https://vod.dmcdn.net/active.m3u8';
+ const rt=await makeRuntime([{match:u=>u===manifest,reply:response('#EXTM3U\n#EXTINF:30,\nmain.ts\n#EXT-X-ENDLIST\n')}]);
+ const result=await rt.inspect({referer:'https://geo.dailymotion.com/player/xtv3w.html?',platform:{site:'dailymotion',id:'x9qh9tw',observedSource:{url:manifest,type:'hls'}}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(rt.fetchLog.some(item=>item.url.includes('/player/metadata/')),false);
+});
+
+test('Dailymotion refreshes metadata once when its observed manifest is expired',async()=>{
+ const stale='https://vod.dmcdn.net/expired.m3u8',fresh='https://vod.dmcdn.net/fresh.m3u8',metadata='https://www.dailymotion.com/player/metadata/video/x9qh9tw?app=com.dailymotion.neon';
+ const rt=await makeRuntime([
+  {match:u=>u===stale,reply:response('',{status:403})},
+  {match:u=>u===metadata,reply:response(JSON.stringify({id:'x9qh9tw',qualities:{auto:[{type:'application/x-mpegURL',url:fresh}]}}),{type:'application/json'})},
+  {match:u=>u===fresh,reply:response('#EXTM3U\n#EXTINF:30,\nmain.ts\n#EXT-X-ENDLIST\n')},
+ ]);
+ const result=await rt.inspect({referer:'https://geo.dailymotion.com/player/xtv3w.html?',platform:{site:'dailymotion',id:'x9qh9tw',observedSource:{url:stale,type:'hls'}}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(rt.fetchLog.filter(item=>item.url===metadata).length,1);
+ const denied=await makeRuntime([{match:()=>true,reply:response('',{status:403})}]);
+ await assert.rejects(denied.inspect({referer:'https://geo.dailymotion.com/player/xtv3w.html?',platform:{site:'dailymotion',id:'x9qh9tw'}}),error=>error.code==='HTTP_AUTH'&&error.sourceStage==='dailymotion-metadata');
+});
+
+test('a refused embedded manifest does not hide an independently working progressive backup',async()=>{
+ const bad='https://cdn.example/refused.m3u8',good='https://cdn.example/backup.mp4',bytes=timedMp4(12);
+ const rt=await makeRuntime([
+  {match:u=>u===bad,reply:response('',{status:403})},
+  {match:u=>u===good,reply:(u,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})},
+ ]);
+ const result=await rt.inspect({referer:'https://example.test',platform:{site:'embedded',manifestUrl:bad,versions:[{url:good}]}});
+ assert.equal(result.choices.video.auto.enabled,true);
+});
+
 test('GET 403 is reported as HTTP_AUTH rather than unknown MP4',async()=>{
   const url='https://cdn.example/private.mp4',rt=await makeRuntime([{match:u=>u===url,reply:response('',{status:403,type:'video/mp4'})}]);
   const reply=await rt.inspect({url,referer:'https://example.test/watch'}).then(result=>({ok:true,result}),error=>({ok:false,error}));
   assert.equal(reply.ok,false);assert.equal(classifyFailure(reply.error,'inspect').code,'HTTP_AUTH');
+});
+
+test('TikTok probes use scoped browser credentials and report the rejected request host',async()=>{
+ const referer='https://www.tiktok.com/@creator/video/tt-1',url='https://v16m.tiktokcdn.com/video/a.mp4';
+ const rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>o.method==='HEAD'?response('',{type:'video/mp4',length:1000}):response('',{status:403,type:'video/mp4'})}]);
+ const result=await rt.inspect({url,referer,title:'sample'}).then(value=>({ok:true,value}),error=>({ok:false,error}));
+ assert.equal(result.ok,false);
+ assert.equal(classifyFailure(result.error,'inspect').code,'HTTP_AUTH');
+ assert.equal(result.error.requestMethod,'GET RANGE');
+ assert.equal(result.error.requestHost,'v16m.tiktokcdn.com');
+ assert.ok(rt.fetchLog.every(item=>item.credentials==='include'));
+});
+
+test('FB unbound fallback verifies actual movie duration and rejects an advertisement',async()=>{
+ const rt=await makeRuntime([{match:()=>true,reply:(url,o)=>{const bytes=timedMp4(url.includes('ad.mp4')?5:26.25);return o.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'});}}]);
+ const result=await rt.inspect({referer:'https://www.facebook.com/reel/123',platform:{site:'social-network',expectedDuration:26.25,versions:[{url:'https://cdn.example/ad.mp4',kind:'progressive'},{url:'https://cdn.example/main.mp4',kind:'progressive'}]}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.duration,26.25);
+ const ambiguous=await makeRuntime([{match:()=>true,reply:(url,o)=>{const bytes=timedMp4(26.25);return o.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'});}}]);
+ await assert.rejects(ambiguous.inspect({referer:'https://www.facebook.com/reel/123',platform:{site:'social-network',expectedDuration:26.25,versions:[{url:'https://cdn.example/a.mp4'},{url:'https://cdn.example/b.mp4'}]}}),{code:'SOURCE_UNAVAILABLE'});
+});
+
+test('unknown single-player network candidates verify real duration without a platform adapter',async()=>{
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>{
+  const bytes=timedMp4(url.includes('advert')?5:26.25);
+  return options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'});
+ }}]);
+ const result=await rt.inspect({referer:'https://unknown.example/watch',platform:{site:'network-media',expectedDuration:26.25,versions:[{url:'https://cdn.example/advert.mp4',kind:'progressive'},{url:'https://cdn.example/actual.mp4',kind:'progressive'}]}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.duration,26.25);
+ assert.ok(rt.fetchLog.every(entry=>entry.credentials==='omit'),'generic capture never widens the existing cookie policy');
+});
+
+test('an expired embedded source automatically falls back to one verified observed source',async()=>{
+ const old='https://cdn.example/expired.mp4',fresh='https://cdn.example/fresh.mp4',bytes=timedMp4(26.25);
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>url===old?response('',{status:403}):options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const result=await rt.inspect({referer:'https://unknown.example/watch',platform:{site:'embedded',versions:[{url:old}],networkFallback:{expectedDuration:26.25,versions:[{url:fresh,kind:'progressive'}]}}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.ok(rt.fetchLog.some(entry=>entry.url===old));assert.ok(rt.fetchLog.some(entry=>entry.url===fresh));
+});
+
+test('a working embedded source keeps the fast route and never probes its network fallback',async()=>{
+ const main='https://cdn.example/main.mp4',fallback='https://cdn.example/unused.mp4',bytes=timedMp4(26.25);
+ const rt=await makeRuntime([{match:url=>url===main,reply:(_,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const result=await rt.inspect({referer:'https://unknown.example/watch',platform:{site:'embedded',versions:[{url:main}],networkFallback:{expectedDuration:26.25,versions:[{url:fallback,kind:'progressive'}]}}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.ok(rt.fetchLog.every(entry=>entry.url===main));
+});
+
+test('TikTok HTTP refusal can use its exact browser document for bounded page reads',async()=>{
+ const bytes=timedMp4(12),handles=new Map();let next=0;
+ const rt=await makeRuntime([{match:()=>true,reply:response('',{status:403,type:'video/mp4'})}],{pageReply:async m=>{
+  assert.equal(m.context.tabId,7);assert.equal(m.context.documentId,'tt-doc');
+  if(m.operation==='open'){
+   if(m.options.method==='HEAD')return {status:200,headers:{'content-type':'video/mp4','content-length':String(bytes.length)},done:true};
+   assert.match(m.options.range,/^bytes=0-/);const handle=String(++next);handles.set(handle,bytes);
+   return {status:200,headers:{'content-type':'video/mp4','content-length':String(bytes.length)},handle,done:false};
+  }
+  if(m.operation==='read'){const data=handles.get(m.options.handle);handles.delete(m.options.handle);return {data:[...data],done:true};}
+  handles.delete(m.options.handle);return {done:true};
+ }});
+ const result=await rt.inspect({tabId:7,documentId:'tt-doc',url:'https://v19-webapp-prime.tiktok.com/video/tos/clip/',referer:'https://www.tiktok.com/zh-Hant-TW/'});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.duration,12);
+ assert.ok(rt.messages.some(m=>m.message.action==='socialPageFetch'&&m.message.operation==='read'));
+ const other=await makeRuntime([{match:()=>true,reply:response('',{status:403})}]);
+ await assert.rejects(other.inspect({tabId:7,documentId:'doc',url:'https://cdn.example/a.mp4',referer:'https://example.com/'}),{code:'HTTP_AUTH'});
+ assert.equal(other.messages.some(m=>m.message.action==='socialPageFetch'),false);
+});
+
+test('cancelling an inspection aborts its pending request and stops fallback probes',async()=>{
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});})}]);
+ const pending=rt.inspect({referer:'https://social.example/feed',platform:{site:'embedded',versions:[{url:'https://cdn.example/first.mp4'},{url:'https://cdn.example/second.mp4'}]}},'inspection-a').then(value=>({value}),error=>({error}));
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(rt.fetchLog.length,1);
+ await rt.cancel('inspection-a');assert.equal((await pending).error.code,'CANCELLED');
+ assert.equal(rt.fetchLog.length,1);
+ await rt.cancel('cancel-before-start');
+ await assert.rejects(rt.inspect({url:'https://cdn.example/a.mp4'},'cancel-before-start'),{code:'CANCELLED'});
+});
+
+test('the total inspection deadline ends a stalled candidate instead of probing every URL',async()=>{
+ const keepAlive=setTimeout(()=>{},1000);
+ try{
+  const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});})}],{inspectionTimeoutMs:20});
+  await assert.rejects(rt.inspect({referer:'https://social.example/feed',platform:{site:'embedded',versions:[{url:'https://cdn.example/first.mp4'},{url:'https://cdn.example/second.mp4'}]}}),{code:'NETWORK_TIMEOUT'});
+  assert.equal(rt.fetchLog.length,1);
+ }finally{clearTimeout(keepAlive);}
+});
+
+test('same-quality backup URLs stop after success while distinct declared qualities remain available',async()=>{
+ const bytes=largeMp4().subarray(200000);
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const result=await rt.inspect({referer:'https://social.example/feed',duration:12,platform:{site:'embedded',versions:[{url:'https://cdn.example/360.mp4',width:640,height:360},{url:'https://backup.example/360.mp4',width:640,height:360},{url:'https://cdn.example/720.mp4',width:1280,height:720}]}});
+ assert.deepEqual([...result.choices.video.auto.heights],[720,360]);
+ assert.equal(rt.fetchLog.some(call=>call.url.includes('backup.example')),false);
+ await rt.inspect({referer:'https://social.example/feed',duration:12,platform:{site:'embedded',versions:[{url:'https://cdn.example/unknown-a.mp4'},{url:'https://cdn.example/unknown-b.mp4'}]}});
+ assert.ok(rt.fetchLog.some(call=>call.url.endsWith('/unknown-a.mp4'))&&rt.fetchLog.some(call=>call.url.endsWith('/unknown-b.mp4')),'unknown dimensions are not assumed to be the same quality');
+});
+
+test('a later quality timing out preserves an already verified downloadable source',async()=>{
+ const keepAlive=setTimeout(()=>{},1000),bytes=largeMp4().subarray(200000);
+ try{
+  const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>url.includes('slow.mp4')?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true})):options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}],{inspectionTimeoutMs:25});
+  const result=await rt.inspect({referer:'https://social.example/feed',duration:12,platform:{site:'embedded',versions:[{url:'https://cdn.example/360.mp4',height:360},{url:'https://cdn.example/slow.mp4',height:1080}]}});
+  assert.equal(result.choices.video.auto.enabled,true);assert.deepEqual([...result.choices.video.auto.heights],[360]);
+ }finally{clearTimeout(keepAlive);}
 });
 
 test('MMOV master without CODECS sniffs child TS PMT for video and audio',async()=>{
@@ -115,6 +335,14 @@ test('ordinary source requests omit credentials',async()=>{
   await rt.inspect({url,referer:'https://example.test/watch'});assert.ok(rt.fetchLog.every(x=>x.credentials==='omit'));
 });
 
+test('generic HLS HTTP refusal preserves request phase, method and host across RPC',async()=>{
+ const rt=await makeRuntime([{match:()=>true,reply:response('',{status:403})}]);
+ await assert.rejects(rt.inspect({url:'https://stream.example/master.m3u8?token=private',sourceType:'hls',referer:'https://example.test/watch'}),error=>{
+  assert.equal(error.code,'HTTP_AUTH');assert.equal(error.sourceStage,'stream-manifest');assert.equal(error.requestMethod,'GET');assert.equal(error.requestHost,'stream.example');
+  return true;
+ });
+});
+
 test('large MP4 metadata seeks beyond the initial 128 KiB and enables audio/video',async()=>{
   const url='https://cdn.example/large.mp4',bytes=largeMp4(),total=bytes.length;
   const rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>{
@@ -139,4 +367,24 @@ test('HLS master CODECS with an external AUDIO group must produce a two-input pl
  // Two sizes are unknown independently; selecting video must not advertise a
  // direct video-only file or silently assume that it contains AAC.
  assert.equal(info.choices.video.auto.sizes[360],null);
+});
+
+
+test('Dailymotion reuses exact successful player manifests without refetching cdndirector',async()=>{
+ const master='https://cdndirector.dailymotion.com/sec/master.m3u8?sig=one',actual='https://vod.dmcdn.net/media/master.m3u8',child='https://vod.dmcdn.net/media/360.m3u8';
+ const cache=new Map([[master,{url:actual,text:'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2"\n360.m3u8\n',type:'application/x-mpegURL'}],[child,{url:child,text:'#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\npart.ts\n#EXT-X-ENDLIST\n',type:'application/x-mpegURL'}]]);
+ const rt=await makeRuntime([{match:()=>true,reply:response('',{status:403})}],{manifestReply:async m=>{assert.equal(m.context.documentId,'dm-player');return cache.get(m.url)||null;}});
+ const info=await rt.inspect({tabId:7,documentId:'dm-player',referer:'https://geo.dailymotion.com/player/main.html',platform:{site:'dailymotion',id:'x9qh9tw',observedSource:{url:master,type:'hls'}}});
+ assert.equal(info.choices.video.auto.enabled,true);assert.equal(info.duration,10);assert.equal(rt.fetchLog.length,0);
+ assert.deepEqual(rt.messages.filter(m=>m.message.action==='observedManifest').map(m=>m.message.url),[master,child]);
+});
+
+test('redirected HLS masters and children resolve relative references from their final URLs',async()=>{
+ const entry='https://cdndirector.dailymotion.com/master.m3u8',final='https://vod.dmcdn.net/edge/master.m3u8',variant='https://vod.dmcdn.net/edge/360.m3u8',childFinal='https://vod.dmcdn.net/actual/360.m3u8';
+ const rt=await makeRuntime([
+  {match:u=>u===entry,reply:response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.42E01E,mp4a.40.2"\n360.m3u8\n',{url:final})},
+  {match:u=>u===variant,reply:response('#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\npart.ts\n#EXT-X-ENDLIST\n',{url:childFinal})},
+ ]);
+ const info=await rt.inspect({url:entry,sourceType:'hls',referer:'https://www.dailymotion.com/video/x9qh9tw'});
+ assert.equal(info.choices.video.auto.enabled,true);assert.deepEqual(rt.fetchLog.map(x=>x.url),[entry,variant]);
 });

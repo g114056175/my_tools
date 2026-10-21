@@ -1,6 +1,7 @@
 const CHUNK = 64 * 1024;
 const MAX_DEPTH = 8;
 const MAX_BOXES = 20000;
+const MAX_STSD = 4 * 1024 * 1024;
 const VIDEO = new Map([['avc1', 'h264'], ['avc3', 'h264'], ['hvc1', 'hevc'], ['hev1', 'hevc'], ['av01', 'av1'], ['vp09', 'vp9']]);
 const AUDIO = new Map([['mp4a', 'aac'], ['Opus', 'opus'], ['enca', 'aac']]);
 const text = bytes => String.fromCharCode(...bytes);
@@ -55,29 +56,53 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
   };
   const result = { videoCodec: '', audioCodec: '', drm: false };
   let boxCount = 0;
-  const walk = async (start, end, depth, path = []) => {
-    if (depth > MAX_DEPTH) return;
+  let moovComplete = false;
+  let hasVideoTrack = false;
+  let hasAudioTrack = false;
+  let completeTracks = true;
+  const walk = async (start, end, depth, path = [], track = null) => {
+    if (depth > MAX_DEPTH) return false;
     let offset = start;
-    while (offset + 8 <= end && boxCount++ < MAX_BOXES) {
+    while (offset < end) {
+      if (offset + 8 > end || boxCount++ >= MAX_BOXES) return false;
       const current = await box(offset);
-      if (!current || current.end > end) return;
+      if (!current || current.end > end) return false;
       const nextPath = [...path, current.type];
-      if (current.type === 'stsd' && nextPath.includes('stbl')) await sampleEntries(current, nextPath);
+      if (current.type === 'stsd' && nextPath.includes('stbl')) {
+        if (!(await sampleEntries(current))) return false;
+        if (track) track.hasSampleEntries = true;
+      }
       if (current.type === 'mvhd' && nextPath.length === 2) await movieHeader(current);
-      if (['moov', 'trak', 'mdia', 'minf', 'stbl'].includes(current.type)) await walk(current.payload, current.end, depth + 1, nextPath);
+      if (current.type === 'hdlr' && track) {
+        const bytes = await read(current.payload, Math.min(current.size - current.header, 12));
+        if (bytes.byteLength < 12) return false;
+        track.handler = text(bytes.subarray(8, 12));
+        track.hasHandler = true;
+      }
+      if (current.type === 'trak') {
+        const child = { handler: '', hasHandler: false, hasSampleEntries: false };
+        if (!(await walk(current.payload, current.end, depth + 1, nextPath, child))) return false;
+        if (!child.hasHandler || !child.hasSampleEntries) completeTracks = false;
+        if (child.handler === 'vide') hasVideoTrack = true;
+        if (child.handler === 'soun') hasAudioTrack = true;
+      } else if (['moov', 'mdia', 'minf', 'stbl'].includes(current.type)) {
+        if (!(await walk(current.payload, current.end, depth + 1, nextPath, track))) return false;
+      }
       offset = current.end;
     }
+    return offset === end;
   };
   const sampleEntries = async current => {
-    if (current.size < current.header + 8) return;
-    const bytes = await read(current.payload, Math.min(current.size - current.header, CHUNK));
-    if (bytes.byteLength < 8) return;
+    const payloadSize = current.size - current.header;
+    if (payloadSize < 8 || payloadSize > MAX_STSD) return false;
+    const bytes = await read(current.payload, payloadSize);
+    if (bytes.byteLength < payloadSize || bytes.byteLength < 8) return false;
     const count = u32(bytes.subarray(4, 8));
-    let at = 8;
-    for (let index = 0; index < count && at + 8 <= bytes.byteLength; index++) {
+    let at = 8, entries = 0;
+    for (; entries < count && at + 8 <= bytes.byteLength; entries++) {
       const size = u32(bytes.subarray(at, at + 4));
       const kind = text(bytes.subarray(at + 4, at + 8));
-      if (size < 8 || at + size > current.size - current.header) return;
+      if (size < 8 || at + size > payloadSize) return false;
       const video = VIDEO.get(kind);
       const audio = AUDIO.get(kind);
       if (video) {
@@ -88,6 +113,7 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
       if (kind === 'encv' || kind === 'enca') result.drm = true;
       at += size;
     }
+    return at === payloadSize && entries === count;
   };
   const movieHeader = async current => {
     const bytes = await read(current.payload, Math.min(current.size - current.header, 32));
@@ -105,7 +131,11 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
   while (offset + 8 <= totalSize && boxCount++ < MAX_BOXES) {
     const current = await box(offset);
     if (!current) break;
-    if (current.type === 'moov') {await walk(current.payload, current.end, 1, ['moov']);return result;}
+    if (current.type === 'moov') {
+      moovComplete = await walk(current.payload, current.end, 1, ['moov']);
+      if (moovComplete && completeTracks && hasVideoTrack && !hasAudioTrack) result.audioAbsent = true;
+      return result;
+    }
     offset = current.end;
   }
   return result;

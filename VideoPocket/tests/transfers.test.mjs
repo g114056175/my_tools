@@ -1,15 +1,36 @@
 import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';
 import {directTransfer} from '../extension/transfers.js';
 const payload=Uint8Array.from({length:6*1024*1024+237},(_,i)=>i%251);
+const responseFor=(bytes,start,end,total,signal,{failAfterFirst=false,stallAfterFirst=false}={})=>{
+ const body=bytes.subarray(start,end+1),half=Math.max(1,Math.ceil(body.length/2));
+ return new Response(new ReadableStream({start(controller){
+  controller.enqueue(body.subarray(0,half));
+  if(failAfterFirst){setTimeout(()=>controller.error(new Error('mid-range failure')),0);return;}
+  if(stallAfterFirst){const abort=()=>controller.error(signal?.reason || new Error('aborted'));signal?.addEventListener('abort',abort,{once:true});return;}
+  setTimeout(()=>{try{controller.enqueue(body.subarray(half));}catch{}},0);setTimeout(()=>{try{controller.close();}catch{}},1);
+ }}),{status:206,headers:{'content-range':`bytes ${start}-${end}/${total}`}});
+};
 test('Parallel ranges preserve every byte, select a fast backup, and report only committed data',async()=>{
  let active=0,peak=0;
- const server=http.createServer((req,res)=>{const match=req.headers.range?.match(/bytes=(\d+)-(\d+)/);const start=Number(match?.[1]||0),end=Math.min(Number(match?.[2]||payload.length-1),payload.length-1);active++;peak=Math.max(peak,active);setTimeout(()=>{active--;res.writeHead(match?206:200,{'Content-Range':`bytes ${start}-${end}/${payload.length}`});res.end(payload.subarray(start,end+1));},req.url==='/slow'?150:20);});
+ const server=http.createServer((req,res)=>{const match=req.headers.range?.match(/bytes=(\d+)-(\d+)/);const start=Number(match?.[1]||0),end=Math.min(Number(match?.[2]||payload.length-1),payload.length-1);active++;peak=Math.max(peak,active);setTimeout(()=>{active--;res.writeHead(match?206:200,{'Content-Range':`bytes ${start}-${end}/${payload.length}`});const bytes=payload.subarray(start,end+1),middle=Math.ceil(bytes.length/2);res.write(bytes.subarray(0,middle));setTimeout(()=>res.end(bytes.subarray(middle)),10);},req.url==='/slow'?150:20);});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
- try{let received=0;const result=await directTransfer({url:base+'/slow',backupUrls:[base+'/fast']},fetch,new AbortController().signal,n=>received+=n);assert.deepEqual(result,payload);assert.equal(received,payload.length);assert.ok(peak>=2);}finally{await new Promise(r=>server.close(r));}
+ try{const updates=[],result=await directTransfer({url:base+'/slow',backupUrls:[base+'/fast']},fetch,new AbortController().signal,n=>updates.push(n));assert.deepEqual(result,payload);assert.equal(updates.reduce((sum,n)=>sum+n,0),payload.length);assert.ok(updates.filter(n=>n>0).length>5,'range reads should report incrementally');assert.ok(peak>=2);}finally{await new Promise(r=>server.close(r));}
 });
 test('A malformed or truncated range never produces a downloadable partial file',async()=>{
  const request=async(url,{headers})=>{const [start,end]=headers.Range.slice(6).split('-').map(Number);return new Response(new Uint8Array(start?3:65536),{status:206,headers:{'content-range':`bytes ${start}-${end}/100000`}});};
  await assert.rejects(directTransfer({url:'https://source/video'},request,new AbortController().signal),/長度不完整/);
+});
+test('A primary range that fails after partial reads rolls back before backup bytes commit',async()=>{
+ const small=Uint8Array.from({length:3*1024*1024+17},(_,i)=>(i*7)%251),updates=[];
+ const request=async(url,{headers,signal})=>{const [start,end]=headers.Range.slice(6).split('-').map(Number);if(start===0)return responseFor(small,start,end,small.length,signal);return url.endsWith('/primary')?responseFor(small,start,end,small.length,signal,{failAfterFirst:true}):responseFor(small,start,end,small.length,signal);};
+ const result=await directTransfer({url:'https://cdn/primary',backupUrls:['https://cdn/backup']},request,new AbortController().signal,n=>updates.push(n));
+ let seen=0;for(const delta of updates){seen+=delta;assert.ok(seen>=0&&seen<=small.length);}assert.equal(seen,small.length);assert.deepEqual(result,small);assert.ok(updates.some(n=>n<0),'failed primary bytes should be rolled back');
+});
+test('Hedged ranges can both read partially without exceeding total progress',async()=>{
+ const small=Uint8Array.from({length:3*1024*1024+17},(_,i)=>(i*11)%251),updates=[];
+ const request=async(url,{headers,signal})=>{const [start,end]=headers.Range.slice(6).split('-').map(Number);if(start===0)return responseFor(small,start,end,small.length,signal);if(url.endsWith('/primary'))return responseFor(small,start,end,small.length,signal,{stallAfterFirst:true});return responseFor(small,start,end,small.length,signal);};
+ const result=await directTransfer({url:'https://cdn/primary',backupUrls:['https://cdn/backup']},request,new AbortController().signal,n=>updates.push(n));
+ let seen=0;for(const delta of updates){seen+=delta;assert.ok(seen>=0&&seen<=small.length);}assert.equal(seen,small.length);assert.deepEqual(result,small);
 });
 test('Cancellation stops before producing a file',async()=>{
  const controller=new AbortController();controller.abort(new Error('已取消'));

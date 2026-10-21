@@ -73,9 +73,51 @@ test('fiber traversal inspects only the current fiber and its parents', () => {
   assert.equal(store.modelFor(target, 'https://www.facebook.com/feed')?.id, 'parent');
 });
 
+test('a video ID on its own React node can bind a source payload from an ancestor player',()=>{
+  const parent={memoizedProps:{videoDeliveryLegacyFields:{id:'fb-current',browser_native_hd_url:'https://cdn.example/fb-current.mp4'}}};
+  const current={memoizedProps:{videoID:'fb-current'},return:parent};
+  const target=video({fiber:current});target.ownerDocument=documentFor([target]);
+  const store=storeWith('fb-current','fb-old');
+  assert.equal(store.modelFor(target,'https://www.facebook.com/kfctaiwan')?.id,'fb-current');
+  assert.equal(store.modelFor(target,'https://www.facebook.com/kfctaiwan')?.versions[0].url,'https://cdn.example/fb-current.mp4');
+});
+
+test('a conflicting ancestor source identity is not borrowed by the selected video',()=>{
+  const parent={memoizedProps:{videoID:'fb-sibling',videoDeliveryLegacyFields:{id:'fb-sibling',browser_native_hd_url:'https://cdn.example/fb-sibling.mp4'}}};
+  const current={memoizedProps:{videoID:'fb-current'},return:parent};
+  const target=video({fiber:current});target.ownerDocument=documentFor([target]);
+  assert.equal(storeWith('fb-current','fb-sibling').modelFor(target,'https://www.facebook.com/kfctaiwan'),null);
+});
+
 test('an explicit player ID without a source never borrows the old route model', () => {
   const target = video({props: {videoID: 'new-id', request: {files: {}}}});
   target.ownerDocument = documentFor([target]);
   const store = storeWith('old-route');
   assert.equal(store.modelFor(target, 'https://www.facebook.com/reel/old-route'), null);
+});
+
+test('TikTok post and media resource IDs are aliases of one model, not conflicting videos',()=>{
+ const target=video({props:{item:{id:'7690095904514297106',desc:'Correct post',video:{id:'7690095904514297106',videoID:'v14025g50000resource',playAddr:'https://cdn.example/current.mp4'}}}});
+ target.ownerDocument=documentFor([target]);
+ const store=createMediaModelStore(),result=store.modelFor(target,'https://www.tiktok.com/zh-Hant-TW/');
+ assert.ok(result);assert.ok(result.aliases.includes('7690095904514297106'));
+ assert.ok(result.aliases.includes('v14025g50000resource'));assert.equal(result.title,'Correct post');
+});
+
+test('owned Facebook response fragments expose sources without borrowing neighbouring players',()=>{
+ const target=video({props:{videoID:'fb-new',videoDeliveryResponseFragment:{videoDeliveryResponseResult:{progressive_urls:[{progressive_url:'https://cdn.example/current.mp4'}]}}}});
+ target.ownerDocument=documentFor([target]);
+ const result=createMediaModelStore().modelFor(target,'https://www.facebook.com/feed');
+ assert.equal(result.id,'fb-new');assert.equal(result.versions[0].url,'https://cdn.example/current.mp4');
+});
+
+for(const key of ['videoFBID','mediaID'])test(`Facebook ${key} source aliases match the rendered player without borrowing a neighbour`,()=>{
+ const target=video({props:{[key]:'fb-current'}});target.ownerDocument=documentFor([target]);
+ const payload=id=>({__typename:'Video',[key]:id,videoDeliveryResponseFragment:{videoDeliveryResponseResult:{progressive_urls:[{progressive_url:`https://video.fbcdn.net/${id}.mp4`}]}}});
+ const store=createMediaModelStore();store.merge(extractMediaModels(payload('fb-neighbour')));
+ assert.equal(store.modelFor(target,'https://www.facebook.com/feed'),null);
+ store.merge(extractMediaModels(payload('fb-current')));
+ const model=store.modelFor(target,'https://www.facebook.com/feed');
+ assert.equal(model.id,'fb-current');assert.ok(model.aliases.includes('fb-current'));
+ assert.equal(model.versions[0].url,'https://video.fbcdn.net/fb-current.mp4');
 });

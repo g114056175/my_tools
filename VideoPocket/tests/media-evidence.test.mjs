@@ -48,6 +48,7 @@ test('Instagram and Facebook style URL identities are stable post keys', () => {
   assert.equal(postIdentity({ pageUrl: 'https://www.instagram.com/reel/CODE123/' }).key, 'www.instagram.com:CODE123');
   assert.equal(postIdentity({ pageUrl: 'https://www.facebook.com/reel/12345' }).id, '12345');
   assert.equal(postIdentity({ pageUrl: 'https://www.facebook.com/watch/?v=987' }).id, '987');
+  assert.equal(postIdentity({ pageUrl: 'https://www.tiktok.com/@creator/video/7420000000000000001' }).key, 'www.tiktok.com:7420000000000000001');
 });
 
 test('network-only candidate remains non-downloadable without association', () => {
@@ -117,4 +118,24 @@ test('a feed video can use one local permalink, but not competing or foreign pos
   assert.equal(read().id,'one');
   links.push({href:'https://social.example/reel/two/'});assert.equal(read().id,undefined);
   links=[{href:'https://other.example/reel/one/'}];assert.equal(read().id,undefined);
+});
+
+test('recycled TikTok feed slots bind by XGPlayer post ID, never by media-card index or route',()=>{
+ const video=node({currentSrc:'blob:https://www.tiktok.com/object'}),other=node();
+ const wrapper=node({id:'xgwrapper-0-7690095904514297106'});wrapper.querySelectorAll=s=>s==='video'?[video]:[];
+ video.parentElement=wrapper;
+ const root={querySelectorAll:()=>[video,other]};
+ assert.equal(collectMediaEvidence({video,root,pageUrl:'https://www.tiktok.com/@old/video/111'}).identity.id,'7690095904514297106');
+ wrapper.getAttribute=k=>k==='id'?'media-card-0':'';
+ assert.equal(collectMediaEvidence({video,root,pageUrl:'https://www.tiktok.com/@old/video/111'}).identity.id,undefined);
+});
+
+test('deep unsemantic Facebook player uses its local reel link and stops at a shared feed',()=>{
+ const video=node(),other=node(),local=node(),feed=node();
+ video.parentElement=local;local.parentElement=feed;
+ local.querySelectorAll=s=>s==='video'?[video]:s==='a[href]'?[{href:'https://www.facebook.com/reel/1567947907969374/'}]:[];
+ feed.querySelectorAll=s=>s==='video'?[video,other]:[];
+ assert.equal(collectMediaEvidence({video,root:feed,pageUrl:'https://www.facebook.com/kfctaiwan/'}).identity.id,'1567947907969374');
+ local.querySelectorAll=s=>s==='video'?[video]:[];
+ assert.equal(collectMediaEvidence({video,root:feed,pageUrl:'https://www.facebook.com/kfctaiwan/'}).identity.id,undefined);
 });

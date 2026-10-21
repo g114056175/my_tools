@@ -73,6 +73,7 @@ export function startMediaPicker(options = {}) {
     const title = String(entry?.title || video.getAttribute?.('aria-label') || video.title || document.title || `影片 ${index + 1}`).trim();
     let mediaIdentity='';try{mediaIdentity=globalThis[Symbol.for('video-pocket.mediaObserver')]?.modelFor?.(video)?.id || globalThis[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
     try{const page=new URL(location.href),id=page.pathname.match(/^\/videos\/(\d+)/)?.[1];if(/(^|\.)twitch\.tv$/i.test(page.hostname)&&id&&(video.closest?.('[data-a-target="video-player"]')||videos.length===1))mediaIdentity='twitch-vod:'+id;}catch{}
+    try{const page=new URL(location.href),id=page.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || page.searchParams.get('bvid');if(/(^|\.)bilibili\.com$/i.test(page.hostname)&&id&&((()=>{let node=video;for(let depth=0;node&&depth<16;depth++){if(node.closest?.('#bilibili-player,#bilibiliPlayer,.bpx-player-container,.bilibili-player-video,bwp-video'))return true;const host=node.getRootNode?.()?.host;if(!host||host===node)break;node=host;}return false;})()||videos.length===1))mediaIdentity=`bilibili:${id}:${Math.max(1,Number(page.searchParams.get('p'))||1)}`;}catch{}
     return {mediaKey: keyOf(video), localMediaIndex: index, frameId, documentId, frameUrl: location.href, title, url: source(),mediaIdentity};
   };
   let highlighted = null;

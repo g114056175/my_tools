@@ -12,21 +12,38 @@ function runtime(){
   return [{result:{highlighted:marks.has(key)}}];
  }}};
  const controller=createPopupMarkerController(api);
- function view(){let message,disconnect;const port={sender:{url:api.runtime.getURL('popup.html')},onMessage:{addListener:fn=>{message=fn;}},onDisconnect:{addListener:fn=>{disconnect=fn;}}};controller.attach(port);return {send:m=>message(m),close:()=>disconnect()};}
+ function view(){let message,disconnect;const replies=[];const port={postMessage:m=>replies.push(m),sender:{url:api.runtime.getURL('popup.html')},onMessage:{addListener:fn=>{message=fn;}},onDisconnect:{addListener:fn=>{disconnect=fn;}}};controller.attach(port);return {replies,send:m=>message(m),close:()=>disconnect()};}
  return {calls,marks,view,block(){blocked=true;},release(){blocked=false;release?.();}};
 }
 const target={action:'highlightMedia',tabId:7,documentId:'doc',mediaKey:22,title:'Current'};
 test('popup disconnect removes its marker immediately and ignores later messages',async()=>{
  const rt=runtime(),view=rt.view();view.send(target);await flush();assert.equal(rt.marks.size,1);
  view.send({action:'renewHighlight'});await flush();assert.equal(rt.calls.at(-1).renew,true);
- view.close();assert.equal(rt.marks.size,0);const count=rt.calls.length;view.send(target);await flush();assert.equal(rt.calls.length,count);
+ view.close();await flush();assert.equal(rt.marks.size,0);const count=rt.calls.length;view.send(target);await flush();assert.equal(rt.calls.length,count);
 });
 test('closing during a pending injection removes the late marker too',async()=>{
  const rt=runtime(),view=rt.view();rt.block();view.send(target);await flush();view.close();rt.release();await flush();assert.equal(rt.marks.size,0);assert.equal(rt.calls.at(-1).clear,true);
 });
 test('an old popup cannot remove a newer popup marker in the same document',async()=>{
- const rt=runtime(),old=rt.view(),current=rt.view();old.send(target);await flush();current.send(target);await flush();const owner=rt.marks.get('doc');old.close();assert.equal(rt.marks.get('doc'),owner);current.close();assert.equal(rt.marks.size,0);
+ const rt=runtime(),old=rt.view(),current=rt.view();old.send(target);await flush();current.send(target);await flush();const owner=rt.marks.get('doc');old.close();await flush();assert.equal(rt.marks.get('doc'),owner);current.close();await flush();assert.equal(rt.marks.size,0);
 });
 test('changing target clears the previous frame and only retains the new frame',async()=>{
- const rt=runtime(),view=rt.view();view.send(target);await flush();view.send({...target,documentId:'child'});await flush();assert.deepEqual([...rt.marks.keys()],['child']);view.close();assert.equal(rt.marks.size,0);
+ const rt=runtime(),view=rt.view();view.send(target);await flush();view.send({...target,documentId:'child'});await flush();assert.deepEqual([...rt.marks.keys()],['child']);view.close();await flush();assert.equal(rt.marks.size,0);
+});
+
+test('explicit scroll requests reach the selected document once and are not replayed by heartbeats',async()=>{
+ const rt=runtime(),view=rt.view();
+ view.send({...target,scrollIntoView:true});await flush();
+ assert.equal(rt.calls.at(-1).scrollIntoView,true);assert.equal(rt.calls.at(-1).mediaKey,22);
+ view.send({action:'renewHighlight'});await flush();assert.equal(rt.calls.at(-1).renew,true);assert.equal(rt.calls.at(-1).scrollIntoView,undefined);
+ view.send({...target,mediaKey:23});await flush();assert.equal(rt.calls.at(-1).scrollIntoView,false);
+ view.close();await flush();
+});
+
+test('scroll acknowledgement follows injection and is never sent after the popup closes',async()=>{
+ const rt=runtime(),view=rt.view();rt.block();
+ view.send({...target,scrollIntoView:true,operationId:'scroll-a'});await flush();assert.equal(view.replies.length,0);
+ rt.release();await flush();assert.deepEqual(view.replies,[{action:'highlightReady',operationId:'scroll-a'}]);
+ rt.block();view.send({...target,mediaKey:23,operationId:'scroll-b'});await flush();view.close();rt.release();await flush();
+ assert.equal(view.replies.length,1);assert.equal(rt.marks.size,0);
 });

@@ -46,6 +46,21 @@ test('expired or unknown keys do not fall back to the first video', () => {
   finally { highlightMedia({clear: true}); state.restore(); }
 });
 
+test('only an explicit selection scrolls the exact player and paints its new position',()=>{
+ const first=new NodeMock('video'),second=new NodeMock('video',{top:1800}),state=world([first,second]);
+ const scrolls=[];first.scrollIntoView=options=>scrolls.push({video:'first',options});
+ second.scrollIntoView=options=>{scrolls.push({video:'second',options});second.rect.top=220;};
+ try{
+  identities([[first,1],[second,2]]);
+  highlightMedia({mediaKey:2});assert.equal(scrolls.length,0);
+  highlightMedia({mediaKey:2,scrollIntoView:true});
+  assert.deepEqual(scrolls,[{video:'second',options:{behavior:'instant',block:'center',inline:'nearest'}}]);
+  assert.equal(state.body.children[0].style.top,'220px');
+  highlightMedia({renew:true});assert.equal(scrolls.length,1);
+  highlightMedia({mediaKey:404,scrollIntoView:true});assert.equal(scrolls.length,1,'expired identities must not scroll a different player');
+ }finally{highlightMedia({clear:true});state.restore();}
+});
+
 test('repeated calls remove the previous frame and timer/listeners', () => {
   const video = new NodeMock('video'); const state = world([video]);
   try {
@@ -84,6 +99,24 @@ test('marker is positioned within its local scaled containing block',()=>{
  const video=new NodeMock('video',{left:140,top:100,width:240,height:140}),state=world([video]);const parent=new NodeMock('div',{left:100,top:80,width:400,height:300});parent.offsetWidth=200;parent.offsetHeight=150;parent.scrollLeft=5;parent.scrollTop=7;parent.clientLeft=1;parent.clientTop=2;
  const create=state.body.append.bind(state.body);state.body.append=(frame)=>{frame.offsetParent=parent;create(frame);};
  try{identities([[video,8]]);highlightMedia({mediaKey:8});const f=state.body.children[0];assert.equal(f.style.left,'24px');assert.equal(f.style.top,'15px');assert.equal(f.style.width,'120px');assert.equal(f.style.height,'70px');}finally{highlightMedia({clear:true});state.restore();}
+});
+
+test('first visible paint and return from a modal measure the rendered offsetParent',()=>{
+ const video=new NodeMock('video',{left:140,top:100,width:240,height:140}),state=world([video]);
+ const parent=new NodeMock('div',{left:100,top:80,width:400,height:300});Object.assign(parent,{offsetWidth:200,offsetHeight:150,scrollLeft:5,scrollTop:7,clientLeft:1,clientTop:2});
+ const append=state.body.append.bind(state.body);let tick;
+ const originalInterval=globalThis.setInterval;globalThis.setInterval=fn=>{tick=fn;return originalInterval(fn,200);};
+ state.body.append=frame=>{
+  Object.defineProperty(frame,'offsetParent',{get(){return frame.style.display==='none'?null:parent;}});
+  append(frame);
+ };
+ try{
+  identities([[video,81]]);highlightMedia({mediaKey:81});const frame=state.body.children[0];
+  const verify=()=>{assert.equal(frame.style.visibility,'visible');assert.equal(frame.style.left,'24px');assert.equal(frame.style.top,'15px');assert.equal(frame.style.width,'120px');assert.equal(frame.style.height,'70px');};
+  verify();assert.equal(frame.style.transition,'none');
+  const modal=new NodeMock('div');state.body.nodes=[modal];tick();assert.equal(frame.style.display,'none');
+  modal.rect.width=0;tick();verify();
+ }finally{highlightMedia({clear:true});globalThis.setInterval=originalInterval;state.restore();}
 });
 
 test('a stale marker owner cannot clear or renew a newer marker',()=>{

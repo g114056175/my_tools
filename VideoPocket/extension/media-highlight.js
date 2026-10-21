@@ -40,6 +40,10 @@ export function highlightMedia(options = {}) {
     }
   } catch { return {highlighted: false}; }
 
+  // Only an explicit dropdown change requests scrolling. Opening/refreshing
+  // the popup or renewing its marker must leave the page position alone.
+  if(options.scrollIntoView===true)try{video.scrollIntoView?.({behavior:'instant',block:'center',inline:'nearest'});}catch{}
+
   // Keep the marker in the player's own stacking context, rather than a
   // body-level maximum z-index overlay above site dialogs.
   const host = video.parentElement || globalThis.document?.body || globalThis.document?.documentElement;
@@ -48,7 +52,8 @@ export function highlightMedia(options = {}) {
   frame.setAttribute?.('data-video-pocket-media-highlight', '1');
   Object.assign(frame.style, {
     position: 'absolute', zIndex: '2', pointerEvents: 'none',
-    border: '3px solid #16856b', outline:'1px solid #ffffffb3', boxSizing: 'border-box', display: 'none',
+    border: '3px solid #16856b', outline:'1px solid #ffffffb3', boxSizing: 'border-box', display: 'block', visibility:'hidden',
+    margin:'0',padding:'0',transition:'none',animation:'none',transform:'none',
   });
   const label=globalThis.document.createElement('div');
   label.textContent=String(options.title || video.getAttribute?.('aria-label') || video.title || globalThis.document.title || '影片').trim() || '影片';
@@ -67,13 +72,16 @@ export function highlightMedia(options = {}) {
     try{
       const value=video.getBoundingClientRect?.();
       if(video.isConnected===false||!value||value.width<=0||value.height<=0||blockedByDialog()){frame.style.display='none';return;}
+      // display:none has no offsetParent. Measure in the real containing block
+      // before showing the marker, including when returning from a hidden state.
+      Object.assign(frame.style,{display:'block',visibility:'hidden'});
       let parent=frame.offsetParent;
       if(parent===globalThis.document.body&&globalThis.getComputedStyle?.(parent)?.position==='static')parent=null;
       const bounds=parent?.getBoundingClientRect?.();
       const sx=bounds&&parent.offsetWidth?bounds.width/parent.offsetWidth:1,sy=bounds&&parent.offsetHeight?bounds.height/parent.offsetHeight:1;
       const left=parent?(value.left-(bounds?.left||0))/sx+(parent.scrollLeft||0)-(parent.clientLeft||0):value.left+(globalThis.scrollX||0);
       const top=parent?(value.top-(bounds?.top||0))/sy+(parent.scrollTop||0)-(parent.clientTop||0):value.top+(globalThis.scrollY||0);
-      Object.assign(frame.style,{display:'block',left:`${left}px`,top:`${top}px`,width:`${value.width/sx}px`,height:`${value.height/sy}px`});
+      Object.assign(frame.style,{left:`${left}px`,top:`${top}px`,width:`${value.width/sx}px`,height:`${value.height/sy}px`,visibility:'visible'});
     }catch{frame.style.display='none';}
   };
   const clear = () => {

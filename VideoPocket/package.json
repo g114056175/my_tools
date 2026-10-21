@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "build:observer": "node build/build-media-observer.mjs"
+    "build:observer": "node build/build-media-observer.mjs",
+    "build:mediabunny": "node evaluation/build.mjs"
   },
   "devDependencies": {"esbuild":"0.28.2"}
 }

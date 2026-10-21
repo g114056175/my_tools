@@ -3,11 +3,18 @@ import {
   exposeSourceEvidence,
 } from "./media-evidence.js";
 import { createMediaModelStore, extractMediaModels } from "./media-models.js";
+import { observeWorkerMetadata } from "./worker-media.js";
+import { observeJsonMetadata } from "./json-media-observer.js";
+import { dailymotionContext } from "./dailymotion.js";
 
 const OBSERVER_SYMBOL = Symbol.for("video-pocket.mediaObserver");
 const MAX_GRAPH = 512,
   MAX_OBJECT_URLS = 256,
   MAX_TEXT = 512 * 1024,
+  MAX_MANIFESTS = 12,
+  MAX_MANIFEST_ALIASES = 48,
+  MAX_MANIFEST_BYTES = 2 * 1024 * 1024,
+  MANIFEST_TTL = 120 * 1000,
   TTL = 5 * 60 * 1000;
 const http = (raw, base = "") => {
   try {
@@ -15,6 +22,22 @@ const http = (raw, base = "") => {
     return /^https?:$/.test(u.protocol) ? u.href : "";
   } catch {
     return "";
+  }
+};
+// The observer is injected at document_start on ordinary pages so it can see
+// player metadata before a SPA replaces it.  Cloudflare's challenge frames
+// are not media pages, and their bootstrap code deliberately uses restricted
+// URL schemes.  Installing hooks there only adds work and can make the
+// challenge console look as if the extension caused its CSP diagnostics.
+export const shouldInstallMediaObserver = (target = globalThis) => {
+  try {
+    const hostname = String(target.location?.hostname || new URL(target.location?.href || "").hostname).toLowerCase();
+    return !(
+      hostname === "challenges.cloudflare.com" ||
+      hostname.endsWith(".challenges.cloudflare.com")
+    );
+  } catch {
+    return true;
   }
 };
 const isM3u8 = (u, type = "") =>
@@ -26,20 +49,54 @@ const isProgressive = (u, type = "") =>
   /video\//i.test(type) || /\.(?:mp4|webm|mov|m4v|mkv)(?:[?#]|$)/i.test(u);
 const isSegment = (u) => /\.(?:ts|m4s|aac|m4a)(?:[?#]|$)/i.test(u);
 
-export function installMediaObserver(target = globalThis) {
+// Relay/GraphQL can deliver several JSON records instead of one JSON body.
+// This parser never evaluates script text or guesses URLs from unrelated text.
+export function mediaModelsFromText(text,baseUrl='',parseJson=JSON.parse){
+  if(typeof text!=='string'||text.length>MAX_TEXT)return [];
+  const clean=text.replace(/^\s*for\s*\(;;\);\s*/,''),models=[];
+  try{return extractMediaModels(parseJson(clean),{baseUrl});}catch{}
+  for(const line of clean.split(/\r?\n/).slice(0,256)){
+    const record=line.trim().replace(/^for\s*\(;;\);\s*/,'');
+    if(!/^[\[{]/.test(record))continue;
+    try{models.push(...extractMediaModels(parseJson(record),{baseUrl}));}catch{}
+    if(models.length>=128)break;
+  }
+  return models.slice(0,128);
+}
+
+export function installMediaObserver(target = globalThis, options = {}) {
   if (target[OBSERVER_SYMBOL]?.sourcesFor) return target[OBSERVER_SYMBOL];
+  if (!shouldInstallMediaObserver(target)) {
+    const api = {
+      sourcesFor: () => ({ candidates: [], pending: false, reason: "excluded-context" }),
+      manifestFor: () => null,
+      modelFor: () => null,
+      diagnosticsFor: () => ({ excluded: true }),
+      pageContext: () => null,
+      scanDocument: () => [],
+      dispose: () => {},
+    };
+    try { target[OBSERVER_SYMBOL] = api; } catch {}
+    return api;
+  }
   const bodyUrl = new WeakMap(),
     xhrUrls = new WeakMap(),
-    bufferUrl = new WeakMap();
+    bufferUrl = new WeakMap(),readerUrls=new WeakMap();
   const objectUrls = new Map(),
     graph = new Map(),
     patterns = [],
     known = new Map(),
+    manifests = new Map(),
+    manifestAliases = new Map(),
     mediaSources = new WeakMap(),
     sourceBuffers = new WeakMap(),
     wrappers = [];
-  const modelStore = createMediaModelStore();
-  const now = () => Date.now();
+  const parseJson=target.JSON?.parse || JSON.parse;
+  const modelStore = createMediaModelStore({parseJson});
+  let pendingMetadata=0,pendingManifest=0,disposed=false,manifestBytes=0;
+  const metadataReaders=new Set();
+  const manifestReaders=new Set();
+  const now = typeof options.now === "function" ? options.now : () => Date.now();
   const kindOf = (url, type = "") =>
     isM3u8(url, type)
       ? "hls"
@@ -62,6 +119,58 @@ export function installMediaObserver(target = globalThis) {
     while (patterns.length > MAX_GRAPH) patterns.shift();
     for (const [url, value] of objectUrls)
       if (value.revoked && value.at < cutoff) objectUrls.delete(url);
+    for (const [url, value] of manifests) {
+      if (value.at < now() - MANIFEST_TTL) {
+        manifests.delete(url);
+        manifestBytes -= value.text.length * 2;
+      }
+    }
+    for (const [alias, url] of manifestAliases)
+      if (!manifests.has(url)) manifestAliases.delete(alias);
+  };
+  const rememberManifest = (rawUrl, text, type = "", aliases = []) => {
+    const url = http(rawUrl);
+    if (!url || typeof text !== "string" || text.length > MAX_TEXT) return;
+    // Keep Dailymotion's historical narrow retrieval policy. Other pages can
+    // retain a bounded manifest already delivered by any HTTP(S) CDN.
+    try {
+      const pageHost = new URL(target.location?.href || "").hostname;
+      const pageIsDailymotion = /(^|\.)dailymotion\.com$/i.test(pageHost);
+      const urlIsDailymotion = isOfficialManifestHost(url);
+      if (pageIsDailymotion ? !urlIsDailymotion : urlIsDailymotion) return;
+    } catch {}
+    const hls = isM3u8(url, type) || /^\s*#EXTM3U\b/m.test(text);
+    const mpd = isMpd(url, type) || /<MPD\b/i.test(text);
+    if ((!hls && !mpd) || (hls && !/^\s*#EXTM3U\b/m.test(text)) || (mpd && !/<MPD\b/i.test(text))) return;
+    if (hls) {
+      const media = /#EXTINF\s*:/i.test(text) || /#EXT-X-TARGETDURATION\s*:/i.test(text);
+      if (media && !/#EXT-X-ENDLIST\b/i.test(text)) return;
+    } else if (/\btype\s*=\s*["']dynamic["']/i.test(text) || /\bminimumUpdatePeriod\s*=/i.test(text)) return;
+    prune();
+    const old = manifests.get(url);
+    if (old) manifestBytes -= old.text.length * 2;
+    manifests.delete(url);
+    manifestBytes += text.length * 2;
+    manifests.set(url, {url, text, type: hls ? "hls" : "dash", at: now()});
+    for (const alias of [rawUrl, ...aliases]) {
+      const key = http(alias);
+      if (key) manifestAliases.set(key, url);
+    }
+    while (manifestAliases.size > MAX_MANIFEST_ALIASES)
+      manifestAliases.delete(manifestAliases.keys().next().value);
+    while (manifests.size > MAX_MANIFESTS || manifestBytes > MAX_MANIFEST_BYTES) {
+      const first = manifests.keys().next().value;
+      const value = manifests.get(first);
+      manifests.delete(first);
+      for (const [alias, targetUrl] of manifestAliases)
+        if (targetUrl === first) manifestAliases.delete(alias);
+      manifestBytes -= (value?.text.length || 0) * 2;
+    }
+  };
+  const manifestFor = rawUrl => {
+    prune();
+    const key = http(rawUrl), url = manifestAliases.get(key) || key, value = manifests.get(url);
+    return value ? {url: value.url, text: value.text, type: value.type} : null;
   };
   const touch = (url, type = "", active = false) => {
     if (!url) return;
@@ -128,6 +237,7 @@ export function installMediaObserver(target = globalThis) {
       );
       if (hls && !/^\s*#EXTM3U\b/m.test(text)) return;
       if (mpd && !/<MPD\b/i.test(text)) return;
+      rememberManifest(url, text, type);
       if (hls)
         for (const line of text.split(/\r?\n/)) {
           const value = line.trim();
@@ -169,11 +279,124 @@ export function installMediaObserver(target = globalThis) {
       return "";
     }
   };
+  const responseSucceeded = response => {
+    try {
+      if (response?.ok === false) return false;
+      return typeof response?.status !== "number" || response.status < 400;
+    } catch { return false; }
+  };
   const recordJson = (value, url) => {
     try {
       modelStore.merge(extractMediaModels(value, { baseUrl: url }));
     } catch {}
   };
+  const recordText=(value,url)=>{
+    try{modelStore.merge(mediaModelsFromText(value,url,parseJson));}catch{}
+  };
+  const jsonMetadata=observeJsonMetadata(target,value=>recordJson(value,target.location?.href));
+  wrappers.push(()=>jsonMetadata.dispose());
+  // FB can render a Worker-fed player with no currentSrc. Read only metadata
+  // already sent by that player, then let modelFor enforce exact video IDs.
+  if(/(^|\.)facebook\.com$/i.test(target.location?.hostname || '')){
+    try{wrappers.push(observeWorkerMetadata(target,value=>{
+      if(typeof value==='string')recordText(value,target.location.href);
+      else recordJson(value,target.location.href);
+    }));}catch{}
+  }
+  // Some players consume fetch().body directly, bypassing .text()/.json().
+  // Read a bounded clone of metadata responses only; never duplicate media
+  // downloads, cancel the player's reader, or retain unbounded feed bodies.
+  const observeMetadata=async response=>{
+    let reader,timer;
+    try{
+      const url=http(response?.url),type=responseType(response);
+      if(disposed||pendingMetadata>=4||!url||new URL(url).origin!==new URL(target.location.href).origin)return;
+      if(!/json|multipart\/mixed/i.test(type)&&!(/\/graphql\/?(?:\?|$)/i.test(url)&&/text\//i.test(type)))return;
+      const length=Number(response.headers?.get?.('content-length'));
+      if(length>MAX_TEXT||!response.clone||!response.body)return;
+      reader=response.clone().body?.getReader?.();if(!reader)return;
+      pendingMetadata++;metadataReaders.add(reader);
+      let bytes=0,buffer='',whole='',stopped=false;
+      const decoder=new TextDecoder();
+      timer=setTimeout(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
+      while(!disposed&&!stopped){
+        const item=await reader.read();if(item.done)break;
+        bytes+=item.value.byteLength;if(bytes>MAX_TEXT)break;
+        const decoded=decoder.decode(item.value,{stream:true});buffer+=decoded;whole+=decoded;
+        // Complete lines can be delivered before a long-lived response ends.
+        const newline=buffer.lastIndexOf('\n');
+        if(newline>=0){recordText(buffer.slice(0,newline),url);buffer=buffer.slice(newline+1);}
+      }
+      if(!disposed&&!stopped&&bytes<=MAX_TEXT)recordText(whole+decoder.decode(),url);
+    }catch{}finally{
+      if(timer)clearTimeout(timer);
+      if(reader){metadataReaders.delete(reader);pendingMetadata--;reader.cancel().catch(()=>{});}
+    }
+  };
+  const isOfficialManifestHost = url => {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host === "dailymotion.com" || host.endsWith(".dailymotion.com") || host === "dmcdn.net" || host.endsWith(".dmcdn.net");
+    } catch { return false; }
+  };
+  const observeManifest=async(response, aliases=[])=>{
+    let reader,timer;
+    try {
+      const url=http(response?.url), type=responseType(response);
+      if (!responseSucceeded(response)) return;
+      if (disposed || pendingManifest >= 2 || !url || !isManifest(url,type) || !response.clone || !response.body) return;
+      const length=Number(response.headers?.get?.("content-length"));
+      if (length > MAX_TEXT) return;
+      reader=response.clone().body?.getReader?.(); if(!reader)return;
+      pendingManifest++;manifestReaders.add(reader);
+      let bytes=0,whole="",stopped=false; const decoder=new TextDecoder();
+      timer=setTimeout(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
+      while(!disposed&&!stopped){
+        const item=await reader.read(); if(item.done)break;
+        bytes+=item.value.byteLength; if(bytes>MAX_TEXT){reader.cancel().catch(()=>{});break;}
+        whole+=decoder.decode(item.value,{stream:true});
+      }
+      if(!disposed&&!stopped&&bytes<=MAX_TEXT) {
+        const value=whole+decoder.decode();
+        parseText(value,url,type);
+        rememberManifest(url,value,type,aliases);
+      }
+    }catch{}finally{
+      if(timer)clearTimeout(timer); if(reader){manifestReaders.delete(reader);pendingManifest--;reader.cancel().catch(()=>{});}
+    }
+  };
+  if(typeof target.fetch==='function'){
+    const original=target.fetch;
+    const wrapped=function(...args){
+      const result=original.apply(this,args);
+      return result.then(response=>{
+        try{const url=http(response?.url),alias=http(typeof args[0]==='string'?args[0]:args[0]?.url,target.location?.href);if(url&&responseSucceeded(response))rememberBody(response.body,url,responseType(response));void observeManifest(response,alias?[alias]:[]);}catch{}
+        void observeMetadata(response);return response;
+      });
+    };
+    target.fetch=wrapped;
+    wrappers.push(()=>{if(target.fetch===wrapped)target.fetch=original;});
+  }
+  // Track ownership of existing fetch stream chunks without cloning, retaining
+  // or re-reading the media. This covers players that bypass arrayBuffer().
+  const streamProto=target.ReadableStream?.prototype;
+  if(typeof streamProto?.getReader==='function'){
+    const original=streamProto.getReader;
+    const wrapped=function(...args){const reader=original.apply(this,args),url=bodyUrl.get(this);if(url)readerUrls.set(reader,url);return reader;};
+    streamProto.getReader=wrapped;
+    wrappers.push(()=>{if(streamProto.getReader===wrapped)streamProto.getReader=original;});
+  }
+  for(const proto of [target.ReadableStreamDefaultReader?.prototype,target.ReadableStreamBYOBReader?.prototype]){
+    if(typeof proto?.read!=='function')continue;
+    const original=proto.read;
+    const wrapped=function(...args){
+      const result=original.apply(this,args),url=readerUrls.get(this);
+      if(!url)return result;
+      return result.then(item=>{if(item?.value){rememberBody(item.value,url);if(item.value.buffer)bufferUrl.set(item.value.buffer,url);}return item;});
+    };
+    proto.read=wrapped;
+    wrappers.push(()=>{if(proto.read===wrapped)proto.read=original;});
+  }
   const wrapResponse = (name) => {
     const proto = target.Response?.prototype,
       original = proto?.[name];
@@ -197,6 +420,7 @@ export function installMediaObserver(target = globalThis) {
       if (typeof then !== "function") return result;
       return then.call(result, (value) => {
         try {
+          if (!responseSucceeded(this)) return value;
           rememberBody(value, url, type);
           if (name === "text") {
             parseText(value, url, type);
@@ -204,12 +428,7 @@ export function installMediaObserver(target = globalThis) {
               /json/i.test(type) ||
               /^\s*(?:for\s*\(;;\);\s*)?[\[{]/.test(value)
             ) {
-              try {
-                recordJson(
-                  JSON.parse(String(value).replace(/^\s*for\s*\(;;\);\s*/, "")),
-                  url,
-                );
-              } catch {}
+              recordText(value,url);
             }
           }
           if (name === "json") recordJson(value, url);
@@ -244,8 +463,8 @@ export function installMediaObserver(target = globalThis) {
           "load",
           () => {
             try {
-              const url = xhrUrls.get(xhr);
-              if (!url) return;
+              const url = http(xhr.responseURL || xhrUrls.get(xhr));
+              if (!url || (typeof xhr.status === "number" && xhr.status >= 400)) return;
               const type = xhr.getResponseHeader?.("content-type") || "";
               const value = xhr.response;
               if (value && typeof value === "object")
@@ -259,17 +478,7 @@ export function installMediaObserver(target = globalThis) {
                   /json/i.test(type) ||
                   /^\s*(?:for\s*\(;;\);\s*)?[\[{]/.test(xhr.responseText)
                 ) {
-                  try {
-                    recordJson(
-                      JSON.parse(
-                        String(xhr.responseText).replace(
-                          /^\s*for\s*\(;;\);\s*/,
-                          "",
-                        ),
-                      ),
-                      url,
-                    );
-                  } catch {}
+                  recordText(xhr.responseText,url);
                 }
               }
               touch(url, type, isManifest(url, type));
@@ -449,6 +658,13 @@ export function installMediaObserver(target = globalThis) {
         add(roots[0], known.get(roots[0])?.kind || cachedRoots.find(item=>item.url===roots[0])?.kind || "hls", ["mse-master-root"]);
         associatedRoot = true;
       }
+      // A single range-fetched MP4 can feed MSE directly without an HLS/DASH
+      // manifest. It is safe only when all active buffers agree on one URL.
+      const progressive=[...new Set(active.map(item=>item.source))];
+      if(!roots.length&&progressive.length===1&&known.get(progressive[0])?.kind==='progressive'&&!isSegment(progressive[0])){
+        add(progressive[0],'progressive',['mse-progressive-body']);
+        associatedRoot=true;
+      }
       if (
         !ms &&
         object?.source &&
@@ -462,7 +678,7 @@ export function installMediaObserver(target = globalThis) {
         if (model.manifestUrl)
           add(
             model.manifestUrl,
-            /mpd/i.test(model.manifestUrl) ? "dash" : "hls",
+            model.manifestType || (/mpd/i.test(model.manifestUrl) ? "dash" : "hls"),
             ["embedded-model.manifestUrl"],
           );
         for (const version of model.versions || [])
@@ -498,6 +714,9 @@ export function installMediaObserver(target = globalThis) {
     };
   };
   const dispose = () => {
+    disposed=true;
+    for(const reader of metadataReaders)reader.cancel().catch(()=>{});
+    for(const reader of manifestReaders)reader.cancel().catch(()=>{});
     for (const restore of wrappers.splice(0))
       try {
         restore();
@@ -505,6 +724,7 @@ export function installMediaObserver(target = globalThis) {
     objectUrls.clear();
     graph.clear();
     known.clear();
+    manifests.clear(); manifestAliases.clear(); manifestBytes=0;
     if (target[OBSERVER_SYMBOL]?.dispose === dispose)
       try {
         delete target[OBSERVER_SYMBOL];
@@ -514,7 +734,10 @@ export function installMediaObserver(target = globalThis) {
   };
   const api = {
     sourcesFor,
+    manifestFor,
     modelFor: (video) => modelStore.modelFor(video, target.location?.href),
+    diagnosticsFor: (video) => (prune(),{json:jsonMetadata.stats(),manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
+    pageContext: () => dailymotionContext(target.document,target.location?.href),
     scanDocument: () =>
       modelStore.scanDocument(target.document, target.location?.href),
     dispose,

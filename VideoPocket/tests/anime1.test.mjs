@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { anime1MediaUrl, mediaCredentials, resolveAnime1 } from '../extension/anime1.js';
+import { anime1MediaUrl, resolveAnime1 } from '../extension/anime1.js';
+import {mediaCredentials} from '../extension/media-credentials.js';
 
 const page = 'https://anime1.me/30114';
 const token = encodeURIComponent(JSON.stringify({ c: '1958', e: '8', t: 1792044880, p: 0, s: 'redacted-fixture' }));
@@ -48,11 +49,16 @@ test('external hosts, credentials URLs, and wrong paths are rejected', async () 
   assert.equal(anime1MediaUrl('https://evil.example/1958/8.mp4'), null);
 });
 
-test('credentials are included only for an Anime1 page and Anime1 media host', () => {
+test('credentials are included only for paired Anime1 and TikTok page/media hosts', () => {
   assert.equal(mediaCredentials('https://muan.v.anime1.me/1958/8.mp4', page), 'include');
   assert.equal(mediaCredentials('https://evil.example/1958/8.mp4', page), 'omit');
   assert.equal(mediaCredentials('https://muan.v.anime1.me/1958/8.mp4', 'https://evil.example/'), 'omit');
   assert.equal(mediaCredentials('https://muan.v.anime1.me/1958/8.mp4', 'http://anime1.me/30114'), 'omit');
+  assert.equal(mediaCredentials('https://v16m.tiktokcdn.com/video/a.mp4', 'https://www.tiktok.com/@creator/video/1'), 'include');
+  assert.equal(mediaCredentials('https://v16-webapp-prime.us.tiktok.com/video/a.mp4', 'https://www.tiktok.com/@creator/video/1'), 'include');
+  assert.equal(mediaCredentials('https://cdn.evil.example/video/a.mp4', 'https://www.tiktok.com/@creator/video/1'), 'omit');
+  assert.equal(mediaCredentials('https://v16m.tiktokcdn.com/video/a.mp4', 'https://evil.example/'), 'omit');
+  assert.equal(mediaCredentials('http://v16m.tiktokcdn.com/video/a.mp4', 'https://www.tiktok.com/@creator/video/1'), 'omit');
 });
 
 test('malformed or unsuccessful API data never becomes a successful source', async () => {

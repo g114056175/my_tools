@@ -28,7 +28,17 @@ function targetScope(video) {
   const narrow = closest(video, 'figure,[data-video-id],[data-media-id],[data-post-id],.video-js');
   if (narrow) return nodes(narrow,'video').length<=1?narrow:video;
   const article = closest(video, 'article,[role="article"]');
-  if (!article) return video;
+  if (!article) {
+    // Feeds can use plain div/section wrappers rather than semantic articles.
+    // Stop before a shared container so a neighbour's permalink is never used.
+    let scope=video;
+    for(let parent=video?.parentElement,depth=0;parent&&depth<16;parent=parent.parentElement,depth++){
+      if(/^(BODY|HTML|MAIN)$/.test(parent.tagName || ''))break;
+      if(nodes(parent,'video').length!==1)break;
+      scope=parent;
+    }
+    return scope;
+  }
   const siblings = nodes(article, 'video');
   // A feed article can contain several videos; its metadata is ambiguous.
   // Keep the element as scope unless the article has one unambiguous target.
@@ -38,11 +48,13 @@ function targetScope(video) {
 function identityFromUrl(pageUrl) {
   let url; try { url = new URL(pageUrl); } catch { return {}; }
   const host = url.hostname.toLowerCase();
-  let id = url.searchParams.get('v') || url.searchParams.get('video_id') || '';
+  let id = url.searchParams.get('v') || url.searchParams.get('video_id') || url.searchParams.get('video') || '';
   let kind = '';
   const parts = url.pathname.split('/').filter(Boolean);
   const match = url.pathname.match(/\/(?:reel|p|tv|videos?|watch)\/([^/?#]+)/i);
   if (match) { id ||= match[1]; kind = /reel/i.test(match[0]) ? 'reel' : /watch/i.test(match[0]) ? 'watch' : 'post'; }
+  const creatorVideo = url.pathname.match(/\/@[^/]+\/video\/([^/?#]+)/i);
+  if (!id && creatorVideo) { id = creatorVideo[1]; kind = 'video'; }
   if(!id&&/(^|\.)vimeo\.com$/i.test(host))id=url.pathname.match(/^\/(\d+)(?:\/|$)/)?.[1] || '';
   if (!id && /instagram\.com$/i.test(host)) id = parts.find(p => p && !/^(reel|p|tv)$/i.test(p)) || '';
   return id ? { id, kind, host, key: `${host}:${id}` } : { host };
@@ -52,21 +64,34 @@ function dataIdentity(node) {
   for (const key of ['data-video-id', 'data-media-id', 'data-reel-id', 'data-post-id', 'data-content-id']) {
     const value = safeAttr(node, key); if (value) return value;
   }
+  // XGPlayer's wrapper includes the real media ID, unlike media-card-0 (a
+  // recycled feed position). Do not use arbitrary numeric element IDs.
+  const wrapper=safeAttr(node,'id').match(/^xgwrapper-\d+-(\d{8,24})$/);
+  if(wrapper)return wrapper[1];
+  return '';
+}
+
+function localPlayerIdentity(video){
+  let node=video;
+  for(let depth=0;node&&depth<12;node=node.parentElement,depth++){
+    if(depth&&nodes(node,'video').length!==1)break;
+    const id=dataIdentity(node);if(id)return id;
+  }
   return '';
 }
 
 export function postIdentity({ pageUrl = '', video, container } = {}) {
   const page = identityFromUrl(pageUrl);
-  let anchor = (() => { try { return video?.closest?.('a[href*="/reel/"],a[href*="/p/"],a[href*="/videos/"],a[href*="/watch"]')?.href || ''; } catch { return ''; } })();
+  let anchor = (() => { try { return video?.closest?.('a[href*="/reel/"],a[href*="/p/"],a[href*="/videos/"],a[href*="/watch"],a[href*="/video/"]')?.href || ''; } catch { return ''; } })();
   // Feed post links need not wrap the video. Accept a sibling permalink only
   // inside its unambiguous one-video container, with exactly one media ID.
   if(!anchor && container && container!==video && nodes(container,'video').length===1){
     const links=nodes(container,'a[href]'), ids=new Map();
-    for(const link of links){const href=absolute(link.href || safeAttr(link,'href'),pageUrl);if(!/\/(?:reel|p|tv|videos?|watch)(?:\/|\?)/i.test(href))continue;const identity=identityFromUrl(href);if(identity.id && identity.host===page.host)ids.set(identity.id,href);}
+    for(const link of links){const href=absolute(link.href || safeAttr(link,'href'),pageUrl);if(!/\/(?:reel|p|tv|videos?|watch)(?:\/|\?)/i.test(href)&&!/@[^/]+\/video\//i.test(href))continue;const identity=identityFromUrl(href);if(identity.id && identity.host===page.host)ids.set(identity.id,href);}
     if(ids.size===1)anchor=ids.values().next().value;
   }
   const anchorPage = anchor ? identityFromUrl(anchor) : {};
-  const id = dataIdentity(video) || dataIdentity(container) || anchorPage.id || page.id;
+  const id = localPlayerIdentity(video) || dataIdentity(container) || anchorPage.id || page.id;
   const host = anchorPage.host || page.host;
   return id ? { ...page, id, host, key: `${host || ''}:${id}`, anchor: absolute(anchor, pageUrl) } : page;
 }
@@ -128,7 +153,7 @@ export function collectMediaEvidence({ video, root, pageUrl = '', network = [], 
   const scope = targetScope(video);
   let identity = postIdentity({ pageUrl, video, container: scope });
   const page = identityFromUrl(pageUrl);
-  const localId = dataIdentity(video) || dataIdentity(scope) || identityFromUrl(identity.anchor || '').id;
+  const localId = localPlayerIdentity(video) || dataIdentity(scope) || identityFromUrl(identity.anchor || '').id;
   const allVideos = nodes(root, 'video');
   if (!localId && allVideos.length > 1) identity = { host: page.host };
   const candidates = [];

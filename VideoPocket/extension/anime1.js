@@ -3,7 +3,6 @@
 const API='https://v.anime1.me/api';
 function pageUrl(raw){try{const u=new URL(raw);return u.protocol==='https:'&&/(^|\.)anime1\.me$/.test(u.hostname)?u:null;}catch{return null;}}
 export function anime1MediaUrl(raw){try{const u=new URL(raw,'https://v.anime1.me');return u.protocol==='https:'&&!u.username&&!u.password&&/(^|\.)v\.anime1\.me$/.test(u.hostname)?u:null;}catch{return null;}}
-export function mediaCredentials(url,referer){return pageUrl(referer)&&anime1MediaUrl(url)?'include':'omit';}
 export async function resolveAnime1(descriptor,request){
  if(!pageUrl(descriptor.referer))throw new Error('Anime1 來源頁無效');
  const token=descriptor.platform?.apiRequest;

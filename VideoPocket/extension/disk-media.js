@@ -79,6 +79,15 @@
     return current.getFileHandle(parts.at(-1), { create: false }).then(h => h.getFile());
   }
 
+  async function openSyncMediaFile(path) {
+    const parts = pathParts(path);
+    if (parts.shift() !== PREFIX || parts.length !== 2) throw new Error('暫存檔路徑無效');
+    const dir = await directory(parts[0], false);
+    const handle = await dir.getFileHandle(parts[1], { create: false });
+    const access = await handle.createSyncAccessHandle();
+    return { path, access };
+  }
+
   async function removeMediaFiles(scope) {
     for(const [key,sinks] of openSinks)if(scope==null||key===safe(scope)){await Promise.allSettled([...sinks].map(s=>s.abort()));openSinks.delete(key);}
     const root = await opfsRoot(), top = await root.getDirectoryHandle(PREFIX, { create: false }).catch(() => null);
@@ -88,5 +97,5 @@
   }
   async function removeMediaFile(path){const parts=pathParts(path);if(parts.shift()!==PREFIX||parts.length!==2)throw new Error('暫存檔路徑無效');const dir=await directory(parts[0],false);await dir.removeEntry(parts[1]);}
   async function estimateMediaQuota() { return navigator.storage?.estimate ? navigator.storage.estimate() : { usage: 0, quota: 0 }; }
-  root.VideoPocketDiskMedia = { createMediaFile, createSyncMediaFile, readMediaFile, removeMediaFile, removeMediaFiles, estimateMediaQuota };
+  root.VideoPocketDiskMedia = { createMediaFile, createSyncMediaFile, readMediaFile, openSyncMediaFile, removeMediaFile, removeMediaFiles, estimateMediaQuota };
 })(typeof self !== 'undefined' ? self : globalThis);

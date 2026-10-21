@@ -1,0 +1,76 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import {observeWorkerMetadata} from '../extension/worker-media.js';
+
+function environment(){
+ class WorkerMock{
+  constructor(url){this.url=url;this.events=new Map();}
+  addEventListener(type,fn){this.events.set(type,fn);}
+  removeEventListener(type,fn){if(this.events.get(type)===fn)this.events.delete(type);}
+  postMessage(...args){if(args[0]?.reject)throw new Error('clone failed');this.sent=args;return 17;}
+  receive(data){this.events.get('message')?.({data});}
+ }
+ return {Worker:WorkerMock};
+}
+
+test('worker observation preserves construction, subclasses, arguments and native failures',()=>{
+ const target=environment(),Native=target.Worker,post=Native.prototype.postMessage,values=[];
+ const dispose=observeWorkerMetadata(target,value=>values.push(value));
+ class Child extends target.Worker{}
+ const worker=new Child('https://www.facebook.com/worker.js');
+ assert.ok(worker instanceof Native);assert.ok(worker instanceof Child);
+ const payload={video:{id:'one'}},transfer=[];
+ assert.equal(worker.postMessage(payload,transfer),17);
+ assert.equal(worker.sent[0],payload);assert.equal(worker.sent[1],transfer);
+ assert.deepEqual(JSON.parse(JSON.stringify(values[0])),payload);
+ worker.receive({video:{id:'two'}});assert.equal(values[1].video.id,'two');
+ assert.throws(()=>worker.postMessage({reject:true}),/clone failed/);assert.equal(values.length,2);
+ dispose();assert.equal(target.Worker,Native);assert.equal(Native.prototype.postMessage,post);
+ worker.receive({video:{id:'after-dispose'}});assert.equal(values.length,2);
+});
+
+test('worker metadata copying excludes native buffers and accessors and bounds large messages',()=>{
+ const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value));
+ try{
+  const worker=new target.Worker('worker.js');let getters=0;
+  const payload={buffer:new Uint8Array(2*1024*1024),videoID:'one'};
+  Object.defineProperty(payload,'secret',{enumerable:true,get(){getters++;return 'unused';}});
+  payload.cycle=payload;worker.receive(payload);
+  assert.equal(getters,0);assert.equal(values[0].videoID,'one');
+  assert.equal(values[0].buffer,undefined);assert.equal(values[0].secret,undefined);assert.equal(values[0].cycle,undefined);
+  worker.receive({huge:'x'.repeat(512*1024+1),after:'ignored'});
+  assert.equal(values[1].huge,undefined);assert.equal(values[1].after,undefined);
+ }finally{dispose();}
+});
+
+test('metadata listener count is capped and observer errors never break messaging',()=>{
+ const target=environment(),dispose=observeWorkerMetadata(target,()=>{throw new Error('observer failed');});
+ try{
+  const workers=Array.from({length:33},()=>new target.Worker('worker.js'));
+  assert.equal(workers[31].events.size,1);assert.equal(workers[32].events.size,0);
+  assert.equal(workers[0].postMessage({videoID:'one'}),17);
+  assert.doesNotThrow(()=>workers[0].receive({videoID:'one'}));
+ }finally{dispose();}
+});
+
+test('the shipped document-start bundle observes FB worker metadata and binds the selected ID',async()=>{
+ const target=environment();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};
+ const original=target.Worker;
+ const context=vm.createContext({...target,URL:class extends URL{},TextDecoder,TextEncoder,WeakRef});
+ const bundle=await fs.readFile(new URL('../extension/media-observer.js',import.meta.url),'utf8');
+ vm.runInContext(bundle,context);
+ assert.notEqual(context.Worker,original,'the production bundle must install the FB worker observer');
+ const outcome=vm.runInContext(`
+   const worker=new Worker('worker.js');
+   worker.postMessage({__typename:'Video',id:'selected',videoDeliveryLegacyFields:{browser_native_hd_url:'https://video.fbcdn.net/selected.mp4'}});
+   const player={currentSrc:'',src:'',nodeType:1,getAttribute:()=>'',closest:()=>null,__reactProps$test:{videoID:'selected'}};
+   player.ownerDocument={querySelectorAll:()=>[player]};
+   const observer=globalThis[Symbol.for('video-pocket.mediaObserver')];
+   const result=observer.modelFor(player)?.versions[0]?.url;
+   observer.dispose();result;
+ `,context);
+ assert.equal(outcome,'https://video.fbcdn.net/selected.mp4');
+ assert.equal(context.Worker,original);
+});

@@ -4989,7 +4989,7 @@ var _emscripten_stack_get_current = function() {
   return (_emscripten_stack_get_current = Module["asm"]["emscripten_stack_get_current"]).apply(null, arguments);
 };
 
-var _ff_h264_cabac_tables = Module['_ff_h264_cabac_tables'] = 423980;
+var _ff_h264_cabac_tables = Module['_ff_h264_cabac_tables'] = 423916;
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===

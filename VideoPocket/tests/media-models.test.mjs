@@ -28,6 +28,62 @@ test("Facebook delivery legacy fields produce compact ID-bound descriptor", () =
   assert.equal(model.title, "Public clip");
 });
 
+test("Facebook video delivery response fragment stays bound to its parent Video", () => {
+  const [model] = extractMediaModels({
+    __typename: "Video",
+    id: "fb-response-1",
+    videoDeliveryResponseFragment: {
+      videoDeliveryResponseResult: {
+        progressive_urls: [
+          { progressive_url: "https://cdn.example/fb-response.mp4" },
+        ],
+        dash_manifest_urls: [
+          { manifest_url: "https://cdn.example/fb-response.mpd" },
+        ],
+        dash_manifests: [{ manifest_xml: "<MPD/>" }],
+        hls_playlist_urls: [
+          { hls_playlist_url: "https://cdn.example/fb-response.m3u8" },
+        ],
+      },
+    },
+  });
+  assert.equal(model.id, "fb-response-1");
+  assert.equal(model.versions.length, 1);
+  assert.equal(model.versions[0].url, "https://cdn.example/fb-response.mp4");
+  assert.equal(model.manifestUrl, "https://cdn.example/fb-response.mpd");
+  assert.equal(model.manifestType, "dash");
+  assert.equal(model.manifestXml, "<MPD/>");
+  assert.equal(extractMediaModels({
+    __typename: "Video",
+    id: "fb-response-1",
+    videoDeliveryResponseFragment: {
+      videoDeliveryResponseResult: {
+        progressive_urls: [{ progressive_url: "https://cdn.example/dup.mp4" }],
+      },
+    },
+  }).length, 1);
+});
+
+test("Facebook response fragment with a conflicting ID contributes no child sources", () => {
+  const [model] = extractMediaModels({
+    __typename: "Video",
+    id: "fb-parent",
+    video_url: "https://cdn.example/parent.mp4",
+    videoDeliveryResponseFragment: {
+      videoDeliveryResponseResult: {
+        video_id: "fb-other",
+        progressive_urls: [{ progressive_url: "https://cdn.example/other.mp4" }],
+        dash_manifest_urls: [{ manifest_url: "https://cdn.example/other.mpd" }],
+      },
+    },
+  });
+  assert.equal(model.id, "fb-parent");
+  assert.deepEqual(model.versions.map((item) => item.url), [
+    "https://cdn.example/parent.mp4",
+  ]);
+  assert.equal(model.manifestUrl, undefined);
+});
+
 test("deep FB Relay require and bbox nesting finds the owned attachment video", () => {
   const media = {
     __typename: "Video",
@@ -172,4 +228,54 @@ test('Vimeo API play response retains route identity and prefers HLS over JSON D
 test('player config files preserve their own video ID and CDN choice',()=>{
  const [model]=extractMediaModels({video:{id:1084537,title:'Big Buck Bunny'},request:{files:{hls:{default_cdn:'ak',cdns:{ak:{url:'https://cdn.example/master.m3u8'}}},progressive:[{url:'https://cdn.example/high.mp4',height:1080}]}}});
  assert.equal(model.id,'1084537');assert.equal(model.title,'Big Buck Bunny');assert.equal(model.manifestUrl,'https://cdn.example/master.m3u8');
+});
+
+test('TikTok style playback URLs bind to the owning aweme ID without borrowing sibling media',()=>{
+ const fixture={aweme_detail:{aweme_id:'7420000000000000001',desc:'Sample clip',video:{duration:12500,bitrateInfo:[{PlayAddr:{UrlList:['https://v16.tiktokcdn.example/video/tos/sample.mp4'],DataSize:1200}}]}}};
+ const [model]=extractMediaModels(fixture,{baseUrl:'https://www.tiktok.com/@creator/video/7420000000000000001'});
+ assert.equal(model.id,'7420000000000000001');
+ assert.equal(model.title,'Sample clip');
+ assert.deepEqual(model.versions.map(item=>item.url),['https://v16.tiktokcdn.example/video/tos/sample.mp4']);
+ const store=createMediaModelStore();store.merge([model]);
+ assert.equal(store.modelFor({closest:()=>null},'https://www.tiktok.com/@creator/video/7420000000000000001').id,model.id);
+ const unrelated=extractMediaModels({aweme_detail:{aweme_id:'parent',video:{bitrateInfo:[{PlayAddr:{UrlList:['https://cdn.example/a.mp4']}}]},recommendations:[{video:{playAddr:'https://cdn.example/b.mp4'}}]}});
+ assert.equal(unrelated.length,2);
+ assert.deepEqual(unrelated.map(item=>item.id).sort(),['parent',undefined]);
+});
+
+test('TikTok downloadAddr is tried before playAddr while preserving the owning aweme identity',()=>{
+ const model=extractMediaModels({aweme_id:'tt-1',video:{playAddr:{UrlList:['https://cdn.example/play.mp4']},downloadAddr:{UrlList:['https://cdn.example/download.mp4']}}})[0];
+ assert.equal(model.id,'tt-1');
+ assert.deepEqual(model.versions.map(item=>item.url),['https://cdn.example/download.mp4','https://cdn.example/play.mp4']);
+ const bitrate=extractMediaModels({aweme_id:'tt-2',video:{bitrateInfo:[{downloadAddr:{UrlList:['https://cdn.example/bitrate-download.mp4']},PlayAddr:{UrlList:['https://cdn.example/bitrate-play.mp4']}}]}})[0];
+ assert.deepEqual(bitrate.versions.map(item=>item.url),['https://cdn.example/bitrate-download.mp4','https://cdn.example/bitrate-play.mp4']);
+});
+
+test('bounded script scan recognizes JSON with TikTok playback field names',()=>{
+ const store=createMediaModelStore();
+ const script={textContent:JSON.stringify({aweme_detail:{aweme_id:'id-1',video:{playAddr:'https://cdn.example/a.mp4'}}}),closest:()=>null};
+ const document={querySelectorAll:selector=>selector.startsWith('script')?[script]:[]};
+ assert.equal(store.scanDocument(document,'https://www.tiktok.com/@creator/video/id-1').length,1);
+});
+
+test('TikTok ItemStruct keeps the post title, resource aliases and explicit playback structure',()=>{
+ const model=extractMediaModels({id:'7690095904514297106',desc:'Post description',author:{id:'author'},video:{id:'7690095904514297106',videoID:'resource',PlayAddrStruct:{UrlList:['https://cdn.example/current.mp4']},playAddr:'https://cdn.example/play.mp4',bitrateInfo:[{GearName:'normal_720_0',PlayAddr:{Width:1280,Height:720,UrlList:['https://cdn.example/720.mp4']}}]}})[0];
+ assert.ok(model.aliases.includes('7690095904514297106'));assert.ok(model.aliases.includes('resource'));
+ assert.equal(model.title,'Post description');assert.ok(model.versions.some(v=>v.url.endsWith('current.mp4')));
+ assert.equal(model.versions.find(v=>v.url.endsWith('720.mp4')).height,720);
+});
+
+test('post descriptors and resource-only player descriptors coalesce without merging distinct posts',()=>{
+ const store=createMediaModelStore();
+ store.merge(extractMediaModels({id:'post',videoID:'resource',playAddr:'https://cdn.example/a.mp4'}));
+ store.merge(extractMediaModels({videoID:'resource',playAddr:'https://cdn.example/a.mp4'}));
+ assert.equal(store.models().length,1);assert.equal(store.models()[0].id,'post');
+ store.merge(extractMediaModels({id:'other-post',videoID:'resource',playAddr:'https://cdn.example/b.mp4'}));
+ assert.equal(store.models().length,2);
+});
+
+test('new FB delivery must agree independently even when legacy delivery has the correct ID',()=>{
+ const [model]=extractMediaModels({__typename:'Video',id:'current',videoDeliveryLegacyFields:{id:'current',browser_native_hd_url:'https://cdn.example/right.mp4'},videoDeliveryResponseFragment:{videoDeliveryResponseResult:{id:'other',progressive_urls:[{progressive_url:'https://cdn.example/wrong.mp4'}]}}});
+ assert.deepEqual(model.versions.map(v=>v.url),['https://cdn.example/right.mp4']);
+ assert.doesNotThrow(()=>extractMediaModels({__typename:'Video',id:'bad-array',videoDeliveryResponseFragment:{videoDeliveryResponseResult:{dash_manifest_urls:{},hls_playlist_urls:'invalid',dash_manifests:{}}}}));
 });

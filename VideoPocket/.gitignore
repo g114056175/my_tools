@@ -1,0 +1,4 @@
+# Local dependencies and generated media/QA artifacts are not release sources.
+/node_modules/
+/evaluation/node_modules/
+/work/

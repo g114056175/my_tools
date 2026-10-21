@@ -28,11 +28,12 @@ function documentFor(videos,wrappers=[],title='MMOV'){
   };
 }
 
-async function snapshot({videos,players=[],wrappers=[],resources=[],observer,mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV'}){
+async function snapshot({videos,players=[],wrappers=[],resources=[],observer,evidence,mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV'}){
   const saved=new Map();
   const values={document:documentFor(videos,wrappers,pageTitle),window:{videojs:players.length?{getAllPlayers:()=>players}:undefined},location:{href:'https://hk.mmov.io/vodplay/416398/6-1.html',hostname:'hk.mmov.io',origin:'https://hk.mmov.io',pathname:'/vodplay/416398/6-1.html',search:''},performance:{getEntriesByType:kind=>kind==='resource'?resources.map(name=>({name})):[]}};
   const url=new URL(pageUrl);values.location={href:url.href,hostname:url.hostname,origin:url.origin,pathname:url.pathname,search:url.search};
   if(observer)values.window[Symbol.for('video-pocket.mediaObserver')]=observer;
+  if(evidence)values.window[Symbol.for('video-pocket.sourceEvidence')]=evidence;
   for(const [key,value] of Object.entries(values)){
     saved.set(key,Object.prototype.hasOwnProperty.call(globalThis,key)?globalThis[key]:absent);
     globalThis[key]=value;
@@ -42,6 +43,15 @@ async function snapshot({videos,players=[],wrappers=[],resources=[],observer,med
   }
 }
 
+test('a missing feed source carries only its exact same-origin player permalink',{concurrency:false},async()=>{
+ const a=video({src:''}),b=video({src:''}),observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]})};
+ const options={videos:[a,b],observer,pageUrl:'https://www.facebook.com/public',evidence:{collectMediaEvidence:({video:v})=>({identity:{id:v===a?'123':'456',key:v===a?'fb:123':'fb:456',anchor:v===a?'https://www.facebook.com/reel/123/':'https://other.example/reel/456/'}})}};
+ const result=await snapshot(options);
+ assert.deepEqual(result.videos[0].linkedMedia,{url:'https://www.facebook.com/reel/123/',id:'123'});
+ assert.equal(result.videos[1].linkedMedia,undefined);
+ assert.equal(result.videos[0].downloadUrl,null,'permalink is not itself a downloadable video');
+});
+
 test('generic observer source belongs to the selected video, not global resource guesses',{concurrency:false},async()=>{
  const a=video(),b=video();
  const observer={scanDocument(){},modelFor:()=>null,sourcesFor:v=>({candidates:v===b?[{url:'https://cdn/endpoint',kind:'dash',downloadable:true}]:[],reason:'no-associated-source'})};
@@ -50,6 +60,27 @@ test('generic observer source belongs to the selected video, not global resource
  const model={id:'post-b',versions:[{url:'https://cdn/post-b.mp4'}]};observer.modelFor=v=>v===b?model:null;
  const selected=await snapshot({videos:[a,b],observer,mediaIndex:1,pageUrl:'https://new.example/feed'});assert.equal(selected.platform.id,'post-b');assert.equal(selected.platform.site,'embedded');
  const first=await snapshot({videos:[a,b],observer,mediaIndex:0,pageUrl:'https://new.example/feed'});assert.equal(first.platform,undefined);
+});
+
+test('Dailymotion main player is selected before ads and only its context becomes a metadata request',{concurrency:false},async()=>{
+ const main=video({id:'video',title:''}),ad=video({title:'Advertisement'});
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[],reason:'no-associated-source'}),pageContext:()=>({id:'x9qh9tw',title:'Current episode'})};
+ const options={videos:[ad,main],observer,pageUrl:'https://geo.dailymotion.com/player/xtv3w.html?video=x9qh9tw'};
+ const page=await snapshot(options);assert.equal(page.platform.site,'dailymotion');assert.equal(page.platform.id,'x9qh9tw');
+ assert.equal(page.videos[0].dailymotionMain,true);assert.equal(page.videos[0].title,'Current episode');
+ assert.equal(page.videos[1].dailymotionMain,undefined);
+ const advertising=await snapshot({...options,mediaIndex:1});assert.equal(advertising.platform,undefined);
+});
+
+test('Dailymotion carries only a proven main-player source, including an iframe without a route ID',{concurrency:false},async()=>{
+ const main=video({id:'video'}),ad=video({title:'Advertisement'}),manifest='https://vod.dmcdn.net/main.m3u8';
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:v=>({candidates:[{url:v===main?manifest:'https://ads.example/ad.m3u8',kind:'hls',downloadable:true,evidence:['mse-root']}]})};
+ const options={videos:[ad,main],observer,pageUrl:'https://geo.dailymotion.com/player/xtv3w.html?'};
+ const page=await snapshot(options);assert.equal(page.platform,undefined);assert.deepEqual(page.videos[0].observedSource,{url:manifest,type:'hls'});
+ observer.pageContext=()=>({id:'x9qh9tw',title:'Episode'});
+ assert.deepEqual((await snapshot(options)).platform.observedSource,{url:manifest,type:'hls'});
+ observer.sourcesFor=()=>({candidates:[{url:manifest,kind:'hls',downloadable:true,evidence:['embedded-model.manifestUrl']}]});
+ assert.equal((await snapshot(options)).platform.observedSource,undefined,'unassociated metadata must not become main-player playback proof');
 });
 
 function playerFor(v,source,{currentSrc=source,currentSource=()=>({src:source})}={}){

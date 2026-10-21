@@ -1,11 +1,21 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {classifyFailure,briefFailure,visibleFailure,ERROR_VISIBILITY_MS} from '../extension/diagnostics.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {classifyFailure,briefFailure,visibleFailure,ERROR_VISIBILITY_MS,ERROR_RETENTION_MS} from '../extension/diagnostics.js';
 test('Failures classify network, verification, storage and subtitle conditions',()=>{
  assert.equal(classifyFailure(new Error('HTTP 403 https://x/token')).code,'HTTP_AUTH');assert.equal(classifyFailure({name:'QuotaExceededError'}).code,'TEMP_STORAGE_FULL');assert.equal(classifyFailure(new Error('attestation required')).code,'STREAM_VERIFICATION');assert.equal(classifyFailure(new Error('影片已變更')).code,'SOURCE_CHANGED');assert.equal(classifyFailure(new Error('failed'),'subtitle').code,'SUBTITLE_UNAVAILABLE');
+ const request=classifyFailure(new Error('來源讀取失敗（HTTP 403，GET Range，v16m.tiktokcdn.com），請重新整理影片'));
+ assert.equal(request.httpStatus,403);assert.equal(request.requestMethod,'GET RANGE');assert.equal(request.requestHost,'v16m.tiktokcdn.com');
+ const unsafe=classifyFailure(new Error('來源讀取失敗（HTTP 403，GET Range，user:pass@cdn.example/token?secret=x）'));
+ assert.equal(unsafe.requestHost,undefined);
+});
+test('linked-document diagnostics survive RPC classification without accepting arbitrary strings',()=>{
+ const result=classifyFailure({code:'SOURCE_UNAVAILABLE',sourceStage:'linked-no-model',message:'private payload'});
+ assert.equal(classifyFailure(result).sourceStage,'linked-no-model');
+ assert.equal(classifyFailure({...result,sourceStage:'https://private.example/?token=secret'}).sourceStage,undefined);
+ assert.ok(!JSON.stringify(result).includes('private payload'));
 });
 test('Compact display has fixed safe labels, expires quickly and ignores cancellation',()=>{
  const secret='SECRET_PRIVATE_VALUE';const r=briefFailure(new Error('HTTP 403 https://user:pass@host/video?token='+secret));assert.deepEqual(r,{code:'E01',message:'來源拒絕存取'});assert.ok(!JSON.stringify(r).includes(secret));assert.ok(!JSON.stringify(r).includes('host'));
  assert.deepEqual(briefFailure({code:'TEMP_STORAGE_FULL'}),{code:'E03',message:'本機暫存空間不足'});assert.equal(briefFailure({code:'CANCELLED'}),null);
- assert.ok(visibleFailure({time:1000,code:'TEMP_STORAGE_FULL'},1001));assert.equal(visibleFailure({time:1000,code:'TEMP_STORAGE_FULL'},1000+ERROR_VISIBILITY_MS),null);assert.equal(visibleFailure({time:Infinity,code:'INTERNAL_ERROR'},1001),null);
+ assert.ok(visibleFailure({time:1000,code:'TEMP_STORAGE_FULL'},1001));assert.equal(visibleFailure({time:1000,code:'TEMP_STORAGE_FULL'},1000+ERROR_RETENTION_MS),null);assert.equal(visibleFailure({time:Infinity,code:'INTERNAL_ERROR'},1001),null);
 });
 
 test('Bilibili and YouTube diagnostics retain safe numeric causes across storage and popup rendering',()=>{
@@ -18,4 +28,10 @@ test('Bilibili and YouTube diagnostics retain safe numeric causes across storage
  assert.deepEqual(briefFailure({code:'YT_FILE_HTTP',httpStatus:403}),{code:'YT02',message:'YouTube 字幕讀取失敗 · HTTP 403'});
  const unsafe=classifyFailure({code:'BILI_LIST_API',apiCode:secret,status:9999,subtitleStage:secret});
  assert.equal(unsafe.apiCode,undefined);assert.equal(unsafe.httpStatus,undefined);assert.equal(unsafe.subtitleStage,undefined);
+});
+
+test('unseen failures survive popup closure and preserve safe Bilibili playback detail',()=>{
+ assert.ok(visibleFailure({time:1000,code:'HTTP_AUTH'},1000+ERROR_VISIBILITY_MS+1));
+ const result=classifyFailure({code:'HTTP_AUTH',status:403,sourceStage:'bilibili-playurl',requestMethod:'GET',requestHost:'api.bilibili.com'});
+ assert.equal(classifyFailure(result).sourceStage,'bilibili-playurl');
 });

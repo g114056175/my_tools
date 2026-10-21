@@ -1,15 +1,30 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VideoPocket</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <div class="source-row"><span id="sourceLabel" class="source-label">目前影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" hidden></select><button id="pickMedia" class="icon-button" title="在網頁選取影片" aria-label="在網頁選取影片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button></div>
+  <div class="source-row"><span id="sourceLabel" class="source-label" role="button" tabindex="-1">影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" aria-hidden="true" tabindex="-1" hidden></select><div id="mediaChooser" hidden aria-label="目前影片"></div><button id="pickMedia" class="icon-button" title="在網頁選取影片" aria-label="在網頁選取影片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button></div>
   <main>
     <section id="downloadSection" aria-label="下載" hidden>
       <div class="section-heading"><h2>下載</h2><div class="switch" role="tablist" aria-label="下載類型"><button id="videoTab" role="tab" aria-selected="true" class="active">影片</button><button id="audioTab" role="tab" aria-selected="false">音檔</button><button id="subtitleTab" role="tab" aria-selected="false" disabled title="無字幕">字幕</button></div></div>
-      <div id="videoSettings" class="settings"><label>格式<select id="videoFormat" disabled><option value="auto">來源格式</option></select></label><label>品質<select id="height" disabled><option value="0">最佳</option></select></label></div>
-      <div id="audioSettings" class="settings" hidden><label>格式<select id="audioFormat" disabled><option value="original">來源音訊</option></select></label><label>品質<select id="audioQuality" disabled><option value="best">最佳</option><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="320">320 kbps</option></select></label></div>
+      <div id="videoSettings" class="settings"><label>格式<select id="videoFormat" disabled><option value="auto">來源格式</option></select><span id="videoFormatValue" class="choice-value" hidden aria-hidden="true"></span></label><label>品質<select id="height" disabled><option value="0">最佳</option></select><span id="heightValue" class="choice-value" hidden aria-hidden="true"></span></label></div>
+      <div id="audioSettings" class="settings" hidden><label>格式<select id="audioFormat" disabled><option value="original">來源音訊</option></select><span id="audioFormatValue" class="choice-value" hidden aria-hidden="true"></span></label><label>品質<select id="audioQuality" disabled><option value="best">最佳</option><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="320">320 kbps</option></select><span id="audioQualityValue" class="choice-value" hidden aria-hidden="true"></span></label></div>
       <button id="download" class="primary" disabled>下載影片</button>
+      <details id="rangeSettings" class="range-settings" hidden>
+        <summary>進階設定</summary>
+        <div id="rangeControls">
+        <div id="rangeSliders" class="range-timeline" role="group" aria-label="影片區間">
+          <div class="range-rail" aria-hidden="true"><div class="range-fill"></div></div>
+            <input id="rangeStartSlider" type="range" min="0" max="0" step="0.1" value="0" aria-label="區間起點滑桿">
+            <input id="rangeEndSlider" type="range" min="0" max="0" step="0.1" value="0" aria-label="區間終點滑桿">
+        </div>
+        <div class="range-times">
+          <input id="rangeStart" type="text" inputmode="numeric" maxlength="10" autocomplete="off" spellcheck="false" aria-label="區間起點時間" aria-describedby="rangeMessage">
+          <input id="rangeEnd" type="text" inputmode="numeric" maxlength="10" autocomplete="off" spellcheck="false" aria-label="區間終點時間" aria-describedby="rangeMessage">
+        </div>
+        <div id="rangeMessage" class="range-message" role="status" aria-live="polite" hidden></div>
+        </div>
+      </details>
       <div id="subtitleSection" aria-label="字幕" hidden>
-      <div id="subtitleSettings" class="settings"><label>來源<select id="language" aria-label="字幕版本"><option value="">讀取中…</option></select></label><label>格式<select id="subtitleFormat" aria-label="字幕檔格式"><option value="txt">TXT</option><option value="srt">SRT</option><option value="vtt">VTT</option><option value="plain">純文字</option></select></label></div>
+      <div id="subtitleSettings" class="settings"><label>來源<select id="language" aria-label="字幕版本"><option value="">讀取中…</option></select></label><label>格式<select id="subtitleFormat" aria-label="字幕檔格式"><option value="txt">TXT</option><option value="srt">SRT</option><option value="vtt">VTT</option><option value="plain">純文字</option></select><span id="subtitleFormatValue" class="choice-value" hidden aria-hidden="true"></span></label></div>
       <button id="loadSubtitle" class="primary" disabled>擷取</button>
       <div id="subtitleContent" hidden>
       <textarea id="preview" rows="4" placeholder="字幕內容" readonly aria-label="完整字幕"></textarea>

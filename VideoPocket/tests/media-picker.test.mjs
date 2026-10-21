@@ -60,6 +60,23 @@ test('Escape cancels and removes the active overlay without touching playback', 
   } finally { state.restore(); }
 });
 
+test('Bilibili mini-player picking returns the same route/part identity used by snapshots',async()=>{
+ const main=new NodeMock('video'),mini=new NodeMock('video',{left:120});mini.closest=selector=>selector.includes('#bilibili-player')?{}:null;
+ const state=world([main,mini]);globalThis.location={href:'https://www.bilibili.com/video/BVfixture/?p=2'};
+ try{
+  const pending=startMediaPicker({requestId:'bili-mini',frameId:0,documentId:'doc'});
+  state.documentMock.dispatch('click',{clientX:130,clientY:20,composedPath:()=>[mini],preventDefault(){},stopImmediatePropagation(){}});
+  const result=await pending;assert.equal(result.ok,true);assert.equal(result.mediaIdentity,'bilibili:BVfixture:2');
+ }finally{state.restore();}
+});
+
+test('picker recognizes a Bilibili bwp-video host through an open shadow boundary',async()=>{
+ const main=new NodeMock('video'),ad=new NodeMock('video',{left:120});const host={closest:selector=>selector.includes('bwp-video')?{}:null};main.getRootNode=()=>({host});ad.getRootNode=()=>({host:null});
+ const state=world([main,ad]);globalThis.location={href:'https://www.bilibili.com/video/BVshadow01/?p=2'};
+ try{const pending=startMediaPicker({requestId:'bili-shadow',frameId:0,documentId:'doc'});state.documentMock.dispatch('click',{clientX:20,clientY:20,composedPath:()=>[main],preventDefault(){},stopImmediatePropagation(){}});const result=await pending;assert.equal(result.mediaIdentity,'bilibili:BVshadow01:2');}
+ finally{state.restore();}
+});
+
 test('picker never chooses a video hidden behind a login dialog',async()=>{
  const video=new NodeMock('video');const state=world([video]);const query=state.documentMock.querySelectorAll;
  const modal=new NodeMock('div');modal.contains=()=>false;

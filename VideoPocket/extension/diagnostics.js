@@ -1,6 +1,8 @@
 // Diagnostics use an allowlist. Raw messages, URLs, titles, paths and tokens
 // never become a record or an exported field.
 const CATALOG={
+ RANGE_PROCESSING_FAILED:['merge','區間裁切失敗，未儲存檔案',true],RANGE_ENCODER_UNAVAILABLE:['source','瀏覽器無法精準裁切此格式',false],
+ RANGE_INVALID:['source','區間時間無效，請檢查起點與終點',false],RANGE_UNSUPPORTED:['source','此來源暫不支援區間下載',false],YOUTUBE_RANGE_INCOMPLETE:['integrity','區間影音不完整，未儲存檔案',true],
  CANCELLED:['cancel','已取消',false],SOURCE_CHANGED:['source','影片已變更，請重新整理',true],
  SOURCE_UNAVAILABLE:['source','未取得可用來源，請重新整理',true],DRM_UNSUPPORTED:['source','此影片含 DRM 保護',false],
  HTTP_AUTH:['network','來源拒絕存取，請重新整理影片頁',true],HTTP_RATE_LIMIT:['network','來源暫時限制請求，請稍後重試',true],
@@ -21,6 +23,7 @@ const CATALOG={
 };
 export function classifyFailure(error={},stage='download'){
  const raw=String(error?.message || error || ''),status=Number(error?.status || error?.httpStatus)||Number(raw.match(/(?:HTTP|status)\s*[:=(]?\s*(\d{3})/i)?.[1])||undefined;
+ const requestMatch=raw.match(/HTTP\s+\d{3}[，,]\s*(HEAD|GET(?:\s+Range)?)[，,]\s*([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[，,）)]|\s|$)/i),requestMethod=String(error?.requestMethod || requestMatch?.[1] || '').toUpperCase(),requestHost=String(error?.requestHost || requestMatch?.[2] || '').toLowerCase();
  let code=Object.hasOwn(CATALOG,error?.code)?error.code:Object.hasOwn(CATALOG,raw)?raw:null;
  if(!code){
   if(error.name==='AbortError'||/cancel|取消|USER_CANCELED/i.test(raw))code='CANCELLED';
@@ -42,9 +45,12 @@ export function classifyFailure(error={},stage='download'){
   else if(stage==='save')code='SAVE_FAILED';else code='INTERNAL_ERROR';
  }
  const [category,message,retryable]=CATALOG[code],apiCode=Number(error?.apiCode),subtitleStage=['list','file','parse','verify','context'].includes(error?.subtitleStage)?error.subtitleStage:undefined;
- return {code,category,message,retryable,...(Number.isInteger(status)&&status>=100&&status<=599?{httpStatus:status}:{}),...(error?.apiCode!==undefined&&Number.isInteger(apiCode)&&Math.abs(apiCode)<=1000000?{apiCode}:{}),...(subtitleStage?{subtitleStage}:{})};
+ return {code,category,message,retryable,...(['memory','storage','missing-track','unsupported-format','invalid-input','timestamps','file-io','unknown'].includes(error?.processingReason)?{processingReason:error.processingReason}:{}),...(Number.isInteger(error?.ffmpegExitCode)&&error.ffmpegExitCode>=0&&error.ffmpegExitCode<=255?{ffmpegExitCode:error.ffmpegExitCode}:{}),...(['linked-document','linked-redirect','linked-ambiguous','linked-no-model','dailymotion-metadata','dailymotion-manifest','bilibili-playurl','source-request','source-head','source-probe','stream-manifest','stream-segment'].includes(error?.sourceStage)?{sourceStage:error.sourceStage}:{}),...(Number.isInteger(status)&&status>=100&&status<=599?{httpStatus:status}:{}),...(['HEAD','GET','GET RANGE'].includes(requestMethod)?{requestMethod}:{}),...(requestHost&&/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(requestHost)?{requestHost}:{}),...(error?.apiCode!==undefined&&Number.isInteger(apiCode)&&Math.abs(apiCode)<=1000000?{apiCode}:{}),...(subtitleStage?{subtitleStage}:{})};
 }
 export const ERROR_VISIBILITY_MS=6000;
+// A popup can close during a download. Retain one safe failure briefly so the
+// next popup can show it, rather than silently discarding a failed job.
+export const ERROR_RETENTION_MS=5*60*1000;
 export function briefFailure(error){
  const failure=classifyFailure(error);
  if(failure.code==='CANCELLED')return null;
@@ -53,6 +59,7 @@ export function briefFailure(error){
  const groups={network:['E01','網路讀取失敗'],source:['E02','來源無法下載'],verification:['E02','串流驗證失敗'],storage:['E03','無法使用本機暫存'],memory:['E04','瀏覽器記憶體不足'],integrity:['E05','影音資料不完整'],merge:['E05','影音處理失敗'],save:['E06','檔案儲存失敗'],subtitle:['E07','字幕讀取失敗'],internal:['E99','處理失敗']};
  const [code,label]=groups[failure.category] || groups.internal;
  const labels={TEMP_STORAGE_FULL:'本機暫存空間不足',HTTP_AUTH:'來源拒絕存取',HTTP_NOT_FOUND:'來源已失效',HTTP_RATE_LIMIT:'來源暫時限制請求',NETWORK_TIMEOUT:'網路讀取逾時',SOURCE_CHANGED:'影片已變更',SUBTITLE_MISMATCH:'字幕與影片不符',SUBTITLE_SOURCE_UNAVAILABLE:'請先在播放器開啟所選字幕'};
- return {code,message:labels[failure.code] || label};
+ const processing={memory:'記憶體不足',storage:'暫存空間不足','missing-track':'缺少所需軌道','unsupported-format':'格式不支援','invalid-input':'輸入影音異常',timestamps:'時間戳異常','file-io':'檔案讀寫異常'}[failure.processingReason];
+ return {code,message:(labels[failure.code] || label)+(processing&&failure.code==='MERGE_FAILED'?` · ${processing}`:'')};
 }
-export function visibleFailure(record,now=Date.now()){return record&&Number.isFinite(record.time)&&now>=record.time&&now-record.time<ERROR_VISIBILITY_MS?briefFailure(record):null;}
+export function visibleFailure(record,now=Date.now()){return record&&Number.isFinite(record.time)&&now>=record.time&&now-record.time<ERROR_RETENTION_MS?briefFailure(record):null;}

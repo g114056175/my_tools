@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {downloadIdentity,createDownloadClaims} from '../extension/download-identity.js';
+
+test('a recycled feed player cannot reuse another permalink download',()=>{
+ const d={tabId:7,documentId:'feed',frameId:0,mediaKey:1,linkedMedia:{id:'first',url:'https://example.test/reel/first'}};
+ assert.notEqual(downloadIdentity(d),downloadIdentity({...d,linkedMedia:{id:'second',url:'https://example.test/reel/second'}}));
+ assert.equal(downloadIdentity(d),downloadIdentity({...d,linkedMedia:{...d.linkedMedia,url:d.linkedMedia.url+'?tracking=changed'}}));
+});
 import {downloadLocked} from '../extension/jobs.js';
 
 const base={tabId:4,documentId:'doc-a',frameId:0,localMediaIndex:1,mediaKey:9,platform:{site:'youtube',id:'yt-1'}};
@@ -33,6 +39,13 @@ test('Instagram and Twitch SPA routes separate posts but retain locks across tok
     assert.equal(downloadIdentity(descriptor),downloadIdentity({...descriptor,url:'https://cdn/new-token',mediaKey:99}));
     assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,platform:{site,id:'post-2'}}));
   }
+});
+
+test('Dailymotion identity includes the current video and frame document',()=>{
+  const descriptor={...base,platform:{site:'dailymotion',id:'dm-1'}};
+  assert.equal(downloadIdentity(descriptor),downloadIdentity({...descriptor,url:'https://cdn/new-token'}));
+  assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,platform:{site:'dailymotion',id:'dm-2'}}));
+  assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,documentId:'doc-b'}));
 });
 
 test('popup reopen/refresh keeps the current media locked while another media is available',()=>{

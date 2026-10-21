@@ -7,8 +7,12 @@ export function downloadIdentity(descriptor = {}) {
     ? ['youtube', platform.id]
     : ['instagram','twitch','embedded'].includes(site) && platform.id
       ? [site, String(platform.id)]
+    : site === 'dailymotion' && platform.id
+      ? ['dailymotion', String(platform.id), descriptor.tabId ?? '', descriptor.documentId ?? '', descriptor.frameId ?? '']
     : site === 'bilibili' && (platform.bvid || platform.cid)
       ? ['bilibili', platform.bvid || '', Number(platform.cid) || 0, Number(platform.page) || 1]
+    : descriptor.linkedMedia?.id
+      ? ['linked-media', String(descriptor.linkedMedia.id), descriptor.frameId ?? '']
       : [
           'media',
           descriptor.tabId ?? '', descriptor.documentId ?? '',

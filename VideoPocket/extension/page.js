@@ -53,7 +53,24 @@ export async function pageSnapshot(mediaIndex=0){
   const player=document.querySelector('#movie_player');
   const animePage=/(^|\.)ani\.gamer\.com\.tw$/.test(String(location.hostname).toLowerCase());
   const animeMain=v=>animePage&&v?.getAttribute?.('id')==='ani_video_html5_api';
-  const videos=roots.flatMap(root=>[...root.querySelectorAll('video')]).sort((a,b)=>Number(animeMain(b))-Number(animeMain(a)) || Number(!!player?.contains(b))-Number(!!player?.contains(a)));
+  const dailymotionPage=/(^|\.)dailymotion\.com$/.test(String(location.hostname).toLowerCase());
+  const dailymotionMain=v=>dailymotionPage&&v?.getAttribute?.('id')==='video';
+  const bilibiliPage=/(^|\.)bilibili\.com$/.test(String(location.hostname).toLowerCase());
+  const biliUrl=new URL(location.href),biliBvid=bilibiliPage?(biliUrl.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || biliUrl.searchParams.get('bvid') || ''):'';
+  const biliIdentity=biliBvid?`bilibili:${biliBvid}:${Math.max(1,Number(biliUrl.searchParams.get('p'))||1)}`:'';
+  const videos=roots.flatMap(root=>[...root.querySelectorAll('video')]);
+  const biliOwned=v=>{let node=v;for(let depth=0;node&&depth<16;depth++){try{if(node.closest?.('#bilibili-player,#bilibiliPlayer,.bpx-player-container,.bilibili-player-video,bwp-video'))return true;const host=node.getRootNode?.()?.host;if(!host||host===node)break;node=host;}catch{break;}}return false;};
+  const biliPlayers=new Set(biliIdentity?videos.filter(biliOwned):[]);
+  // A floating player may reuse the element or mirror its exact current source.
+  // Bind only owned Bilibili players, never every video on a watch page.
+  const biliSources=new Set([...biliPlayers].map(v=>v.currentSrc || v.src).filter(Boolean));
+  if(biliIdentity)for(const v of videos)if(biliSources.has(v.currentSrc || v.src))biliPlayers.add(v);
+  if(biliIdentity&&!biliPlayers.size&&videos.length===1)biliPlayers.add(videos[0]);
+  const biliRank=v=>{
+    if(!biliPlayers.has(v))return 0;
+    try{const r=v.getBoundingClientRect(),style=globalThis.getComputedStyle?.(v);return 1+4*Number(r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<(globalThis.innerHeight||100000)&&r.left<(globalThis.innerWidth||100000)&&style?.display!=='none'&&style?.visibility!=='hidden')+2*Number(v.paused===false)+Number(v.readyState>1);}catch{return 1;}
+  };
+  videos.sort((a,b)=>Number(animeMain(b))-Number(animeMain(a)) || Number(dailymotionMain(b))-Number(dailymotionMain(a)) || biliRank(b)-biliRank(a) || Number(!!player?.contains(b))-Number(!!player?.contains(a)));
   mediaIndex=Math.max(0,Math.min(Number(mediaIndex)||0,videos.length-1));const video=videos[mediaIndex];
   let response,activeTrack;
   try{response=player?.getPlayerResponse?.() || window.ytInitialPlayerResponse;activeTrack=player?.getOption?.('captions','track');}catch{}
@@ -72,10 +89,27 @@ export async function pageSnapshot(mediaIndex=0){
   const source=v=>v.currentSrc || v.src || v.querySelector('source')?.src || '';
   const http=raw=>{try{const u=new URL(raw,location.href);return /^https?:$/.test(u.protocol)&&raw?u.href:null;}catch{return null;}};
   const resources=performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/\.(mpd|m3u8)(?:\?|$)/i.test(u));
-  let platform,captionStatus;
+  let platform,captionStatus,dailymotionContext,bilibiliContext;
   const sourceObserver=window[Symbol.for('video-pocket.mediaObserver')],snapshotModels=new WeakMap();let embeddedModel;
   const observedModel=v=>{if(!v)return null;if(!snapshotModels.has(v)){let model=null;try{model=sourceObserver?.modelFor?.(v) || null;}catch{}snapshotModels.set(v,model);}return snapshotModels.get(v);};
-  try{sourceObserver?.scanDocument?.();embeddedModel=observedModel(video);if(embeddedModel)platform={...embeddedModel,site:'embedded'};}catch{}
+  try{
+    sourceObserver?.scanDocument?.();embeddedModel=observedModel(video);
+    if(embeddedModel){
+      platform={...embeddedModel,site:'embedded'};
+      // Prefer a source demonstrably read by this exact player over possibly
+      // stale embedded URLs. Never choose an ambient feed network request.
+      const active=(sourceObserver?.sourcesFor?.(video)?.candidates || []).filter(c=>c.downloadable!==false&&c.evidence?.some(e=>/^(?:mse-|blob-http-body|video\.(?:currentSrc|src)|source-element)/.test(e)));
+      if(active.length===1&&http(active[0].url)){
+        const current=active[0];
+        if(current.kind==='progressive')platform.versions=[{url:current.url,width:Number(video.videoWidth)||0,height:Number(video.videoHeight)||0},...(platform.versions || []).filter(v=>v.url!==current.url)];
+        else if(current.kind==='hls'||current.kind==='dash'){platform.manifestUrl=current.url;platform.manifestType=current.kind;delete platform.manifestXml;}
+      }
+    }
+  }catch{}
+  try{
+    dailymotionContext=sourceObserver?.pageContext?.() || undefined;
+    if(dailymotionMain(video)&&dailymotionContext?.id){platform={...dailymotionContext,site:'dailymotion'};title=dailymotionContext.title || title;}
+  }catch{}
   const currentUrl=new URL(location.href),igHost=/(^|\.)instagram\.com$/i.test(currentUrl.hostname),igCode=currentUrl.pathname.match(/^\/(?:reel|p|tv)\/([^/?#]+)/i)?.[1];
   if(!platform&&video&&videos.length===1&&igHost&&igCode){
     const embedded=instagramEmbedded(igCode),best=embedded?.versions?.[0];
@@ -153,20 +187,29 @@ export async function pageSnapshot(mediaIndex=0){
     for(const getter of [()=>instance?.currentSource?.()?.src,()=>instance?.currentSrc?.(),()=>instance?.currentSources?.()?.map(s=>s?.src).find(src=>http(src))]){const value=readHttp(getter);if(value)return value;}
     return null;
   };
-  const bilibiliPage=/(^|\.)bilibili\.com$/.test(String(location.hostname).toLowerCase());
   const identities=window[Symbol.for('video-pocket.identities')] ||= {keys:new WeakMap(),next:0};
   for(const [i,v] of videos.entries()){
     if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
+    if(dailymotionMain(v))candidate.dailymotionMain=true;
     try{const model=observedModel(v);if(model?.title?.trim())candidate.title=model.title.trim();}catch{}
+    if(dailymotionMain(v)&&dailymotionContext?.title)candidate.title=dailymotionContext.title;
     candidate.title=String(candidate.title || '').trim();
     if(!candidate.title){
       const raw=source(v);let filename='';try{const u=raw?new URL(raw,location.href):null;if(u&&/^https?:$/.test(u.protocol))filename=decodeURIComponent(u.pathname.split('/').pop() || '').replace(/\.[a-z0-9]{2,5}$/i,'').replace(/[_-]+/g,' ').trim();}catch{}
       candidate.title=filename || String(document.title || '').trim() || `影片 ${i+1}`;
     }
-    try{candidate.mediaIdentity=observedModel(v)?.id || window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
+    try{
+      const identity=window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity;
+      candidate.mediaIdentity=observedModel(v)?.id || identity?.key || '';
+      candidate.mediaContentId=identity?.id || observedModel(v)?.id || '';
+      // A feed may have already discarded its playback JSON. Only the exact
+      // one-player permalink is eligible for a bounded document lookup.
+      if(identity?.id&&identity.anchor){const link=new URL(identity.anchor);if(link.protocol==='https:'&&link.origin===location.origin)candidate.linkedMedia={url:link.href,id:identity.id};}
+    }catch{}
     if(twitchId&&twitchPlayers.includes(v))candidate.mediaIdentity='twitch-vod:'+twitchId;
-    if(player?.contains(v)&&response?.videoDetails?.videoId || /(^|\.)bilibili\.com$/.test(location.hostname)&&videos.length===1)candidate.downloadUrl=location.href;
+    if(biliPlayers.has(v))Object.assign(candidate,{bilibiliMain:true,bilibiliRank:biliRank(v),mediaIdentity:biliIdentity,mediaContentId:biliIdentity,title,downloadUrl:location.href});
+    if(player?.contains(v)&&response?.videoDetails?.videoId)candidate.downloadUrl=location.href;
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{
         if(!playerOwnership(instance,v))continue;
@@ -204,7 +247,7 @@ export async function pageSnapshot(mediaIndex=0){
     if(apiRequest&&apiRequest.length<=16384)platform={site:'anime1',apiRequest,title};
   }
   if(video&&response?.videoDetails?.videoId){platform={site:'youtube',id:response.videoDetails.videoId,title:response.videoDetails.title,duration:Number(response.videoDetails.lengthSeconds),streamingData:response.streamingData,playerConfig:response.playerConfig,resources:performance.getEntriesByType('resource').filter(r=>/\.googlevideo\.com\/videoplayback/.test(r.name)).map(r=>r.name),visitorData:window.ytcfg?.get?.('VISITOR_DATA'),playerUrl:window.ytcfg?.get?.('PLAYER_JS_URL')};}
-  if(video&&bilibiliPage&&videos.length===1){
+  if(biliIdentity){
     const pageUrl=new URL(location.href),routeBvid=pageUrl.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || pageUrl.searchParams.get('bvid') || '';
     let state=window.__INITIAL_STATE__ || {},pageNumber=Math.max(1,Number(pageUrl.searchParams.get('p')) || 1),identity=resolveIdentity(location.href,state,pageNumber),freshDetail;
     // A stale/missing SPA state must not disable the current video. Resolve it
@@ -214,27 +257,71 @@ export async function pageSnapshot(mediaIndex=0){
       if(urlBvid){const api=new URL('https://api.bilibili.com/x/web-interface/view');api.search=new URLSearchParams({bvid:urlBvid});const r=await fetch(api,{credentials:'include',signal:AbortSignal.timeout(10000)}),value=await r.json();if(value.code===0&&String(value.data?.bvid||'')===urlBvid){freshDetail=value.data;state={videoData:freshDetail};identity=resolveIdentity(location.href,state,pageNumber);}}
     }catch{}}
     const candidateDetail=freshDetail || state.videoData || {},detail=String(candidateDetail.bvid||'')===routeBvid?candidateDetail:{},part=detail.pages?.[pageNumber-1],bvid=routeBvid || undefined,cid=identity.valid?identity.cid:0;
-    let data;
-    // Never reuse __playinfo__: it can belong to the previous SPA route.
-    if(identity.valid)try{const api=new URL('https://api.bilibili.com/x/player/playurl');api.search=new URLSearchParams({bvid,cid,qn:'80',fnval:'4048',fnver:'0',fourk:'1'});const r=await fetch(api,{credentials:'include',signal:AbortSignal.timeout(10000)});const value=await r.json();if(value.code===0&&String(value.data?.bvid||bvid)===bvid&&(!value.data?.cid||Number(value.data.cid)===cid))data=value.data;}catch{}
+    let data,sourceFailure;
+    // Never reuse __playinfo__: it can belong to the previous SPA route. A
+    // transient playurl response is retried once, but route identity is
+    // checked before and after every request so an SPA navigation cannot leak
+    // the previous part's source into this snapshot.
+    const playurlFailure=(code,message,extra={})=>({code,message,sourceStage:'bilibili-playurl',...extra});
+    const classifyPlayurl=(error,status,apiCode)=>{
+      if(error?.code==='SOURCE_CHANGED')return playurlFailure('SOURCE_CHANGED','Bilibili 路由已變更');
+      if(status===401||status===403||status===412||apiCode===-101||apiCode===-412||apiCode===-403)return playurlFailure('HTTP_AUTH','Bilibili 播放來源拒絕請求',{httpStatus:status,apiCode});
+      if(status===404)return playurlFailure('HTTP_NOT_FOUND','Bilibili 播放來源不存在',{httpStatus:status,apiCode});
+      if(status===429||apiCode===-429)return playurlFailure('HTTP_RATE_LIMIT','Bilibili 請求過於頻繁',{httpStatus:status,apiCode});
+      if(status>=500)return playurlFailure('HTTP_SERVER','Bilibili 播放服務暫時無回應',{httpStatus:status,apiCode});
+      if(error?.name==='TimeoutError')return playurlFailure('NETWORK_TIMEOUT','Bilibili 播放來源讀取逾時',{httpStatus:status,apiCode});
+      if(error&&apiCode===undefined)return playurlFailure('NETWORK_FAILURE','Bilibili 播放來源讀取失敗',{httpStatus:status,apiCode});
+      return playurlFailure('SOURCE_UNAVAILABLE','Bilibili 未提供有效播放來源',{httpStatus:status,apiCode});
+    };
+    const routeNow=()=>{try{const u=new URL(location.href),rb=u.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || u.searchParams.get('bvid') || '',rp=Math.max(1,Number(u.searchParams.get('p'))||1),ri=resolveIdentity(location.href,window.__INITIAL_STATE__ || {},rp);return {bvid:rb,page:rp,cid:ri.valid?ri.cid:0};}catch{return {bvid:'',page:0,cid:0};}};
+    const routeMatches=expected=>{const current=routeNow();return current.bvid===expected.bvid&&current.page===expected.page&&(!current.cid||current.cid===expected.cid);};
+    if(identity.valid){
+      const expected={bvid,page:pageNumber,cid};
+      for(let attempt=0;attempt<2&&!data&&!sourceFailure;attempt++){
+        if(!routeMatches(expected)){sourceFailure=playurlFailure('SOURCE_CHANGED','Bilibili 路由已變更');break;}
+        try{
+          const api=new URL('https://api.bilibili.com/x/player/playurl');api.search=new URLSearchParams({bvid,cid,qn:'80',fnval:'4048',fnver:'0',fourk:'1'});
+          const r=await fetch(api,{credentials:'include',cache:'no-store',signal:AbortSignal.timeout(5000)});
+          if(!r.ok){const failure=classifyPlayurl(null,r.status);if(attempt===0&&r.status>=500){await new Promise(resolve=>setTimeout(resolve,250));continue;}sourceFailure=failure;break;}
+          const value=await r.json(),apiCode=Number(value?.code)||0;
+          if(apiCode!==0){const failure=classifyPlayurl(new Error('api'),0,apiCode);sourceFailure=failure;break;}
+          if(String(value.data?.bvid||bvid)!==bvid||Number(value.data?.cid||cid)!==cid){sourceFailure=playurlFailure('SOURCE_CHANGED','Bilibili 播放來源身份不一致',{apiCode});break;}
+          if(!routeMatches(expected)){sourceFailure=playurlFailure('SOURCE_CHANGED','Bilibili 路由已變更');break;}
+          if(!value.data || (!value.data.dash?.video?.length&&!value.data.durl?.length)){if(attempt===0){await new Promise(resolve=>setTimeout(resolve,250));continue;}sourceFailure=playurlFailure('SOURCE_UNAVAILABLE','Bilibili 未回傳可下載格式',{apiCode});break;}
+          data=value.data;
+        }catch(error){const failure=classifyPlayurl(error);if(attempt===0&&(failure.code==='NETWORK_FAILURE'||failure.code==='NETWORK_TIMEOUT')){await new Promise(resolve=>setTimeout(resolve,250));continue;}sourceFailure=failure;}
+      }
+    }
     const cleanTitle=value=>String(value || '').trim(),validTitle=value=>value&&!/^\d{11,}$/.test(value),heading=document.querySelector('h1.video-title,.video-info-title h1,h1[title]'),metaTitle=cleanTitle(document.querySelector('meta[property="og:title"]')?.content);
     title=[cleanTitle(detail.title),cleanTitle(heading?.getAttribute('title')),cleanTitle(heading?.textContent),metaTitle,cleanTitle(title).replace(/[_\s-]*(?:哔哩哔哩|嗶哩嗶哩)(?:[_\s-]*bilibili)?$/i,'')].find(validTitle) || 'Bilibili 影片';
-    candidates[mediaIndex].title=title;
+    for(const candidate of candidates)if(candidate.bilibiliMain)candidate.title=title;
     const parts=(detail.pages || []).map((entry,i)=>({page:i+1,cid:Number(entry.cid)||0,title:cleanTitle(entry.part)||`P${i+1}`,duration:Number(entry.duration)||0}));
     if(!parts.length&&Number(detail.cid)>0)parts.push({page:1,cid:Number(detail.cid),title:cleanTitle(detail.title)||'P1',duration:Number(detail.duration)||0});
-    platform=bvid?{site:'bilibili',bvid,aid:Number(detail.aid)||0,cid,page:pageNumber,pages:parts,title,partTitle:validTitle(cleanTitle(part?.part))?cleanTitle(part.part):'',duration:(Number(data?.timelength)||0)/1000,data}:undefined;
+    const routePlatform=bvid?{site:'bilibili',bvid,aid:Number(detail.aid)||0,cid,page:pageNumber,pages:parts,title,partTitle:validTitle(cleanTitle(part?.part))?cleanTitle(part.part):'',duration:(Number(data?.timelength)||0)/1000 || Number(part?.duration)||0,data,...(sourceFailure?{sourceFailure}:{})}:undefined;
+    // The watch URL is an independent, verified download target. Keep it even
+    // while closed-shadow/floating players temporarily hide their DOM owner.
+    // Do not assign it to an unrelated selected video or advertisement.
+    if(biliPlayers.has(video))platform=routePlatform;
+    if(identity.valid)bilibiliContext=routePlatform;
     captionStatus='unavailable';
     // Subtitle discovery is performed by the background using the player's
     // binary metadata endpoint, never the unsigned legacy JSON caption list.
     const currentUrl=new URL(location.href),currentBvid=currentUrl.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || currentUrl.searchParams.get('bvid') || '',currentPage=Math.max(1,Number(currentUrl.searchParams.get('p'))||1);
     if(currentBvid!==String(bvid||'') || currentPage!==pageNumber){
-      tracks.length=0;registry.tracks.set(video,[]);platform=undefined;captionStatus='unavailable';
+      tracks.length=0;registry.tracks.set(video,[]);platform=undefined;bilibiliContext=undefined;captionStatus='unavailable';
     }else if(identity.valid){
-      registry.bilibiliIdentity={bvid,cid,page:pageNumber,videoData:detail,duration:Number(data?.timelength||0)/1000 || Number(part?.duration) || (detail.pages?.length===1?Number(detail.duration):0) || (Number.isFinite(video.duration)?video.duration:0)};
+      registry.bilibiliIdentity={bvid,cid,page:pageNumber,videoData:detail,duration:Number(data?.timelength||0)/1000 || Number(part?.duration) || (detail.pages?.length===1?Number(detail.duration):0) || (Number.isFinite(video?.duration)?video.duration:0)};
     }
   }
   if(!videos.length&&platform?.site==='twitch')candidates.push({title,url:location.href,downloadUrl:location.href,referer:location.href,mediaKey:'twitch-vod:'+platform.id,mediaIdentity:platform.id});
-  return {url:location.href,title,tracks,platform,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
+  if(dailymotionMain(video))try{
+    // Prefer requests demonstrably used by this main player. Ambient resource
+    // entries, ad players and unassociated metadata are not playback proof.
+    const owned=(sourceObserver?.sourcesFor?.(video)?.candidates || []).filter(item=>item.downloadable!==false&&['hls','dash','progressive'].includes(item.kind)&&item.evidence?.some(e=>/^(?:mse-|blob-http-body|video\.(?:currentSrc|src)|source-element)/.test(e))&&http(item.url));
+    if(owned.length===1){const observed={url:http(owned[0].url),type:owned[0].kind};candidates[mediaIndex].observedSource=observed;if(platform?.site==='dailymotion')platform.observedSource=observed;}
+  }catch{}
+  let discoveryDiagnostics;try{if(video&&!embeddedModel)discoveryDiagnostics=sourceObserver?.diagnosticsFor?.(video);}catch{}
+  return {url:location.href,title,tracks,platform,dailymotionContext,bilibiliContext,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,discoveryDiagnostics,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
 }
 export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,automatic=false,selector={}){
   try{

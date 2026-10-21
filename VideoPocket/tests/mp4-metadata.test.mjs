@@ -14,6 +14,8 @@ const concat = (...parts) => { const out = new Uint8Array(parts.reduce((sum, par
 const sample = (type, size = 86) => { const out = new Uint8Array(size); out.set(u32(size), 0); out.set(ascii(type), 4); if (type === 'avc1') { out[34] = 2; out[35] = 208; } return out; };
 const stsd = (...entries) => box('stsd', concat(new Uint8Array(4), u32(entries.length), ...entries));
 const track = entry => box('trak', box('mdia', box('minf', box('stbl', stsd(entry)))));
+const hdlr = kind => box('hdlr', concat(new Uint8Array(8), ascii(kind), new Uint8Array(12)));
+const typedTrack = (kind, entry) => box('trak', box('mdia', concat(hdlr(kind), box('minf', box('stbl', stsd(entry))))));
 const fixture = (...entries) => concat(box('ftyp', ascii('isom')), box('moov', concat(...entries.map(track))));
 const reader = bytes => async (offset, length) => bytes.slice(offset, offset + length);
 
@@ -47,6 +49,35 @@ test('marks encrypted sample entries and rejects malformed extended sizes safely
   assert.equal(result.drm, true);
   const malformed = concat(Uint8Array.from([0, 0, 0, 1]), ascii('moov'), new Uint8Array(8).fill(255));
   assert.deepEqual(await readMp4Metadata(reader(malformed), malformed, malformed.length), { videoCodec: '', audioCodec: '', drm: false });
+});
+
+test('marks a complete video-only MP4 as audioAbsent', async () => {
+  const bytes = concat(box('ftyp', ascii('isom')), box('moov', typedTrack('vide', sample('avc1'))));
+  const result = await readMp4Metadata(reader(bytes), bytes, bytes.length);
+  assert.equal(result.videoCodec, 'h264');
+  assert.equal(result.audioCodec, '');
+  assert.equal(result.audioAbsent, true);
+});
+
+test('does not mark an audio track absent when its sample entry is unknown', async () => {
+  const bytes = concat(box('ftyp', ascii('isom')), box('moov', concat(typedTrack('vide', sample('avc1')), typedTrack('soun', sample('zzzz')))));
+  const result = await readMp4Metadata(reader(bytes), bytes, bytes.length);
+  assert.equal(result.videoCodec, 'h264');
+  assert.equal(result.audioCodec, '');
+  assert.equal(result.audioAbsent, undefined);
+});
+
+test('does not mark a truncated moov as audioAbsent', async () => {
+  const complete = concat(box('ftyp', ascii('isom')), box('moov', typedTrack('vide', sample('avc1'))));
+  const truncated = complete.slice(0, complete.length - 3);
+  const result = await readMp4Metadata(reader(truncated), truncated, truncated.length);
+  assert.equal(result.audioAbsent, undefined);
+});
+
+test('does not certify silent video from an incomplete declared sample-entry count',async()=>{
+ const bytes=concat(box('ftyp',ascii('isom')),box('moov',typedTrack('vide',sample('avc1'))));
+ const at=Buffer.from(bytes).indexOf(Buffer.from('stsd'));bytes.set([0,0,0,2],at+8);
+ const result=await readMp4Metadata(reader(bytes),bytes,bytes.length);assert.equal(result.audioAbsent,undefined);
 });
 
 test('reads AAC from the complete Anime1 MP4 with bounded range reads', { skip: !process.env.MEDIA_LIVE_FILES }, async () => {

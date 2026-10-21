@@ -26,3 +26,14 @@ test('separate HLS audio follows the selected video rendition group',()=>{
  const source={requiresAudio:true,duration:10,formats:[{id:'v',url:'v',kind:'video',ext:'mp4',videoCodec:'h264',height:360,audioGroup:'correct'},{id:'wrong',url:'wrong',kind:'audio',ext:'mp4',audioCodec:'aac',audioGroup:'other',bitrate:900000},{id:'right',url:'right',kind:'audio',ext:'mp4',audioCodec:'aac',audioGroup:'correct',bitrate:128000}]};
  const c=mediaChoices(source),p=selectedPlan(c,{kind:'video',height:360});assert.equal(p.audio.id,'right');assert.equal(p.direct,false);
 });
+
+test('complete silent video can satisfy a source that requires audio',()=>{
+ const c=mediaChoices({requiresAudio:true,formats:[{id:'silent',url:'silent',kind:'video',ext:'mp4',videoCodec:'h264',height:360,audioAbsent:true}]});
+ assert.equal(c.choices.video.auto.enabled,true);
+ assert.equal(selectedPlan(c,{kind:'video',height:360}).audio,undefined);
+});
+
+test('a split video without audioAbsent remains unavailable when audio is required',()=>{
+ const c=mediaChoices({requiresAudio:true,formats:[{id:'video',url:'video',kind:'video',ext:'mp4',videoCodec:'h264',height:360}]});
+ assert.equal(c.choices.video.auto.enabled,false);
+});

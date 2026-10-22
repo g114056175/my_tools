@@ -1,4 +1,4 @@
-importScripts('destinations.js', 'disk-media.js', 'opfs-filesystem.js', 'ffmpeg-diagnostics.js', 'vendor/ffmpeg-core.js');
+importScripts('destinations.js', 'disk-media.js', 'file-save.js', 'opfs-filesystem.js', 'ffmpeg-diagnostics.js', 'vendor/ffmpeg-core.js');
 let core,cancelled=false;
 const disk=self.VideoPocketDiskMedia;
 async function initCore(){
@@ -25,8 +25,10 @@ onmessage=async({data})=>{
   const args=(data.args || []).map(arg=>String(arg).startsWith('input:')?'/inputs/'+String(arg).slice(6):arg===data.output?'/output/'+data.output:arg);
   core.setProgress(({progress})=>postMessage({type:'progress',progress}));const code=core.exec(...args);if(code!==0)throw Object.assign(new Error('來源影音無法合併或抽取音訊'),{code:failureCode || 'MERGE_FAILED',...diagnostics.failure(code)});
   for(const mount of mounts.splice(0).reverse())core.FS.unmount(mount);
-  let saved=false;if(data.destinationId){const destination=await VideoPocketDestinations.get(data.destinationId);if(!destination)throw Object.assign(new Error('儲存位置已失效'),{code:'SAVE_FAILED'});postMessage({type:'saving'});const writer=await destination.createWritable(),chunk=new Uint8Array(4*1024*1024),size=output.access.getSize();try{for(let at=0;at<size;){if(cancelled)throw new DOMException('已取消','AbortError');const read=output.access.read(chunk.subarray(0,Math.min(chunk.length,size-at)),{at});if(!read)throw new Error('輸出檔案不完整');await writer.write(chunk.subarray(0,read));at+=read;postMessage({type:'saveProgress',progress:at/size*100});}if(cancelled)throw new DOMException('已取消','AbortError');await writer.close();saved=true;}catch(error){await writer.abort().catch(()=>{});throw Object.assign(error,{code:error.name==='AbortError'?'CANCELLED':error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':'SAVE_FAILED'});}}
-  const result=output.finish();finished=true;postMessage({type:'done',...result,saved});
- }catch(error){postMessage({type:'error',error:error.message || String(error),errorCode:error.code || (error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':failureCode),...(error.processingReason?{processingReason:error.processingReason,ffmpegExitCode:error.ffmpegExitCode}:{})});}
+  const result=output.finish();finished=true;
+  if(data.destinationId)postMessage({type:'readyToSave',...result});
+  const saved=data.destinationId?await VideoPocketFileSave({path:result.path,destinationId:data.destinationId,cancelled:()=>cancelled,onStart:()=>postMessage({type:'saving'}),onProgress:progress=>postMessage({type:'saveProgress',progress})}):{saved:false};
+  postMessage({type:'done',...result,...saved});
+ }catch(error){postMessage({type:'error',error:error.message || String(error),errorCode:error.code || (error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':failureCode),saveStage:error.saveStage,saveReason:error.saveReason,...(error.processingReason?{processingReason:error.processingReason,ffmpegExitCode:error.ffmpegExitCode}:{})});}
  finally{for(const mount of mounts.reverse())try{core.FS.unmount(mount);}catch{}if(output&&!finished)output.abort();core?.reset();}
 };

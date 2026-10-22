@@ -14,11 +14,12 @@ import {fileStem,createFilenameRecorder} from './filenames.js';
 import {downloadKey,createDownloadClaims,stableHash} from './download-identity.js';
 import {mediaRequestHeaders} from './media-request-headers.js';
 import {createNetworkMediaObserver} from './network-observer.js';
-import {attachNetworkSources} from './network-source.js';
+import {attachNetworkSources,networkFallbackReason,scopeDocumentCandidates,validateOwnedSourcePlan} from './network-source.js';
 import {attachSocialSources} from './social-source.js';
 import {socialPageFetch} from './social-page-fetch.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute} from './media-selection-controller.js';
 import {createPopupMarkerController} from './popup-marker.js';
+import {validateDocumentMediaPlan} from './document-media.js';
 import './destinations.js';
 const mediaPicker=createMediaSelectionController(chrome);
 const popupMarkers=createPopupMarkerController(chrome);
@@ -33,7 +34,7 @@ function trimSourceMeta(){
 }
 const rememberFilename=createFilenameRecorder(chrome.storage.local);
 function failureTask(fn){const task=failureWrites.catch(()=>{}).then(fn);failureWrites=task.catch(()=>{});return task;}
-function recordFailure(error,context={}){const failure=classifyFailure(error,context.stage);if(failure.code==='CANCELLED')return failure;const record={id:crypto.randomUUID(),time:Date.now(),code:failure.code,...(failure.processingReason?{processingReason:failure.processingReason}:{}),...(failure.ffmpegExitCode!==undefined?{ffmpegExitCode:failure.ffmpegExitCode}:{}),...(failure.httpStatus?{httpStatus:failure.httpStatus}:{}),...(failure.apiCode!==undefined?{apiCode:failure.apiCode}:{}),...(failure.subtitleStage?{subtitleStage:failure.subtitleStage}:{}),...(failure.sourceStage?{sourceStage:failure.sourceStage}:{}),...(failure.requestMethod?{requestMethod:failure.requestMethod}:{}),...(failure.requestHost?{requestHost:failure.requestHost}:{}),...(['download','merge','save','inspect','subtitle'].includes(context.stage)?{stage:context.stage}:{})};void failureTask(()=>chrome.storage.session.set({lastError:record}));setTimeout(()=>void failureTask(async()=>{const {lastError}=await chrome.storage.session.get('lastError');if(lastError?.id===record.id)await chrome.storage.session.remove('lastError');}),ERROR_RETENTION_MS);return failure;}
+function recordFailure(error,context={}){const failure=classifyFailure(error,context.stage);if(failure.code==='CANCELLED')return failure;const record={id:crypto.randomUUID(),time:Date.now(),code:failure.code,...(failure.saveStage?{saveStage:failure.saveStage}:{}),...(failure.saveReason?{saveReason:failure.saveReason}:{}),...(failure.processingReason?{processingReason:failure.processingReason}:{}),...(failure.ffmpegExitCode!==undefined?{ffmpegExitCode:failure.ffmpegExitCode}:{}),...(failure.httpStatus?{httpStatus:failure.httpStatus}:{}),...(failure.apiCode!==undefined?{apiCode:failure.apiCode}:{}),...(failure.subtitleStage?{subtitleStage:failure.subtitleStage}:{}),...(failure.sourceStage?{sourceStage:failure.sourceStage}:{}),...(failure.requestMethod?{requestMethod:failure.requestMethod}:{}),...(failure.requestHost?{requestHost:failure.requestHost}:{}),...(['download','merge','save','inspect','subtitle'].includes(context.stage)?{stage:context.stage}:{})};void failureTask(()=>chrome.storage.session.set({lastError:record}));setTimeout(()=>void failureTask(async()=>{const {lastError}=await chrome.storage.session.get('lastError');if(lastError?.id===record.id)await chrome.storage.session.remove('lastError');}),ERROR_RETENTION_MS);return failure;}
 // Keep one bounded, allowlisted failure; never store raw messages or URLs.
 void chrome.storage.local.remove('diagnostics');
 // Keep the queue alive while a direct-file Save As dialog is still open.
@@ -72,9 +73,22 @@ async function waitDownload(downloadId,job){
  const [existing]=await chrome.downloads.search({id:downloadId});if(existing?.state==='complete')return;
  return new Promise((resolve,reject)=>{const active={job,resolve,reject,downloadId,retries:0};downloads.set(downloadId,active);if(existing?.state==='interrupted')void interruptedDownload(active,existing);});
 }
+async function startBrowserDownload(result){
+ const save=filename=>chrome.downloads.download({url:result.url,filename,saveAs:true,conflictAction:'uniquify'});
+ try{return await save(result.filename);}catch(error){
+  const failure=classifyFailure(error,'save');
+  if(failure.code==='SAVE_FAILED'&&failure.saveReason==='invalid-filename'){
+   // The API rejected the name before starting a download. Reuse the finished
+   // blob once with a conservative name; never download or process media again.
+   const ext=String(result.filename || '').match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase();
+   try{return await save('VideoPocket'+(ext?'.'+ext:''));}catch(retry){error=retry;}
+  }
+  throw Object.assign(new Error('檔案儲存失敗'),classifyFailure(error,'save'),{saveStage:'browser-start'});
+ }
+}
 async function interruptedDownload(active,item){
  if(active.job.cancelled){downloads.delete(active.downloadId);active.reject(new Error('已取消'));return;}if(active.handling||active.job.paused)return;active.handling=true;
- try{if(active.job.cancelled||!item?.canResume||!/NETWORK_|SERVER_FAILED|SERVER_UNREACHABLE/.test(item.error || '')){downloads.delete(active.downloadId);active.reject(new Error(item?.error || '下載中斷'));return;}
+ try{if(active.job.cancelled||!item?.canResume||!/NETWORK_|SERVER_FAILED|SERVER_UNREACHABLE/.test(item.error || '')){downloads.delete(active.downloadId);active.reject(Object.assign(new Error(item?.error || '下載中斷'),{saveStage:'browser-write'}));return;}
   if(active.retries++<3){await updateJob(active.job.id,{state:'retrying'});await new Promise(resolve=>setTimeout(resolve,Math.min(5000,500*2**(active.retries-1))));if(!active.job.cancelled&&!active.job.paused)await chrome.downloads.resume(active.downloadId);}
   else{active.job.paused=true;active.job.pauseState='interrupted';await updateJob(active.job.id,{state:'interrupted'});}
  }catch{active.job.paused=true;active.job.pauseState='interrupted';await updateJob(active.job.id,{state:'interrupted'});}finally{active.handling=false;}
@@ -92,7 +106,7 @@ async function pump(){
   try{
    job.startedAt=Date.now();job.stage='download';await updateJob(job.id,{state:'running',progress:null});result=await engine('download',{...job.data,id:job.id,filename:job.filename});if(job.cancelled)throw new Error('已取消');
    if(result.saved){await finishJob(job,'done','下載完成');continue;}if(result.referer)await assetHeaders(result.url,result.referer);
-   job.stage='save';await updateJob(job.id,{state:'choosing',progress:null});const downloadId=await chrome.downloads.download({url:result.url,filename:result.filename,saveAs:true,conflictAction:'uniquify'});job.downloadId=downloadId;
+   job.stage='save';await updateJob(job.id,{state:'choosing',progress:null});const downloadId=await startBrowserDownload(result);job.downloadId=downloadId;
    if(job.cancelled){await chrome.downloads.cancel(downloadId);throw new Error('已取消');}
    await updateJob(job.id,{state:'running',progress:null});await waitDownload(downloadId,job);await finishJob(job,'done','下載完成');
   }catch(e){const failure=classifyFailure(job.cancelled?{code:'CANCELLED'}:e,job.stage);if(failure.code!=='CANCELLED')recordFailure(e,{stage:job.stage,platform:job.meta?.platform,action:job.data.kind,height:job.data.height,elapsedMs:Date.now()-job.startedAt,storageMode:result?.blobId?'disk':undefined});await updateJob(job.id,{errorCode:failure.code});await finishJob(job,failure.code==='CANCELLED'?'cancelled':'error',failure.message);}
@@ -100,6 +114,16 @@ async function pump(){
  }
 }
 async function script(tabId,func,args=[],documentId,world='MAIN'){const results=await chrome.scripting.executeScript({target:{tabId,...(documentId?{documentIds:[documentId]}:{})},world,func,args});const result=results[0]?.result;if(!result)throw new Error('無法讀取目前影片，請更新影片資訊');if(result.error)throw Object.assign(new Error(result.error),{code:result.errorCode,status:result.errorStatus,apiCode:result.errorApiCode,subtitleStage:result.subtitleStage,retryable:result.retryable});return result;}
+async function verifyMetadataPlan(descriptor){
+ const p=descriptor.platform,owned=p?.site==='network-media'&&p.binding==='player-owned';
+ if(p?.site!=='metadata-media'&&!owned)return;
+ let valid=false;
+ if(Number.isInteger(descriptor.tabId)&&descriptor.documentId&&descriptor.mediaKey!=null)try{
+  const result=await script(descriptor.tabId,owned?validateOwnedSourcePlan:validateDocumentMediaPlan,[owned?{mediaKey:descriptor.mediaKey,source:p.bindingSource,duration:p.expectedDuration,versions:p.versions}:{token:p.validationToken,mediaKey:descriptor.mediaKey}],descriptor.documentId);
+  valid=result.valid===true;
+ }catch{}
+ if(!valid)throw Object.assign(new Error('目前選取的影片已變更，請重新整理'),{code:'SOURCE_CHANGED'});
+}
 const bilibiliClient=createBilibiliClient({headers:url=>assetHeaders(url,'https://www.bilibili.com/')});
 const biliDiscoveries=new Map();
 function discoverBilibili(tabId,context,documentId){
@@ -151,17 +175,24 @@ const captureRecoveryReady=chrome.storage.session.get(null).then(async all=>{
 async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
   if(!preferPicked)await mediaPicker.clear(tabId);
   await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',files:['media-observer.js']}).catch(()=>{});
-  const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0]});
+  const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0,'summary']});
   frames.sort((a,b)=>a.frameId-b.frameId);
   const top=frames.find(f=>f.frameId===0)?.result;if(!top)throw new Error('無法讀取目前網頁');
   const collectVideos=()=>{const items=recoverBilibiliRoute(collapseBilibiliPlayers(frames.flatMap(f=>(f.result?.videos || []).map((v,i)=>({...v,frameId:f.frameId,documentId:f.documentId,localMediaIndex:i})))),top,frames.find(f=>f.frameId===0));const mains=items.filter(v=>v.dailymotionMain);if(mains.length===1&&top.dailymotionContext?.id)mains[0].mediaContentId=top.dailymotionContext.id;return items;};
-  let videos=collectVideos();
+  let videos=collectVideos(),expectedDeepIdentity='';
   if(expectedTarget){
    const target=expectedTarget,contentId=String(target.mediaContentId||target.linkedMedia?.id||target.mediaIdentity||'');
    const scoped=videos.filter(video=>Number(video.frameId)===Number(target.frameId)&&String(video.documentId||'')===String(target.documentId||''));
    const contentMatches=contentId?scoped.filter(video=>String(video.mediaContentId||video.linkedMedia?.id||video.mediaIdentity||'')===contentId):[];
    const keyMatches=scoped.filter(video=>String(video.mediaKey??'')===String(target.mediaKey??''));
-   const matches=contentId?(contentMatches.length===1?contentMatches:[]):keyMatches;
+   let matches=contentId?(contentMatches.length===1?contentMatches:[]):keyMatches;
+   // Summary reads intentionally omit model lookup. A previously selected
+   // model ID can be recovered by deep discovery on the same element, but
+   // must be checked again before returning any refreshed source.
+   if(contentId&&!contentMatches.length&&keyMatches.length===1&&target.mediaKey!=null){
+    const candidate=keyMatches[0],identity=String(candidate.mediaContentId||candidate.linkedMedia?.id||candidate.mediaIdentity||'');
+    if(!identity&&(!target.url||!candidate.url||target.url===candidate.url)){matches=keyMatches;expectedDeepIdentity=contentId;}
+   }
    if(matches.length!==1)throw Object.assign(new Error('目前選取的影片已變更，請重新選取'),{code:'SOURCE_CHANGED'});
    index=videos.indexOf(matches[0]);
   }
@@ -170,9 +201,10 @@ async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
   if(!preferPicked&&remembered)await chrome.storage.session.remove(key);
   index=Math.max(0,Math.min(Number(index)||0,videos.length-1));let selected=videos[index];
   let page=selected?frames.find(f=>f.frameId===selected.frameId)?.result:top;
-  if(selected?.localMediaIndex){
+  const selectedFrame=selected&&frames.find(f=>f.frameId===selected.frameId&&String(f.documentId||'')===String(selected.documentId||''));
+  if(selected?.localMediaIndex != null && (selectedFrame?.result?.discoveryMode==='summary' || selected.localMediaIndex!==0)){
    const previous=selected,frame=frames.find(f=>f.frameId===selected.frameId&&String(f.documentId||'')===String(selected.documentId||''));
-   page=await script(tabId,pageSnapshot,[selected.localMediaIndex],selected.documentId);
+   page=await script(tabId,pageSnapshot,[selected.localMediaIndex,'deep',{maxItems:24,maxMs:1800}],selected.documentId);
    // A player can replace/reorder its <video> between the all-frame scan and
    // this selected-frame read. Keep the page metadata, media list, and marker
    // key from one DOM generation; never combine the second scan's player data
@@ -182,7 +214,9 @@ async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
       if(!current||current.frameId!==previous.frameId||String(current.documentId||'')!==String(previous.documentId||'')||String(current.mediaKey??'')!==String(previous.mediaKey??''))return false;
       const oldIdentity=String(previous.mediaContentId||previous.linkedMedia?.id||previous.mediaIdentity||''),newIdentity=String(current.mediaContentId||current.linkedMedia?.id||current.mediaIdentity||''),oldUrl=String(previous.url||''),newUrl=String(current.url||'');
       if(oldIdentity&&newIdentity)return oldIdentity===newIdentity;
-      if(oldIdentity!==newIdentity)return false;
+      // Deep discovery can strengthen an anonymous element with a media ID.
+      // Its stable element key and source must still agree with the inventory.
+      if(oldIdentity&&!newIdentity)return false;
       return !oldUrl||!newUrl||oldUrl===newUrl;
     };
     const exactIndex=videos.findIndex(sameContent);
@@ -209,11 +243,16 @@ async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
     page={...page,platform:{...context,site:'dailymotion',...(selected.observedSource?{observedSource:selected.observedSource}:{})},title:context.title || page.title};
     selected=videos[index]={...selected,title:context.title || selected.title,mediaIdentity:'dailymotion:'+context.id};
   }
-  const result={...page,tabId,url:top.url,videos,mediaIndex:index,selectionExpired,frameId:selected?.frameId,documentId:selected?.documentId,localMediaIndex:selected?.localMediaIndex,preferredLanguages:top.preferredLanguages,language:top.language};
-  const records=networkMedia.candidates({tabId,pageUrl:top.url}),attached=attachNetworkSources(attachSocialSources(result,records),records);
+  const result=scopeDocumentCandidates({...page,tabId,url:top.url,videos,mediaIndex:index,selectionExpired,frameId:selected?.frameId,documentId:selected?.documentId,localMediaIndex:selected?.localMediaIndex,preferredLanguages:top.preferredLanguages,language:top.language});
+  const records=networkMedia.candidates({tabId,pageUrl:top.url}),fallbackReason=networkFallbackReason(result,records),attached=attachNetworkSources(attachSocialSources(result,records),records);
   if(attached.media){
     const local=records.filter(record=>(!selected?.documentId||record.documentId===selected.documentId)&&(selected?.frameId==null||record.frameId===selected.frameId));
-    attached.media={...attached.media,discoveryDiagnostics:{...attached.media.discoveryDiagnostics,playerCount:videos.length,localNetworkCandidates:local.length,unboundFallbackBlocked:!attached.platform&&!selected?.downloadUrl&&videos.length>1&&Number(attached.media.duration)>0&&local.length>0}};
+    const reason=attached.platform && (!attached.platform.networkFallback || attached.platform.site==='network-media') ? '' : fallbackReason;
+    attached.media={...attached.media,discoveryDiagnostics:{...attached.media.discoveryDiagnostics,playerCount:videos.length,localNetworkCandidates:local.length,unboundFallbackBlocked:!!reason,networkFallbackReason:reason || undefined}};
+  }
+  if(expectedDeepIdentity){
+   const current=attached.videos?.[attached.mediaIndex],identity=String(current?.mediaContentId||current?.linkedMedia?.id||current?.mediaIdentity||'');
+   if(attached.selectionExpired||identity!==expectedDeepIdentity)throw Object.assign(new Error('目前選取的影片已變更，請重新選取'),{code:'SOURCE_CHANGED'});
   }
   return attached;
 }
@@ -262,10 +301,13 @@ async function handle(message,sender){
   case 'cancelInspect':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');return engine('cancelInspect',{inspectionId:message.inspectionId});
   case 'inspect':{
    const descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)},key=descriptor.downloadKey;
+   await verifyMetadataPlan(descriptor);
    const active=[...work.values()].find(job=>!job.cancelled&&ACTIVE_STATES.has(job.state || (job===runningJob?'running':'queued'))&&job.data?.downloadKey===key);
    const cached=active&&sourceMeta.get(active.data.sourceId)?.result;
    if(cached){const result={...cached,downloadKey:key};sourceMeta.get(active.data.sourceId).lastUsed=Date.now();return result;}
-   const result=await engine('inspect',{descriptor,inspectionId:message.inspectionId});result.downloadKey=key;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:key,result,lastUsed:Date.now()});trimSourceMeta();return result;}
+   const result=await engine('inspect',{descriptor,inspectionId:message.inspectionId});
+   try{await verifyMetadataPlan(descriptor);}catch(error){await engine('forget',{sourceId:result.id}).catch(()=>{});throw error;}
+   result.downloadKey=key;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:key,result,lastUsed:Date.now()});trimSourceMeta();return result;}
   case 'browserSubtitle':return engine('subtitle',{sourceId:message.sourceId,index:message.index});
   case 'pageSubtitle':return readPageSubtitle(message);
   case 'captureSubtitle':{

@@ -1,6 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mediaChoices,selectedPlan,metadataCodecs,parseMp4Codecs} from '../extension/browser-media.js';
 import {assertComplete} from '../extension/youtube-download.js';
+test('equal-resolution H264 variants consistently choose the higher bitrate',()=>{
+ const low={id:'low',url:'https://cdn/low',height:1080,videoCodec:'h264',audioCodec:'aac',ext:'mp4',bitrate:1000000},high={...low,id:'high',url:'https://cdn/high',bitrate:5000000};
+ for(const formats of [[low,high],[high,low]])assert.equal(selectedPlan(mediaChoices({formats}),{kind:'video'}).video.id,'high');
+});
 test('Split Bilibili MP4 preserves original codecs and pairs AAC; only real qualities are offered',()=>{
  const s={duration:90,requiresAudio:true,formats:[{id:'v480',url:'https://cdn/v',height:480,videoCodec:'h264',ext:'mp4',bitrate:400000},{id:'v360',url:'https://cdn/v2',height:360,videoCodec:'h264',ext:'mp4',bitrate:180000},{id:'a',url:'https://cdn/a',audioCodec:'aac',ext:'mp4',bitrate:132000}]};
  const c=mediaChoices(s);assert.deepEqual(c.choices.video.auto.heights,[480,360]);assert.equal(selectedPlan(c,{kind:'video',height:360}).audio.id,'a');assert.equal(selectedPlan(c,{kind:'audio',audioQuality:'best'}).ext,'m4a');assert.throws(()=>selectedPlan(c,{kind:'video',height:720}));

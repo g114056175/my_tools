@@ -21,6 +21,14 @@ function urlKind(url) {
 }
 
 function safeAttr(node, name) { try { return asString(node?.getAttribute?.(name)); } catch { return ''; } }
+export function mediaElementSource(node) {
+  try {
+    const raw=node?.getAttribute?.('src');
+    // HTML resolves an explicitly empty src property to the document URL.
+    // That is a placeholder, not a request for downloadable media.
+    return typeof raw==='string'&&!raw.trim()?'':node?.src || raw || '';
+  } catch { return ''; }
+}
 function closest(node, selectors) { try { return node?.closest?.(selectors) || null; } catch { return null; } }
 function contains(parent, child) { try { return !!parent?.contains?.(child); } catch { return false; } }
 function nodes(root, selector) { try { return [...(root?.querySelectorAll?.(selector) || [])]; } catch { return []; } }
@@ -55,6 +63,10 @@ function identityFromUrl(pageUrl) {
   if (match) { id ||= match[1]; kind = /reel/i.test(match[0]) ? 'reel' : /watch/i.test(match[0]) ? 'watch' : 'post'; }
   const creatorVideo = url.pathname.match(/\/@[^/]+\/video\/([^/?#]+)/i);
   if (!id && creatorVideo) { id = creatorVideo[1]; kind = 'video'; }
+  if(/(^|\.)(?:x|twitter)\.com$/i.test(host)){
+    const status=url.pathname.match(/^\/[^/]+\/status\/(\d+)(?:\/|$)/i);
+    if(status){id=status[1];kind='post';}
+  }
   if(!id&&/(^|\.)vimeo\.com$/i.test(host))id=url.pathname.match(/^\/(\d+)(?:\/|$)/)?.[1] || '';
   if (!id && /instagram\.com$/i.test(host)) id = parts.find(p => p && !/^(reel|p|tv)$/i.test(p)) || '';
   return id ? { id, kind, host, key: `${host}:${id}` } : { host };
@@ -82,12 +94,12 @@ function localPlayerIdentity(video){
 
 export function postIdentity({ pageUrl = '', video, container } = {}) {
   const page = identityFromUrl(pageUrl);
-  let anchor = (() => { try { return video?.closest?.('a[href*="/reel/"],a[href*="/p/"],a[href*="/videos/"],a[href*="/watch"],a[href*="/video/"]')?.href || ''; } catch { return ''; } })();
+  let anchor = (() => { try { return video?.closest?.('a[href*="/reel/"],a[href*="/p/"],a[href*="/videos/"],a[href*="/watch"],a[href*="/video/"],a[href*="/status/"]')?.href || ''; } catch { return ''; } })();
   // Feed post links need not wrap the video. Accept a sibling permalink only
   // inside its unambiguous one-video container, with exactly one media ID.
   if(!anchor && container && container!==video && nodes(container,'video').length===1){
     const links=nodes(container,'a[href]'), ids=new Map();
-    for(const link of links){const href=absolute(link.href || safeAttr(link,'href'),pageUrl);if(!/\/(?:reel|p|tv|videos?|watch)(?:\/|\?)/i.test(href)&&!/@[^/]+\/video\//i.test(href))continue;const identity=identityFromUrl(href);if(identity.id && identity.host===page.host)ids.set(identity.id,href);}
+    for(const link of links){const href=absolute(link.href || safeAttr(link,'href'),pageUrl);if(!/\/(?:reel|p|tv|videos?|watch|status)(?:\/|\?)/i.test(href)&&!/@[^/]+\/video\//i.test(href))continue;const identity=identityFromUrl(href);if(identity.id && identity.host===page.host)ids.set(identity.id,href);}
     if(ids.size===1)anchor=ids.values().next().value;
   }
   const anchorPage = anchor ? identityFromUrl(anchor) : {};
@@ -110,7 +122,8 @@ function readPlayer(player, base, out) {
   const currentSources = (() => { try { return typeof player.currentSources === 'function' ? player.currentSources() : player.currentSources; } catch { return []; } })();
   for (const value of [read(player.currentSrc), read(player.src), read(player.source_), currentSource, currentSources]) {
     const values = Array.isArray(value) ? value : [value];
-    for (const item of values) add(out, typeof item === 'object' ? (item.src || item.uri || item.url) : item, 'player', 'player-owned-source', base, { score: .86 });
+    for (const item of values) add(out, typeof item === 'object' ? (item.src || item.uri || item.url) : item, 'player', 'player-owned-source', base, { score: .86,
+      ...(Array.isArray(value)&&value===currentSources?{sourceGroup:'player-current-sources'}:{}) });
   }
   for (const key of ['url', 'uri', 'resolvedUri', 'masterPlaylist_', 'mainPlaylist_', 'playlist']) {
     const value = read(player[key]); add(out, typeof value === 'object' ? (value.src || value.uri || value.url) : value, 'player', `player.${key}`, base, { score: .84 });
@@ -158,8 +171,8 @@ export function collectMediaEvidence({ video, root, pageUrl = '', network = [], 
   if (!localId && allVideos.length > 1) identity = { host: page.host };
   const candidates = [];
   if (video) {
-    for (const attr of MEDIA_ATTRIBUTES) add(candidates, attr === 'currentSrc' ? video.currentSrc : attr === 'src' ? video.src : safeAttr(video, attr), 'native', `video.${attr}`, pageUrl, { score: attr === 'currentSrc' ? .98 : .94 });
-    for (const source of nodes(video, 'source')) add(candidates, source.src || safeAttr(source, 'src'), 'native-track', 'source-element', pageUrl, { score: .93, type: safeAttr(source, 'type') });
+    for (const attr of MEDIA_ATTRIBUTES) add(candidates, attr === 'currentSrc' ? video.currentSrc : attr === 'src' ? mediaElementSource(video) : safeAttr(video, attr), 'native', `video.${attr}`, pageUrl, { score: attr === 'currentSrc' ? .98 : .94 });
+    for (const source of nodes(video, 'source')) add(candidates, mediaElementSource(source), 'native-track', 'source-element', pageUrl, { score: .93, type: safeAttr(source, 'type'), sourceGroup:'source-elements' });
     const owned = player || PLAYER_KEYS.map(key => { try { return video[key]; } catch { return null; } }).find(Boolean);
     readPlayer(owned, pageUrl, candidates);
   }

@@ -19,6 +19,16 @@ test('A title with an old media extension never acquires duplicate extensions',(
  assert.equal(suggestedFilename('測試 / "影片"','mp4'),'測試 _ _影片_.mp4');
  assert.throws(()=>suggestedFilename('影片','../mp4'));
 });
+
+test('browser download names remove invisible formatting while retaining Chinese and ordinary emoji',()=>{
+ assert.equal(suggestedFilename('COOKED: Ep. 1 🧑‍🍳','mp4'),'COOKED_ Ep. 1 🧑🍳.mp4');
+ assert.equal(suggestedFilename('中\u200B文\u202E標題\u2066','srt'),'中文標題.srt');
+ assert.equal(suggestedFilename('影片 🐱 ❤️','mp4'),'影片 🐱 ❤️.mp4');
+ assert.equal(suggestedFilename('a\u007Fb\u0085c','m4a'),'a_b_c.m4a');
+ const long=suggestedFilename('a'.repeat(99)+'🧑尾巴','mp4');
+ assert.equal(long,'a'.repeat(99)+'🧑.mp4');assert.equal(long.isWellFormed(),true);
+ assert.equal(suggestedFilename('\u200D\u202E','mp4'),'video.mp4');
+});
 test('History keeps actual user-edited filenames, rejects paths, and stays bounded',()=>{
  assert.deepEqual(filenameHistory(['old.mp4','OLD.MP4',null,'C:\\private\\file.mp4','自訂 (9).mp4']),['OLD.MP4','自訂 (9).mp4']);
  const names=filenameHistory(Array.from({length:2010},(_,i)=>`${i}.mp4`));

@@ -70,9 +70,12 @@ export function startMediaPicker(options = {}) {
     const index = registryIndex >= 0 ? registryIndex : videos.indexOf(video);
     const entry = registryIndex >= 0 ? registry.videos[registryIndex] : null;
     const source = () => { try { return video.currentSrc || video.src || video.querySelector?.('source')?.src || ''; } catch { return ''; } };
-    const title = String(entry?.title || video.getAttribute?.('aria-label') || video.title || document.title || `影片 ${index + 1}`).trim();
+    const mediaObserver=globalThis[Symbol.for('video-pocket.mediaObserver')];let twitchOwned;
+    let ownedTitle='';try{twitchOwned=mediaObserver?.twitchPlayerFor?.(video,videos);ownedTitle=twitchOwned?.title || mediaObserver?.titleFor?.(video) || '';}catch{}
+    const title = String(ownedTitle || entry?.title || video.getAttribute?.('aria-label') || video.title || document.title || `影片 ${index + 1}`).trim();
     let mediaIdentity='';try{mediaIdentity=globalThis[Symbol.for('video-pocket.mediaObserver')]?.modelFor?.(video)?.id || globalThis[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
     try{const page=new URL(location.href),id=page.pathname.match(/^\/videos\/(\d+)/)?.[1];if(/(^|\.)twitch\.tv$/i.test(page.hostname)&&id&&(video.closest?.('[data-a-target="video-player"]')||videos.length===1))mediaIdentity='twitch-vod:'+id;}catch{}
+    if(twitchOwned)mediaIdentity=`twitch-${twitchOwned.kind}:${twitchOwned.kind==='clip'?twitchOwned.slug:twitchOwned.id}`;
     try{const page=new URL(location.href),id=page.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || page.searchParams.get('bvid');if(/(^|\.)bilibili\.com$/i.test(page.hostname)&&id&&((()=>{let node=video;for(let depth=0;node&&depth<16;depth++){if(node.closest?.('#bilibili-player,#bilibiliPlayer,.bpx-player-container,.bilibili-player-video,bwp-video'))return true;const host=node.getRootNode?.()?.host;if(!host||host===node)break;node=host;}return false;})()||videos.length===1))mediaIdentity=`bilibili:${id}:${Math.max(1,Number(page.searchParams.get('p'))||1)}`;}catch{}
     return {mediaKey: keyOf(video), localMediaIndex: index, frameId, documentId, frameUrl: location.href, title, url: source(),mediaIdentity};
   };
@@ -116,8 +119,8 @@ export function startMediaPicker(options = {}) {
       return !style || style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;
     });}catch{return false;}
   };
-  const isInteractive = node => {
-    try { return !!node?.closest?.('a,button,[role="button"],input,select,textarea'); } catch { return false; }
+  const interactiveOwner = node => {
+    try { return node?.closest?.('a,button,[role="button"],input,select,textarea') || null; } catch { return null; }
   };
   const chooseFromEvent = (event,force=false) => {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
@@ -131,11 +134,18 @@ export function startMediaPicker(options = {}) {
     // button only when its immediate player container owns exactly one video;
     // a card/link over a video must never select the covered video.
     const top = stack[0];
-    if (top && isInteractive(top)) {
-      let parent = top.parentElement;
-      while (parent && parent !== document.documentElement) {
+    const control=interactiveOwner(top);
+    if (control) {
+      const button=control.tagName?.toLowerCase()==='button'||control.getAttribute?.('role')==='button';
+      if(!button)return null;
+      let parent = control.parentElement;
+      while (parent && parent !== document.documentElement && parent !== document.body) {
         const owned = videos.filter(video => { try { return parent.contains(video); } catch { return false; } });
-        if (owned.length === 1 && top.tagName?.toLowerCase() === 'button'&&!blockedByDialog(owned[0])) return owned[0];
+        if(owned.length>1)return null;
+        if (owned.length === 1&&!blockedByDialog(owned[0])) {
+          const r=rect(owned[0]);
+          return r&&x>=r.left&&x<=r.left+r.width&&y>=r.top&&y<=r.top+r.height?owned[0]:null;
+        }
         parent = parent.parentElement;
       }
       return null;

@@ -1,10 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,sourceHeader,sourceDeadline,mediaTitleLabel,sourceInspectionDiagnostic} from '../extension/popup-state.js';
+import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,sourceHeader,sourceDeadline,mediaTitleLabel,orderedMediaOptions,sourceInspectionDiagnostic} from '../extension/popup-state.js';
+
+test('named media precede numbered placeholders without changing selection indices or within-group order',()=>{
+ const videos=[{title:'影片 1'},{title:'Lecture'},{title:''},{title:'影片2'},{title:'影片 1 的生活'}];
+ assert.deepEqual(orderedMediaOptions(videos),[{index:1,title:'Lecture'},{index:4,title:'影片 1 的生活'},{index:0,title:'影片 1'},{index:2,title:'影片 3'},{index:3,title:'影片2'}]);
+ assert.equal(videos[0].title,'影片 1');
+});
+
+test('generic player labels share the placeholder group and keep stable order',()=>{
+ const videos=[{title:'Video player'},{title:'Actual post'},{title:'影片 2'},{title:'Twitch video player'},{title:'Another post'}];
+ assert.deepEqual(orderedMediaOptions(videos),[
+  {index:1,title:'Actual post'},{index:4,title:'Another post'},
+  {index:0,title:'Video player'},{index:2,title:'影片 2'},{index:3,title:'Twitch video player'},
+ ]);
+});
+
+test('unbound metadata diagnostics contain only allowlisted reasons and counts',()=>{
+ const page={videos:[{}],platform:{site:'metadata-media',versions:[{url:'https://private.test/token=secret'}]},media:{discoveryDiagnostics:{metadataCandidates:1,metadataReason:'verification-required'}}};
+ const value=sourceInspectionDiagnostic({page,phase:'inspecting'});
+ assert.equal(value.platformKind,'metadata-media');assert.equal(value.discovery.metadataCandidates,1);assert.equal(value.discovery.metadataReason,'verification-required');
+ assert.doesNotMatch(JSON.stringify(value),/private|secret/);
+ page.media.discoveryDiagnostics.metadataReason='https://private.test/secret';
+ assert.equal(sourceInspectionDiagnostic({page}).discovery.metadataReason,undefined);
+});
 
 test('source diagnostics contain only safe counts and failure stages',()=>{
  const value=sourceInspectionDiagnostic({page:{title:'PRIVATE',url:'https://secret/?token=x',videos:[{linkedMedia:{id:'PRIVATE',url:'https://secret/'}}],media:{discoveryDiagnostics:{json:{observed:2},models:3,matches:0,reason:'identity-unmatched',unboundFallbackBlocked:true}}},phase:'failed',failure:{code:'SOURCE_UNAVAILABLE',sourceStage:'linked-no-model',message:'PRIVATE'}});
  assert.equal(value.discovery.json,2);assert.equal(value.discovery.unboundFallbackBlocked,true);assert.equal(value.failure.stage,'linked-no-model');assert.equal(value.hasPermalink,true);assert.ok(!JSON.stringify(value).includes('PRIVATE'));assert.ok(!JSON.stringify(value).includes('secret'));
+});
+
+test('shareable save diagnostics preserve only allowlisted storage failure details',()=>{
+ const value=sourceInspectionDiagnostic({phase:'failed',failure:{code:'SAVE_FAILED',saveStage:'write-target',saveReason:'disk-full',message:'C:/private/SECRET.mp4'}});
+ assert.equal(value.build,'schema-contract-17');assert.equal(value.failure.saveStage,'write-target');assert.equal(value.failure.saveReason,'disk-full');
+ assert.doesNotMatch(JSON.stringify(value),/SECRET|private/);
+ const unsafe=sourceInspectionDiagnostic({failure:{code:'SAVE_FAILED',saveStage:'private',saveReason:'SECRET'}});
+ assert.equal(unsafe.failure.saveStage,undefined);assert.equal(unsafe.failure.saveReason,undefined);
+});
+
+test('source diagnostics expose a bounded network fallback reason',()=>{
+ const page={videos:[{},{}],media:{discoveryDiagnostics:{unboundFallbackBlocked:true,networkFallbackReason:'multiple-players'}}};
+ const value=sourceInspectionDiagnostic({page,phase:'failed'});
+ assert.equal(value.discovery.networkFallbackReason,'multiple-players');
+ assert.equal(JSON.stringify(value).includes('https://'),false);
+ const unknown=sourceInspectionDiagnostic({page:{media:{discoveryDiagnostics:{networkFallbackReason:'https://private'}}}});
+ assert.equal(unknown.discovery.networkFallbackReason,undefined);
 });
 
 test('generic network discovery keeps its safe platform label in diagnostics',()=>{

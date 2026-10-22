@@ -36,6 +36,12 @@ test('Cancellation stops before producing a file',async()=>{
  const controller=new AbortController();controller.abort(new Error('已取消'));
  await assert.rejects(directTransfer({url:'https://source/video'},async()=>{throw Error('offline');},controller.signal),/已取消/);
 });
+
+test('a failed fallback chain preserves its first transport error',async()=>{
+ const first=new Error('primary unavailable'),second=new Error('backup unavailable');
+ const request=async(url,{headers}={})=>{if(headers?.Range==='bytes=0-65535')throw url.includes('primary')?first:second;if(url.includes('primary'))throw first;throw second;};
+ await assert.rejects(directTransfer({url:'https://primary',backupUrls:['https://backup']},request,new AbortController().signal),error=>error===first);
+});
 test('A source without Range support falls back to one complete direct response',async()=>{
  let requests=0;const result=await directTransfer({url:'https://source/video'},async()=>{requests++;return new Response(payload);},new AbortController().signal);assert.equal(requests,2);assert.deepEqual(result,payload);
 });

@@ -55,6 +55,84 @@ test('metadata listener count is capped and observer errors never break messagin
  }finally{dispose();}
 });
 
+test('metadata-only mode keeps bounded media candidates and drops unrelated worker data',()=>{
+ const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value),{
+  metadataOnly:true,maxDepth:4,maxNodes:32,maxMessages:1,
+ });
+ try{
+  const worker=new target.Worker('worker.js');
+  worker.receive({privateToken:'secret',nested:{video:{id:'one',url:'https://cdn.example/one.mp4'},private:'drop'}});
+  worker.receive({video:{id:'two',url:'https://cdn.example/two.mp4'}});
+  assert.equal(values.length,1);
+  assert.equal(values[0].nested.video.url,'https://cdn.example/one.mp4');
+  assert.equal(values[0].privateToken,undefined);
+  assert.equal(values[0].nested.private,undefined);
+ }finally{dispose();}
+});
+
+test('metadata-only mode accepts URL arrays, ignores identity-only messages, and recovers its rate budget',()=>{
+ let clock=0;const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value),{
+  metadataOnly:true,maxMessages:1,now:()=>clock,
+ });
+ try{
+  const worker=new target.Worker('worker.js');
+  worker.receive({videoID:'identity-only',type:'state'});
+  assert.equal(values.length,0);
+  worker.receive({video:{url:'https://cdn.example/throttled.mp4'}});
+  assert.equal(values.length,0,'unrelated messages also consume the bounded observation budget');
+  clock=1000;
+  worker.receive({video:{id:'one',url_list:['https://cdn.example/one.mp4','https://cdn.example/two.mp4']}});
+  assert.equal(values.length,1);
+  assert.deepEqual(values[0].video.url_list,['https://cdn.example/one.mp4','https://cdn.example/two.mp4']);
+  clock=2000;
+  worker.receive({video:{id:'three',source:['https://cdn.example/three.mp4']}});
+  assert.equal(values.length,2);
+ }finally{dispose();}
+});
+
+test('metadata-only mode keeps short media titles without treating title-only data as media',()=>{
+ const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value),{metadataOnly:true});
+ try{
+  const worker=new target.Worker('worker.js');
+  worker.receive({video:{id:'title-only',title:'A short title'}});
+  assert.equal(values.length,0);
+  worker.receive({video:{id:'with-source',name:'A named video',video_url:'https://cdn.example/video.mp4',video_title:'x'.repeat(513)}});
+  assert.equal(values.length,1);
+  assert.equal(values[0].video.name,'A named video');
+  assert.equal(values[0].video.video_title,undefined);
+ }finally{dispose();}
+});
+
+test('bounded worker copying skips giant arrays, cycles and buffers before media',()=>{
+ const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value),{metadataOnly:true,maxNodes:64});
+ try{
+  const worker=new target.Worker('worker.js');
+  const payload={noise:Array(600000).fill(0),buffer:new Uint8Array(1024*1024),video:{id:'after-noise',video_url:'https://cdn.example/after-noise.mp4'}};
+  payload.cycle=payload;
+  worker.receive(payload);
+  assert.equal(values.length,1);
+  assert.equal(values[0].video.video_url,'https://cdn.example/after-noise.mp4');
+  assert.equal(values[0].noise,undefined);
+  assert.equal(values[0].buffer,undefined);
+  assert.equal(values[0].cycle,undefined);
+ }finally{dispose();}
+});
+
+test('metadata-only worker copying keeps X broadcast binding identities',()=>{
+ const target=environment(),values=[],dispose=observeWorkerMetadata(target,value=>values.push(value),{metadataOnly:true,maxDepth:12,maxNodes:128});
+ try{
+  const worker=new target.Worker('worker.js');
+  worker.receive({tweet_result:{result:{rest_id:'2112242739198959913',legacy:{card:{legacy:{binding_values:[
+   {key:'broadcast_id',value:{string_value:'1RKZzBELBbXKB'}},
+   {key:'broadcast_media_key',value:{string_value:'28_123456789'}},
+  ]}}}}}});
+  assert.equal(values.length,1);
+  const binding=values[0].tweet_result.result.legacy.card.legacy.binding_values;
+  assert.equal(binding[0].key,'broadcast_id');
+  assert.equal(binding[0].value.string_value,'1RKZzBELBbXKB');
+ }finally{dispose();}
+});
+
 test('the shipped document-start bundle observes FB worker metadata and binds the selected ID',async()=>{
  const target=environment();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};
  const original=target.Worker;

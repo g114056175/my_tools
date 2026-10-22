@@ -2,6 +2,24 @@
 import {parseByteRange} from './range-capability.js';
 
 const FAST_WRITE_MAX_BYTES = 2 * 1024 * 1024;
+const readWithProgress = async (reader, signal, timeoutMs) => {
+  if (!(timeoutMs > 0)) return reader.read();
+  return await new Promise((resolve, reject) => {
+    let timer;
+    const clear = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
+    const abort = () => { clear(); reject(signal.reason || new DOMException('已取消', 'AbortError')); };
+    const settle = (fn, value) => { clear(); fn(value); };
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener('abort', abort, {once: true});
+    timer = setTimeout(() => settle(reject, new DOMException('串流讀取逾時', 'TimeoutError')), timeoutMs);
+    Promise.resolve().then(() => reader.read()).then(value => settle(resolve, value), error => {
+      // Some streams reject with a generic AbortError while the controlling
+      // signal carries the useful TimeoutError or user cancellation reason.
+      if (error?.name === 'AbortError' && signal?.aborted && signal.reason) settle(reject, signal.reason);
+      else settle(reject, error);
+    });
+  });
+};
 const rangeOf = value => {
   return parseByteRange(value);
 };
@@ -16,19 +34,19 @@ const checkRange = (response, range, message = '來源未提供正確的檔案�
   }
 };
 
-export function createMediaTransfer({request, disk, directTransfer, assembleSegments, absolute = (url, base) => new URL(url, base).href} = {}) {
+export function createMediaTransfer({request, disk, directTransfer, assembleSegments, absolute = (url, base) => new URL(url, base).href, progressTimeoutMs = 20000} = {}) {
   if (typeof request !== 'function' || !disk || typeof assembleSegments !== 'function') throw new TypeError('request, disk and assembleSegments are required');
   if (typeof directTransfer !== 'function') throw new TypeError('directTransfer is required');
 
   async function transfer(url, referer, signal, range, onBytes = () => {}, pageContext) {
-    const response = await request(url, referer, {signal, pageContext, headers: rangeHeader(range)});
+    const response = await request(url, referer, {signal, pageContext, sourceStage: 'stream-segment', headers: rangeHeader(range)});
     checkRange(response, range);
     const reader = response.body.getReader(), chunks = [];
     let length = 0;
     try {
       for (;;) {
         signal?.throwIfAborted();
-        const {done, value} = await reader.read();
+        const {done, value} = await readWithProgress(reader, signal, progressTimeoutMs);
         if (done) break;
         length += value.length;
         if (range && length > range.length) throw new Error('來源片段長度不完整');
@@ -70,7 +88,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
         download: async (job, index, assemblySignal) => {
           if (observedAssembly !== assemblySignal) { observedAssembly = assemblySignal; assemblySignal.addEventListener('abort', () => abortJob(assemblySignal.reason), {once: true}); }
           const readPart = async (url, attemptSignal) => {
-            const readSignal = AbortSignal.any([attemptSignal, assemblySignal, AbortSignal.timeout(20000)]);
+             const readSignal = AbortSignal.any([attemptSignal, assemblySignal]);
             const attempt = {};
             const report = received => { if (job.segmentIndex !== undefined) onSegmentBytes(job.segmentIndex, received, attempt); };
             let partSink;
@@ -88,7 +106,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
                 const response = await request(url, referer, {signal: readSignal, pageContext: f.pageContext, sourceStage: 'stream-segment', headers: rangeHeader(job.range)});
                 checkRange(response, job.range, '來源片段範圍不完整');
                 const reader = response.body.getReader(); let size = 0;
-                try { for (;;) { readSignal.throwIfAborted(); const {done, value} = await reader.read(); if (done) break; size += value.length; if (size > job.range.length) throw new Error('來源片段長度不完整'); await output.writeAt(value, job.outputOffset + size - value.length); report(size); } }
+                try { for (;;) { readSignal.throwIfAborted(); const {done, value} = await readWithProgress(reader, readSignal, progressTimeoutMs); if (done) break; size += value.length; if (size > job.range.length) throw new Error('來源片段長度不完整'); await output.writeAt(value, job.outputOffset + size - value.length); report(size); } }
                 catch (error) { await reader.cancel().catch(() => {}); throw error; }
                 if (size !== job.range.length) throw new Error('來源片段長度不完整');
                 return {path: null, size, direct: true};
@@ -97,7 +115,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
                 const response = await request(url, referer, {signal: readSignal, pageContext: f.pageContext, sourceStage: 'stream-segment', headers: rangeHeader(job.range)});
                 checkRange(response, job.range, '來源片段範圍不完整');
                 const reader = response.body.getReader(); let size = 0;
-                try { for (;;) { readSignal.throwIfAborted(); const {done, value} = await reader.read(); if (done) break; size += value.length; if (job.range && size > job.range.length) throw new Error('來源片段長度不完整'); await partSink.append(value); report(size); } }
+                try { for (;;) { readSignal.throwIfAborted(); const {done, value} = await readWithProgress(reader, readSignal, progressTimeoutMs); if (done) break; size += value.length; if (job.range && size > job.range.length) throw new Error('來源片段長度不完整'); await partSink.append(value); report(size); } }
                 catch (error) { await reader.cancel().catch(() => {}); throw error; }
                 const expected = job.range?.length || (!response.headers.get('content-encoding') ? Number(response.headers.get('content-length')) : 0);
                 if (expected > 0 && size !== expected) throw new Error('來源片段長度不完整');
@@ -109,7 +127,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
           const result = await control.run(async attemptSignal => {
             if (f.rangeRoutes && job.range && !job.key && job.url === f.url) {
               try { return (await f.rangeRoutes.run((url, routeSignal) => readPart(url, AbortSignal.any([attemptSignal, routeSignal])), attemptSignal)).value; }
-              catch (error) { throw error?.errors?.at(-1) || error; }
+              catch (error) { throw error?.errors?.[0] || error; }
             }
             return readPart(job.url, attemptSignal);
           });
@@ -118,7 +136,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
         consume: async (part) => {
           if (part.direct) return;
           const reader = (await disk.readMediaFile(part.path)).stream().getReader();
-          try { for (;;) { await control.wait(); const {done, value} = await reader.read(); if (done) break; await output.append(value); } }
+          try { for (;;) { await control.wait(); const {done, value} = await readWithProgress(reader, signal, progressTimeoutMs); if (done) break; await output.append(value); } }
           catch (error) { await reader.cancel().catch(() => {}); throw error; }
           finally { reader.releaseLock(); }
         },

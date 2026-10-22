@@ -5,6 +5,11 @@ import {attachSocialSources,verifiedSocialSource} from '../extension/social-sour
 const page=(extra={})=>({url:'https://www.tiktok.com/zh-Hant-TW/',videos:[{url:'blob:local',mediaIdentity:'post'}],media:{duration:12},mediaIndex:0,tabId:1,documentId:'current',frameId:0,...extra});
 const record=(url,extra={})=>({url,mime:'video/mp4',service:'tiktok',tabId:1,documentId:'current',frameId:0,time:100,method:'GET',...extra});
 
+test('unbound document metadata must still be verified even when its CDN request was observed',()=>{
+ const url='https://v16.tiktokcdn.com/a.mp4',original=page({platform:{site:'metadata-media',expectedDuration:12,versions:[{url,kind:'progressive'}]}});
+ assert.equal(attachSocialSources(original,[record(url)]),original);
+});
+
 test('preserves working non-FB/TikTok platforms and stale or DRM selections verbatim',()=>{
  for(const url of ['https://www.youtube.com/watch?v=test','https://www.bilibili.com/video/BV1','https://anime1.me/12','https://example.com/watch']){
   const original=page({url,platform:{site:'youtube'}});assert.equal(attachSocialSources(original,[record('https://v16.tiktokcdn.com/a.mp4')]),original);

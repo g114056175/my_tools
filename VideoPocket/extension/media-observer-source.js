@@ -1,11 +1,16 @@
 import {
   collectMediaEvidence,
   exposeSourceEvidence,
+  mediaElementSource,
 } from "./media-evidence.js";
 import { createMediaModelStore, extractMediaModels } from "./media-models.js";
+import { selectedMediaHint } from "./media-binding.js";
 import { observeWorkerMetadata } from "./worker-media.js";
-import { observeJsonMetadata } from "./json-media-observer.js";
+import { observeJsonMetadata, copyMediaMetadata } from "./json-media-observer.js";
+import {hasMediaPayload,isMediaPayloadText} from './media-schema.js';
 import { dailymotionContext } from "./dailymotion.js";
+import {titleFor,isGenericMediaTitle} from './media-titles.js';
+import {extractTwitchPlayerMetadata} from './twitch-clips.js';
 
 const OBSERVER_SYMBOL = Symbol.for("video-pocket.mediaObserver");
 const MAX_GRAPH = 512,
@@ -92,8 +97,33 @@ export function installMediaObserver(target = globalThis, options = {}) {
     sourceBuffers = new WeakMap(),
     wrappers = [];
   const parseJson=target.JSON?.parse || JSON.parse;
-  const modelStore = createMediaModelStore({parseJson});
+  const modelStore = createMediaModelStore({parseJson,target});
+  const videoRegistry=new Set();let videoRegistryObserver,shadowRestore;
+  const shadowRoots=new Set(),walkQueue=[];let walkScheduled=false,walkNodes=0;
+  const registerVideo=node=>{try{if(node?.tagName==='VIDEO')videoRegistry.add(node);while(videoRegistry.size>512)videoRegistry.delete(videoRegistry.values().next().value);}catch{}};
+  const enqueueShadowRoot=root=>{if(!root||shadowRoots.has(root))return;shadowRoots.add(root);try{videoRegistryObserver?.observe?.(root,{childList:true,subtree:true});}catch{}walkQueue.push({root,node:root});scheduleWalk();};
+  const visitNode=node=>{if(!node)return;registerVideo(node);try{if(node.shadowRoot)enqueueShadowRoot(node.shadowRoot);}catch{}};
+  const clock=()=>typeof target.performance?.now==='function'?target.performance.now():Date.now();
+  const walkBatch=()=>{walkScheduled=false;const deadline=clock()+8;let n=0;
+    while(walkQueue.length&&n++<256&&clock()<deadline){const item=walkQueue[0];
+      if(!item.started){item.started=true;visitNode(item.node);try{item.walker=target.document.createTreeWalker?.(item.node,1);}catch{}item.count=1;}
+      const node=item.walker?.nextNode();
+      if(node&&item.count++<8192){visitNode(node);walkNodes++;}else{
+        walkQueue.shift();
+        // Tiny non-browser test DOMs do not implement TreeWalker.
+        if(!item.walker)for(const child of Array.from(item.node?.children||[]).slice(0,64))if(walkQueue.length<64)walkQueue.push({node:child});
+      }
+    }if(walkQueue.length)scheduleWalk();};
+  const scheduleWalk=()=>{if(walkScheduled)return;walkScheduled=true;(target.setTimeout||globalThis.setTimeout)?.(walkBatch,0);};
+  try{
+    const attach=target.Element?.prototype?.attachShadow;
+    if(typeof attach==='function'){const wrapped=function(...args){const root=attach.apply(this,args);enqueueShadowRoot(root);return root;};target.Element.prototype.attachShadow=wrapped;shadowRestore=()=>{if(target.Element.prototype.attachShadow===wrapped)target.Element.prototype.attachShadow=attach;};}
+    const root=target.document.documentElement||target.document;shadowRoots.add(root);walkQueue.push({root,node:root});scheduleWalk();
+    if(target.MutationObserver){videoRegistryObserver=new target.MutationObserver(records=>{let count=0;for(const record of records){for(const node of record.addedNodes||[]){visitNode(node);if(walkQueue.length<64)walkQueue.push({node});if(++count>=256)break;}if(count>=256)break;}scheduleWalk();});videoRegistryObserver.observe(root,{childList:true,subtree:true});for(const shadowRoot of shadowRoots)if(shadowRoot!==root)try{videoRegistryObserver.observe(shadowRoot,{childList:true,subtree:true});}catch{}}
+  }catch{}
   let pendingMetadata=0,pendingManifest=0,disposed=false,manifestBytes=0;
+  const deferredMetadata=[];const MAX_DEFERRED_METADATA=32,MAX_DEFERRED_BYTES=2*1024*1024,DEFERRED_TTL=10*60*1000;
+  let deferredBytes=0,deferredGeneration=0,lastDrainGeneration=0;
   const metadataReaders=new Set();
   const manifestReaders=new Set();
   const now = typeof options.now === "function" ? options.now : () => Date.now();
@@ -286,23 +316,57 @@ export function installMediaObserver(target = globalThis, options = {}) {
     } catch { return false; }
   };
   const recordJson = (value, url) => {
-    try {
-      modelStore.merge(extractMediaModels(value, { baseUrl: url }));
-    } catch {}
+    try { modelStore.merge(extractMediaModels(value, { baseUrl: url })); } catch {}
   };
-  const recordText=(value,url)=>{
-    try{modelStore.merge(mediaModelsFromText(value,url,parseJson));}catch{}
+  const recordText=(value,url)=>{try{modelStore.merge(mediaModelsFromText(value,url,parseJson));}catch{}};
+  const deferMetadata=(value,url,kind='json')=>{
+    // Deferred parsing must not let unrelated API/analytics traffic evict
+    // the one playback response needed by a later user selection.
+    let snapshot,serialized;
+    if(kind==='text'){
+      if(typeof value!=='string'||value.length>MAX_TEXT||!isMediaPayloadText(value))return;
+      snapshot=serialized=value;
+    }else{
+      snapshot=copyMediaMetadata(value);if(!hasMediaPayload(snapshot))return;
+      try{serialized=JSON.stringify(snapshot);}catch{return;}
+    }
+    const bytes=serialized.length*2;
+    if(!bytes||bytes>MAX_DEFERRED_BYTES)return;
+    let hash=2166136261;for(let i=0;i<serialized.length;i++)hash=Math.imul(hash^serialized.charCodeAt(i),16777619);
+    const fingerprint=`${bytes}:${hash>>>0}`;
+    const at=now();
+    if(deferredMetadata.some(item=>item.at>=at-DEFERRED_TTL&&item.url===url&&item.kind===kind&&item.fingerprint===fingerprint&&(kind==='text'?item.value:JSON.stringify(item.value))===serialized))return;
+    const generation=++deferredGeneration;
+    while(deferredMetadata.length&&(deferredMetadata.length>=MAX_DEFERRED_METADATA||deferredBytes+bytes>MAX_DEFERRED_BYTES)){deferredBytes-=deferredMetadata.shift().bytes;}
+    deferredMetadata.push({value:snapshot,url,kind,bytes,at,generation,fingerprint});deferredBytes+=bytes;
   };
-  const jsonMetadata=observeJsonMetadata(target,value=>recordJson(value,target.location?.href));
+  const drainMetadata=(limit=8,budget,selectedVideo)=>{
+    let count=0;const cutoff=now();
+    const state=()=>({count,queued:deferredMetadata.length,bytes:deferredBytes,generation:lastDrainGeneration});
+    if(!deferredMetadata.length||(budget&&!budget()))return state();
+    let reserved=true;
+    const matches=selectedMediaHint(selectedVideo,{pageUrl:target.location?.href});
+    // Compute hints once per bounded queue entry. Priority is not evidence of
+    // ownership: modelFor still checks the selected player's exact identity.
+    const ordered=selectedVideo?deferredMetadata.map(item=>({item,priority:Number(matches(item.url)||matches(item.kind==='text'?item.value:JSON.stringify(item.value)))})).sort((a,b)=>b.priority-a.priority).map(entry=>entry.item):deferredMetadata;
+    while(ordered.length&&count<Math.max(1,Math.min(32,Number(limit)||8))&&(reserved||!budget||budget())){
+      reserved=false;
+      const item=ordered[0],index=deferredMetadata.indexOf(item);if(index>=0){deferredMetadata.splice(index,1);deferredBytes-=item.bytes;}if(ordered!==deferredMetadata)ordered.shift();
+      if(item.at<cutoff-DEFERRED_TTL)continue;
+      if(item.kind==='text')recordText(item.value,item.url);else recordJson(item.value,item.url);
+      lastDrainGeneration=Math.max(lastDrainGeneration,item.generation);count++;
+    }
+    return state();
+  };
+  const jsonMetadata=observeJsonMetadata(target,value=>deferMetadata(value,target.location?.href,'json'));
   wrappers.push(()=>jsonMetadata.dispose());
-  // FB can render a Worker-fed player with no currentSrc. Read only metadata
-  // already sent by that player, then let modelFor enforce exact video IDs.
-  if(/(^|\.)facebook\.com$/i.test(target.location?.hostname || '')){
-    try{wrappers.push(observeWorkerMetadata(target,value=>{
-      if(typeof value==='string')recordText(value,target.location.href);
-      else recordJson(value,target.location.href);
-    }));}catch{}
-  }
+  // Workers are a shared boundary on many players. Observe bounded metadata
+  // on ordinary pages too; modelFor still requires an exact player identity,
+  // so worker timing alone can never bind a source to a video.
+  try{wrappers.push(observeWorkerMetadata(target,value=>{
+    if(typeof value==='string')deferMetadata(value,target.location.href,'text');
+    else deferMetadata(value,target.location.href,'json');
+  },{metadataOnly:true,maxDepth:8,maxNodes:512,maxCharacters:128*1024,maxMessages:120}));}catch{}
   // Some players consume fetch().body directly, bypassing .text()/.json().
   // Read a bounded clone of metadata responses only; never duplicate media
   // downloads, cancel the player's reader, or retain unbounded feed bodies.
@@ -325,9 +389,9 @@ export function installMediaObserver(target = globalThis, options = {}) {
         const decoded=decoder.decode(item.value,{stream:true});buffer+=decoded;whole+=decoded;
         // Complete lines can be delivered before a long-lived response ends.
         const newline=buffer.lastIndexOf('\n');
-        if(newline>=0){recordText(buffer.slice(0,newline),url);buffer=buffer.slice(newline+1);}
+        if(newline>=0){deferMetadata(buffer.slice(0,newline),url,'text');buffer=buffer.slice(newline+1);}
       }
-      if(!disposed&&!stopped&&bytes<=MAX_TEXT)recordText(whole+decoder.decode(),url);
+      if(!disposed&&!stopped&&bytes<=MAX_TEXT)deferMetadata(whole+decoder.decode(),url,'text');
     }catch{}finally{
       if(timer)clearTimeout(timer);
       if(reader){metadataReaders.delete(reader);pendingMetadata--;reader.cancel().catch(()=>{});}
@@ -428,10 +492,10 @@ export function installMediaObserver(target = globalThis, options = {}) {
               /json/i.test(type) ||
               /^\s*(?:for\s*\(;;\);\s*)?[\[{]/.test(value)
             ) {
-              recordText(value,url);
+              deferMetadata(value,url,'text');
             }
           }
-          if (name === "json") recordJson(value, url);
+          if (name === "json") deferMetadata(value, url, 'json');
         } catch {}
         return value;
       });
@@ -478,7 +542,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
                   /json/i.test(type) ||
                   /^\s*(?:for\s*\(;;\);\s*)?[\[{]/.test(xhr.responseText)
                 ) {
-                  recordText(xhr.responseText,url);
+                  deferMetadata(xhr.responseText,url,'text');
                 }
               }
               touch(url, type, isManifest(url, type));
@@ -623,15 +687,17 @@ export function installMediaObserver(target = globalThis, options = {}) {
   };
   const sourcesFor = (video) => {
     const candidates = [];
-    const raw = video?.currentSrc || video?.src;
+    const raw = video?.currentSrc || mediaElementSource(video);
     const direct =
       http(raw, target.location?.href) ||
       (/^blob:/i.test(String(raw || "")) ? String(raw) : "");
     const present=objectUrls.get(direct);if(present)present.at=now();prune();
     let associatedRoot = false;
-    const add = (url, kind, evidence) => {
-      if (url && !candidates.some((c) => c.url === url))
-        candidates.push({ url, kind, evidence, downloadable: true });
+    const add = (url, kind, evidence, sourceGroup) => {
+      if (!url) return;
+      const existing=candidates.find(c=>c.url===url);
+      if(existing){existing.evidence=[...new Set([...existing.evidence,...evidence])];if(sourceGroup)existing.sourceGroup=sourceGroup;return;}
+      candidates.push({ url, kind, evidence, downloadable: true, ...(sourceGroup?{sourceGroup}:{}) });
     };
     if (direct) {
       const object = objectUrls.get(direct);
@@ -692,7 +758,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       if (!associatedRoot)
         for (const item of evidence.candidates)
           if (item.downloadable && !isSegment(item.url))
-            add(item.url, item.kind, item.evidence);
+            add(item.url, item.kind, item.evidence, item.sourceGroup);
     } catch {}
     if (candidates.length) {
       for (const c of candidates)
@@ -722,6 +788,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
         restore();
       } catch {}
     objectUrls.clear();
+    try{videoRegistryObserver?.disconnect?.();}catch{} try{shadowRestore?.();}catch{} videoRegistry.clear();shadowRoots.clear();walkQueue.length=0;deferredMetadata.length=0;deferredBytes=0;
     graph.clear();
     known.clear();
     manifests.clear(); manifestAliases.clear(); manifestBytes=0;
@@ -734,12 +801,25 @@ export function installMediaObserver(target = globalThis, options = {}) {
   };
   const api = {
     sourcesFor,
+    titleFor: video => titleFor(video),
+    isGenericTitle: isGenericMediaTitle,
+    twitchPlayerFor: (video,videos) => {
+      if(!/(^|\.)twitch\.tv$/i.test(target.location?.hostname || ''))return null;
+      const metadata=extractTwitchPlayerMetadata(video,{url:target.location.href,uniquePlayer:videos?.length===1});
+      if(!metadata)return null;
+      const {owner,...data}=metadata;return data;
+    },
     manifestFor,
-    modelFor: (video) => modelStore.modelFor(video, target.location?.href),
-    diagnosticsFor: (video) => (prune(),{json:jsonMetadata.stats(),manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
+    modelFor: (video,options={}) => (options.drain===false?null:drainMetadata(16,options.budget,video), modelStore.modelFor(video, target.location?.href)),
+    canonicalVideo: (video) => modelStore.canonicalVideo(video),
+    metadataCandidatesFor: (video,videos) => modelStore.metadataCandidatesFor(video,target.location?.href,videos),
+    validateMetadataPlan: (token,video,videos) => modelStore.validateMetadataPlan(token,video,target.location?.href,videos),
+    diagnosticsFor: (video) => (prune(),{json:jsonMetadata.stats(),metadataQueue:deferredMetadata.length,metadataQueueBytes:deferredBytes,metadataGeneration:lastDrainGeneration,manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
+    videosSnapshot: (limit=256) => [...videoRegistry].filter(video=>video?.isConnected!==false).slice(0,Math.max(1,Math.min(256,Number(limit)||256))),
+    drainMetadata,
     pageContext: () => dailymotionContext(target.document,target.location?.href),
-    scanDocument: () =>
-      modelStore.scanDocument(target.document, target.location?.href),
+    scanDocument: (videos,budget,selectedVideo) =>
+      (budget?null:drainMetadata(16,undefined,selectedVideo), modelStore.scanDocument(target.document, target.location?.href,videos,budget,selectedVideo)),
     dispose,
   };
   try {

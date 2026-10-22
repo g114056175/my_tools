@@ -23,6 +23,16 @@ test('native currentSrc and source tracks are ranked above scoped config', () =>
   assert.ok(result.candidates.some(c => c.url.endsWith('/video-720.mp4') && c.evidence.includes('source-element')));
 });
 
+test('empty src attributes resolving to the HTML page are not native media evidence',()=>{
+  const pageUrl='https://player.example.test/watch',empty=node({src:pageUrl});
+  empty.getAttribute=()=>'';
+  const video=node({src:pageUrl},[empty]);video.getAttribute=()=>'';
+  assert.deepEqual(collectMediaEvidence({video,pageUrl}).candidates,[]);
+  const valid=node({src:'https://cdn.example.test/real.mp4'});
+  video.querySelectorAll=selector=>selector==='source'?[empty,valid]:[];
+  assert.deepEqual(collectMediaEvidence({video,pageUrl}).candidates.map(item=>item.url),[valid.src]);
+});
+
 test('network manifests require an explicit per-video association', () => {
   const first = node({ currentSrc: 'https://cdn.example/first.mp4', scope: node({ 'data-post-id': 'one' }) });
   const second = node({ currentSrc: 'https://cdn.example/second.mp4', scope: node({ 'data-post-id': 'two' }) });
@@ -100,6 +110,19 @@ test('player getter sources are read and embedUrl is guidance only', () => {
   const result = collectMediaEvidence({ video, player, pageUrl: 'https://example/p/1' });
   assert.equal(result.best.url, 'https://cdn.example/player.m3u8');
   assert.equal(result.candidates.find(c => c.url.includes('/embed/1')).downloadable, false);
+});
+
+test('only currentSources alternatives share a player group; currentSrc and src stay separate',()=>{
+ const video=node({currentSrc:'https://cdn.example/current.mp4',src:'https://cdn.example/src.mp4'});
+ const player={currentSrc:()=>video.currentSrc,currentSources:()=>[
+  {src:'https://cdn.example/low.mp4'},{src:'https://cdn.example/high.mp4'}
+ ]};
+ const result=collectMediaEvidence({video,player,pageUrl:'https://example/watch'});
+ const alternatives=result.candidates.filter(item=>item.url.includes('/low.mp4')||item.url.includes('/high.mp4'));
+ assert.equal(alternatives.length,2);
+ assert.deepEqual(new Set(alternatives.map(item=>item.sourceGroup)),new Set(['player-current-sources']));
+ assert.equal(result.candidates.find(item=>item.url.endsWith('/current.mp4')).sourceGroup,undefined);
+ assert.equal(result.candidates.find(item=>item.url.endsWith('/src.mp4')).sourceGroup,undefined);
 });
 
 test('MAIN observer API is explicitly exposed through a stable symbol', () => {

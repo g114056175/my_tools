@@ -1,6 +1,22 @@
 // Read only metadata already owned by a rendered player. Never inspect the
 // application root, sibling fibers, network credentials or private stores.
-export function ownedPlayerMetadata(video){
+import {ownedXPlayerMetadata} from './x-media.js';
+// Scheduling hints only. Avoid a second whole-document evidence scan just to
+// decide which queued metadata to parse first. Exact ownership is checked later.
+export function selectedMediaHint(video,{pageUrl=''}={}){
+  if(!video)return ()=>false;
+  const ids=new Set();
+  try{for(const id of ownedPlayerMetadata(video,{pageUrl}).ids.slice(0,8))ids.add(String(id));}catch{}
+  for(const key of ['data-video-id','data-media-id','data-reel-id','data-post-id','data-content-id']){
+    try{const id=video.getAttribute?.(key);if(id)ids.add(String(id));}catch{}
+  }
+  const values=[...ids].filter(id=>/^[\w.-]{3,256}$/.test(id)).map(id=>id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  if(!values.length)return ()=>false;
+  const pattern=new RegExp(`(?:^|["\\\\/:])(?:\\d+_)?(?:${values.join('|')})(?=$|["\\\\/?&#,}])`);
+  return text=>typeof text==='string'&&pattern.test(text);
+}
+export function ownedPlayerMetadata(video,{pageUrl=''}={}){
+  try{if(/(^|\.)(?:x|twitter)\.com$/i.test(new URL(pageUrl || video?.ownerDocument?.location?.href || '').hostname))return ownedXPlayerMetadata(video);}catch{}
   const seen=new WeakSet();let remaining=1600,nearestIds=[];
   const inspect=value=>{
     const ids=new Set(),payloads=[];

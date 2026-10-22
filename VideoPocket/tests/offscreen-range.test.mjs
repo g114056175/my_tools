@@ -26,11 +26,11 @@ function response(body, { status = 200, range = null, type = 'video/mp2t', chunk
     text: async () => new TextDecoder().decode(bytes), body: { cancel: async () => {}, getReader: () => ({ read: async()=>{if(offset>=bytes.length){if(!ended){ended=true;onEnd();}return {done:true};}if(chunkDelay)await new Promise(r=>setTimeout(r,chunkDelay));const end=Math.min(bytes.length,offset+(chunkSize||bytes.length)),value=bytes.slice(offset,end);offset=end;return {done:false,value};}, cancel: async () => {} }) } };
 }
 function diskMock() {
-  const files = new Map(); let n = 0;
-  return { removeMediaFiles: async () => {}, removeMediaFile: async p => files.delete(p), readMediaFile: async p => new Blob([files.get(p) || new Uint8Array()]),
+  const files = new Map(),cleanups=[]; let n = 0;
+  return { files,cleanups,removeMediaFiles: async scope => {cleanups.push(scope);for(const path of files.keys())if(!scope||path.startsWith(scope+'-'))files.delete(path);}, removeMediaFile: async p => files.delete(p), readMediaFile: async p => new Blob([files.get(p) || new Uint8Array()]),
     createMediaFile: async (scope, name) => { const path = `${scope}-${name}-${++n}`, parts = []; let size = 0; return { path, append: async b => { parts.push(new Uint8Array(b)); size += b.length; }, finish: async () => { const out = new Uint8Array(size); let p = 0; for (const b of parts) { out.set(b, p); p += b.length; } files.set(path, out); return { path, size }; }, abort: async () => {} }; } };
 }
-async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false } = {}) {
+async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false,saveMode='normal' } = {}) {
   let mediaCompleted=0;
   const master = 'https://range.test/master.m3u8', child = 'https://range.test/child.m3u8';
   const urls = [1, 2, 3].map(i => `https://range.test/${i}.ts`), calls = [], mux = [], messages = [],indexLength=32+12*indexCount;
@@ -54,7 +54,30 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
     return response(new Uint8Array([i + 1]), { type: 'video/mp2t', range: options.headers?.Range ? (badRange ? 'bytes=99-99/100' : 'bytes=0-0/1') : null });
   };
   const disk = diskMock(); let listener;
-  class Worker { constructor(url) { this.url=url;this.onmessage = null; } postMessage(data) { mux.push({url:this.url,...data}); queueMicrotask(() => {if(this.url==='range-cut-worker.js')for(const progress of [.5,.6,1])this.onmessage?.({data:{type:'cutProgress',progress}});this.onmessage?.({ data:cutFailure&&this.url==='range-cut-worker.js'?{type:'error',errorCode:'RANGE_ENCODER_UNAVAILABLE',error:'unsupported encoder'}:{ type: 'done', path: data.output, saved: false } });}); } terminate() {} }
+  class Worker {
+    constructor(url){this.url=url;this.onmessage=null;}
+    postMessage(data){
+      mux.push({url:this.url,...data});queueMicrotask(()=>{
+        const send=message=>this.onmessage?.({data:message});
+        if(data.action==='cancel'){send({type:'error',code:'CANCELLED',errorCode:'CANCELLED',error:'已取消'});return;}
+        const cutting=this.url==='range-cut-worker.js',saving=this.url==='save-worker.js';
+        if(cutting)for(const progress of [.5,.6,1])send({type:'cutProgress',progress});
+        if(cutting&&cutFailure){send({type:'error',errorCode:'RANGE_ENCODER_UNAVAILABLE',error:'unsupported encoder'});return;}
+        if(!cutting&&saveMode==='processing-crash'){this.onerror?.({message:'processing failed'});return;}
+        const path=saving?data.path:`${data.scope}-${data.output}`,size=8;
+        if(!saving)disk.files.set(path,new Uint8Array(size).fill(7));
+        if(!cutting&&data.destinationId){
+          if(!saving)send({type:'readyToSave',path,size});
+          send({type:saving?'progress':'saving',progress:0});
+          if(saveMode==='save-crash'){this.onerror?.({message:'target worker failed'});return;}
+          if(saveMode==='cancel-save')return;
+        }
+        const saveFailure={code:'SAVE_FAILED',saveStage:'close-target',saveReason:'permission'};
+        send({type:'done',path,size,saved:false,...(!cutting&&saveMode==='target-failure'?{saveFailure}:{})});
+      });
+    }
+    terminate(){}
+  }
   const FileCtor = globalThis.File || class File extends Blob { constructor(parts, name, options = {}) { super(parts, options); this.name = name; } };
   const source = await fs.readFile(sourcePath || new URL('../extension/offscreen.js', import.meta.url), 'utf8');
   const code = source.replace(/^import[^;]+;\s*/gm, '');
@@ -64,8 +87,44 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
     normalizeRange, planSegmentRange, parseSidx, planIndexedRange, coalesceIndexedSegments, createIndexedRoutes, directTransfer: async (format,request,signal,onBytes,sink) => {const response=await request(format.url,{signal}),reader=response.body.getReader();for(;;){const {done,value}=await reader.read();if(done)break;await sink.append(value);onBytes(value.length);}return sink.finish();}, downloadYoutube: async () => [], chrome, fetch, VideoPocketDiskMedia: disk, crypto: { randomUUID: () => Math.random().toString() }, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal, Uint8Array, ArrayBuffer, Blob, File: FileCtor, Worker, setInterval: () => {}, setTimeout, clearTimeout, queueMicrotask, console, performance, document: { createElement: () => { const v = { videoHeight: 720, duration: 3, removeAttribute() {}, load() {} }; Object.defineProperty(v, 'src', { set() { queueMicrotask(() => v.onloadedmetadata?.()); } }); return v; } }, readMp4Metadata: async () => ({}), parseTransportStreamCodecs: () => ({}), mediaCredentials: () => undefined, resolveAnime1: async x => x, decryptHlsSample: async x => x, hlsIv: () => new Uint32Array(4), twitchVodManifest: async () => ({}), verifiedSocialSource: () => true, socialPageResponse: async () => {}, resolveDailymotion: async () => ({}), resolveLinkedMedia: async () => ({}) };
   vm.runInNewContext(code, context, { filename: 'offscreen.js' });
   const call = (action, data) => new Promise((resolve, reject) => listener({ target: 'offscreen', action, ...data }, { id: 'range-test' }, r => r?.ok ? resolve(r.result) : reject(Object.assign(new Error(r?.error), r?.failure || {}, { detail: r }))));
-  return { call, calls, mux, urls, messages,indexLength,indexedBytes,get peakIndexes(){return peakIndexes;} };
+  return { call, calls, mux, urls, messages,disk,indexLength,indexedBytes,get peakIndexes(){return peakIndexes;} };
 }
+
+test('full and range target-save failures retain finished bytes until browser download releases them',async()=>{
+ for(const range of [undefined,{start:1.2,end:1.8}]){
+  const rt=await runtime({saveMode:'target-failure'}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'clip'}});
+  const id=range?'range-fallback':'full-fallback',result=await rt.call('download',{sourceId:source.id,id,kind:'video',height:720,filename:'clip',destinationId:'target',...(range?{range}:{})});
+  assert.match(result.url,/^blob:/);assert.equal(result.saveFailure.saveStage,'close-target');
+  assert.equal((await fetch(result.url)).headers.get('content-type'),'video/mp4');assert.equal((await(await fetch(result.url)).arrayBuffer()).byteLength,8);
+  assert.deepEqual(rt.urls.map(url=>rt.calls.filter(call=>call.url===url).length),range?[0,1,0]:[1,1,1],'saving recovery must not fetch media again');
+  assert.equal(rt.disk.cleanups.filter(scope=>scope===id).length,0,'keep completed output during native saving');
+  await rt.call('release',{blobId:result.blobId});assert.equal(rt.disk.cleanups.filter(scope=>scope===id).length,1);
+  await assert.rejects(fetch(result.url));
+ }
+});
+
+test('only a sealed output can recover from a worker crash during saving',async()=>{
+ const broken=await runtime({saveMode:'processing-crash'}),source=await broken.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'clip'}});
+ await assert.rejects(broken.call('download',{sourceId:source.id,id:'broken',kind:'video',height:720,filename:'clip',destinationId:'target'}),{code:'MERGE_FAILED'});
+ for(const range of [undefined,{start:1.2,end:1.8}]){
+  const rt=await runtime({saveMode:'save-crash'}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'clip'}});
+  const result=await rt.call('download',{sourceId:source.id,id:'sealed',kind:'video',height:720,filename:'clip',destinationId:'target',...(range?{range}:{})});
+  assert.match(result.url,/^blob:/);assert.equal(result.saveFailure.saveReason,'worker-failed');
+  await rt.call('release',{blobId:result.blobId});
+ }
+});
+
+test('cancelling full or range saving never opens the browser fallback',async()=>{
+ for(const range of [undefined,{start:1.2,end:1.8}]){
+  const rt=await runtime({saveMode:'cancel-save'}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'clip'}});
+  const pending=rt.call('download',{sourceId:source.id,id:'cancel-saving',kind:'video',height:720,filename:'clip',destinationId:'target',...(range?{range}:{})});
+  const rejected=assert.rejects(pending,{code:'CANCELLED'});
+  for(let i=0;i<100&&!rt.messages.some(message=>message.state==='saving');i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(rt.messages.some(message=>message.state==='saving'));
+  await rt.call('cancel',{id:'cancel-saving'});await rejected;
+  assert.equal(rt.disk.cleanups.filter(scope=>scope==='cancel-saving').length,1);
+ }
+});
 
 test('HLS range fetches only selected segments and routes their source clocks to precise cutting', async () => {
   const rt = await runtime();

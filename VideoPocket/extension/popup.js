@@ -6,7 +6,7 @@ import {normalizePreferences,availableQuality} from './preferences.js';
 import {classifyFailure,briefFailure,visibleFailure,ERROR_VISIBILITY_MS} from './diagnostics.js';
 import {CAPTURE_PREFIX,CAPTURE_VERSION,captureScope as makeCaptureScope,captureKey as makeCaptureKey} from './subtitle-captures.js';
 import {FILENAME_HISTORY_KEY,filenameHistory,suggestedFilename} from './filenames.js';
-import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,sourceHeader,sourceDeadline,mediaTitleLabel,sourceInspectionDiagnostic} from './popup-state.js';
+import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,sourceHeader,sourceDeadline,mediaTitleLabel,orderedMediaOptions,sourceInspectionDiagnostic} from './popup-state.js';
 import {createMediaMenu} from './media-menu.js';
 import {createRangeController} from './range-controls.js';
 import {stableHash} from './download-identity.js';
@@ -85,7 +85,7 @@ function updateSubtitleLabel(){const end=subtitle?.cues?.reduce((n,c)=>Math.max(
 function updatePreview(){if(subtitle)$('preview').value=exportSubtitle(subtitle,$('subtitleFormat').value).content;}
 function updateQuality(){
   const video=info?.choices?.video?.[$('videoFormat').value],heights=video?.heights || [];$('height').replaceChildren();
-  if(heights.length===1)$('height').add(new Option(`${heights[0]}p`,String(heights[0])));else{$('height').add(new Option('最佳','0'));for(const h of heights)$('height').add(new Option(`${h}p`,String(h)));}
+  if(heights.length===1)$('height').add(new Option(`${heights[0]}p`,String(heights[0])));else{$('height').add(new Option(heights.length?`最佳（${Math.max(...heights)}p）`:'最佳','0'));for(const h of heights)$('height').add(new Option(`${h}p`,String(h)));}
   const heightFallback=heights.length===1?String(heights[0]):'0';$('height').value=availableQuality(preferences.height,[...$('height').options].map(o=>o.value),heightFallback);$('height').disabled=!video?.enabled;
   const audio=info?.choices?.audio?.[$('audioFormat').value];$('audioQuality').replaceChildren();
   for(const q of audio?.qualities || ['best'])$('audioQuality').add(new Option(q==='best'?'最佳':`${q} kbps`,q));$('audioQuality').value=availableQuality(preferences.audioQuality,[...$('audioQuality').options].map(o=>o.value),'best');$('audioQuality').disabled=!audio?.enabled||(audio?.qualities?.length || 0)<2;
@@ -211,7 +211,7 @@ async function refresh(force=false,explicitMedia=false,scrollToMedia=false,expec
   catch(e){if(token===revision){sourcePhase='failed';sourceState(e.code==='SOURCE_CHANGED'?'影片已變更，請重新選取':'未取得影片資訊',e.message);}return;}
   if(token!==revision)return;
   page=nextPage;mediaIndex=page.mediaIndex || 0;sourcePhase=page.videos?.length?'inspecting':'ready';sourceState('','');
-  $('mediaSelect').replaceChildren();for(const [i,v] of (page.videos || []).entries()){const title=v.title || `影片 ${i+1}`,option=new Option(mediaTitleLabel(title),String(i));option.title=title;$('mediaSelect').add(option);}$('mediaSelect').value=String(mediaIndex);$('mediaSelect').title=page.videos?.[mediaIndex]?.title || page.title;mediaMenu.render();
+  $('mediaSelect').replaceChildren();for(const {index,title} of orderedMediaOptions(page.videos)){const option=new Option(mediaTitleLabel(title),String(index));option.title=title;$('mediaSelect').add(option);}$('mediaSelect').value=String(mediaIndex);$('mediaSelect').title=page.videos?.[mediaIndex]?.title || page.title;mediaMenu.render();
   if(page.selectionExpired){sourcePhase='failed';const placeholder=new Option('原選取已變更，請重新選取','');placeholder.disabled=true;$('mediaSelect').add(placeholder);$('mediaSelect').value='';sourceState('請重新選取影片','原選取的影片已離開畫面或來源更新，請重新指定');return;}
   if(!page.videos?.length){addTracks();if(!tracks.length)sourceState('未取得影片資訊','此分頁沒有可用媒體來源');return;}
   const target=page.videos[mediaIndex];if(!target?.routeOnly&&target?.mediaKey!=null&&target.documentId)await highlightSelected(target,scrollToMedia);

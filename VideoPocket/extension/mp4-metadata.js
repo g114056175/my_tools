@@ -60,6 +60,8 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
   let hasVideoTrack = false;
   let hasAudioTrack = false;
   let completeTracks = true;
+  const indexedTracks=[];
+  let fragmented=false;
   const walk = async (start, end, depth, path = [], track = null) => {
     if (depth > MAX_DEPTH) return false;
     let offset = start;
@@ -68,6 +70,19 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
       const current = await box(offset);
       if (!current || current.end > end) return false;
       const nextPath = [...path, current.type];
+      if(current.type==='mvex')fragmented=true;
+      if(track&&path.at(-1)==='stbl'&&['stts','stsc','stco','co64','stsz'].includes(current.type)){
+        // Inspect table headers only. Actual sample planning belongs to the
+        // downloader's demuxer; never expand millions of samples during discovery.
+        const bytes=await read(current.payload,Math.min(12,current.size-current.header));
+        if(bytes.length>=8&&bytes[0]===0){
+          const type=current.type,constant=type==='stsz'&&bytes.length>=12?u32(bytes.subarray(4,8)):0;
+          const count=type==='stsz'&&bytes.length>=12?u32(bytes.subarray(8,12)):u32(bytes.subarray(4,8));
+          const stride=type==='stts'||type==='co64'?8:type==='stsc'?12:4;
+          const expected=(type==='stsz'?12:8)+(constant?0:count*stride);
+          if(count>0&&expected===current.size-current.header)track.tables.add(type);
+        }
+      }
       if (current.type === 'stsd' && nextPath.includes('stbl')) {
         if (!(await sampleEntries(current))) return false;
         if (track) track.hasSampleEntries = true;
@@ -80,11 +95,12 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
         track.hasHandler = true;
       }
       if (current.type === 'trak') {
-        const child = { handler: '', hasHandler: false, hasSampleEntries: false };
+        const child = { handler: '', hasHandler: false, hasSampleEntries: false, tables:new Set() };
         if (!(await walk(current.payload, current.end, depth + 1, nextPath, child))) return false;
         if (!child.hasHandler || !child.hasSampleEntries) completeTracks = false;
         if (child.handler === 'vide') hasVideoTrack = true;
         if (child.handler === 'soun') hasAudioTrack = true;
+        if(['vide','soun'].includes(child.handler))indexedTracks.push(child);
       } else if (['moov', 'mdia', 'minf', 'stbl'].includes(current.type)) {
         if (!(await walk(current.payload, current.end, depth + 1, nextPath, track))) return false;
       }
@@ -134,6 +150,10 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
     if (current.type === 'moov') {
       moovComplete = await walk(current.payload, current.end, 1, ['moov']);
       if (moovComplete && completeTracks && hasVideoTrack && !hasAudioTrack) result.audioAbsent = true;
+      if(moovComplete&&completeTracks&&!fragmented&&!result.drm&&indexedTracks.length&&indexedTracks.every(t=>
+        ['stts','stsc','stsz'].every(k=>t.tables.has(k))&&(t.tables.has('stco')||t.tables.has('co64')))){
+        result.mp4Index={video:hasVideoTrack?{duration:result.duration||0}:null,audio:hasAudioTrack?{duration:result.duration||0}:null};
+      }
       return result;
     }
     offset = current.end;

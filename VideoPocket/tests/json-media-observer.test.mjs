@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import {observeJsonMetadata} from '../extension/json-media-observer.js';
+import {extractXMediaModels} from '../extension/x-media.js';
 
 const text=JSON.stringify({id:'post',video_url:'https://cdn.example/main.mp4'});
 
@@ -40,10 +41,93 @@ test('metadata observation is bounded and counters show size or rate rejection',
   for(let i=0;i<4;i++)target.JSON.parse(text);
   assert.equal(values.length,2);assert.equal(observer.stats().throttled,2);
   now+=1000;target.JSON.parse(text);assert.equal(values.length,3);
+  now+=1000;
   target.JSON.parse(JSON.stringify({video_url:'x'.repeat(1024*1024)}));
   assert.equal(observer.stats().oversized,1);
+  now+=1000;
   target.JSON.parse(JSON.stringify({video_url:'x'.repeat(512*1024+1)}));
   assert.equal(observer.stats().oversized,2);
+ }finally{observer.dispose();}
+});
+
+test('large JSON keeps a bounded media subtree beside unrelated feed data',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const payload={data:{media:{video_url:'https://cdn.example/selected.m3u8',duration:12}},noise:'x'.repeat(2*1024*1024)};
+  const result=target.JSON.parse(JSON.stringify(payload));
+  assert.equal(result.noise.length,2*1024*1024);
+  assert.equal(values.length,1);
+  assert.equal(values[0].data.media.video_url,'https://cdn.example/selected.m3u8');
+  assert.equal(values[0].noise,undefined);
+ }finally{observer.dispose();}
+});
+
+test('large nested containers skip huge siblings and preserve media schema',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const payload={data:{hugeText:'x'.repeat(2*1024*1024),before:Array.from({length:500},()=>({noise:'y'.repeat(100)})),media:{video_info:{variants:[{url:'https://cdn.example/chosen.m3u8',content_type:'application/x-mpegURL'}]}}}};
+  target.JSON.parse(JSON.stringify(payload));
+  assert.equal(values.length,1);
+  assert.equal(values[0].data.media.video_info.variants[0].url,'https://cdn.example/chosen.m3u8');
+  assert.equal(values[0].data.hugeText,undefined);
+  assert.equal(values[0].data.before,undefined);
+ }finally{observer.dispose();}
+});
+
+test('large X broadcast payload preserves broadcast and nested tweet-card identities',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const data={tweet_result:{result:{rest_id:'2112242739198959913',legacy:{card:{legacy:{binding_values:[
+   {key:'broadcast_id',value:{string_value:'1RKZzBELBbXKB'}},
+   {key:'broadcast_url',value:{string_value:'https://x.com/i/broadcasts/1RKZzBELBbXKB'}},
+   {key:'broadcast_media_key',value:{string_value:'28_123456789'}},
+  ]}}}}}};
+  for(let i=0;i<30000;i++)data[`unrelated_${i}`]='x';
+  target.JSON.parse(JSON.stringify({data}));
+  assert.equal(values.length,1);
+  const [model]=extractXMediaModels(values[0]);
+  assert.equal(model.broadcastId,'1RKZzBELBbXKB');
+  assert.ok(model.aliases.includes('2112242739198959913'));
+  assert.ok(model.aliases.includes('28_123456789'));
+ }finally{observer.dispose();}
+});
+
+test('media remains observable when an unrelated huge array or field comes first',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const first=target.JSON.parse(JSON.stringify({noise:Array(200000).fill(0),video:{id:'v1',video_url:'https://cdn.example/v1.mp4'}}));
+  assert.equal(first.video.video_url,'https://cdn.example/v1.mp4');
+  assert.equal(values.at(-1).video.video_url,'https://cdn.example/v1.mp4');
+  target.JSON.parse(JSON.stringify({source:'x'.repeat(600000),video:{video_url:'https://cdn.example/v2.mp4'}}));
+  assert.equal(values.at(-1).video.video_url,'https://cdn.example/v2.mp4');
+  assert.equal(values.at(-1).source,undefined);
+ }finally{observer.dispose();}
+});
+
+test('bounded array sampling keeps media after a huge metadata list',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const payload={data:{items:Array.from({length:300000},()=>({noise:'x'})),video:{video_url:'https://cdn.example/after-list.mp4'}}};
+  target.JSON.parse(JSON.stringify(payload));
+  assert.equal(values.length,1);
+  assert.equal(values[0].data.video.video_url,'https://cdn.example/after-list.mp4');
+ }finally{observer.dispose();}
+});
+
+test('large JSON probes unfamiliar deep containers and arrays within the depth budget',()=>{
+ const target={JSON:{parse:JSON.parse}},values=[];
+ const observer=observeJsonMetadata(target,value=>values.push(value));
+ try{
+  const payload={outer:{opaque:{branch:{entries:[{streamUrl:'https://cdn.example/deep.mp4'}]}}},noise:'z'.repeat(2*1024*1024)};
+  target.JSON.parse(JSON.stringify(payload));
+  assert.equal(values.length,1);
+  assert.equal(values[0].outer.opaque.branch.entries[0].streamUrl,'https://cdn.example/deep.mp4');
+  assert.equal(values[0].noise,undefined);
  }finally{observer.dispose();}
 });
 

@@ -80,6 +80,28 @@ test('does not certify silent video from an incomplete declared sample-entry cou
  const result=await readMp4Metadata(reader(bytes),bytes,bytes.length);assert.equal(result.audioAbsent,undefined);
 });
 
+const indexedTrack=(kind='vide',malformed=false)=>box('trak',box('mdia',concat(hdlr(kind),box('minf',box('stbl',concat(
+ stsd(sample(kind==='vide'?'avc1':'mp4a')),
+ box('stts',concat(u32(0),u32(1),u32(10000000),u32(1))),
+ box('stsc',concat(u32(0),u32(1),u32(1),u32(10000000),u32(1))),
+ box('stco',concat(u32(0),u32(1),u32(100))),
+ box('stsz',concat(u32(0),u32(1),u32(malformed?0:10000000)))
+))))));
+
+test('sample-index capability reads compact headers without expanding millions of samples',async()=>{
+ const bytes=concat(box('ftyp',ascii('isom')),box('mdat',new Uint8Array(400000)),box('moov',concat(indexedTrack(),indexedTrack('soun'))));
+ let fetched=0;const result=await readMp4Metadata(async(o,n)=>{fetched+=n;return bytes.slice(o,o+n);},bytes.slice(0,131072),bytes.length);
+ assert.ok(result.mp4Index?.video);assert.ok(result.mp4Index?.audio);assert.ok(fetched<65537);
+ assert.equal(result.mp4Index.video.samples,undefined);
+});
+
+test('fragmented and empty/malformed sample tables do not advertise ordinary MP4 indexing',async()=>{
+ for(const content of [concat(indexedTrack(),box('mvex')),indexedTrack('vide',true)]){
+  const bytes=box('moov',content),result=await readMp4Metadata(reader(bytes),bytes,bytes.length);
+  assert.equal(result.mp4Index,undefined);
+ }
+});
+
 test('reads AAC from the complete Anime1 MP4 with bounded range reads', { skip: !process.env.MEDIA_LIVE_FILES }, async () => {
   const path = resolve('..', '..', 'work', 'anime1-01112-test.mp4');
   const file = await open(path);

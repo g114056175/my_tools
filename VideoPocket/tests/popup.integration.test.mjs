@@ -224,6 +224,21 @@ test('an explicit subtitle choice stays selected after refresh and media inspect
  }finally{state.snapshotHandler=null;state.inspectHandler=null;}
 });
 
+test('usable captions remain independently available when the video source is absent or refused',async()=>{
+ state.snapshotHandler=()=>({url:'https://player.example.test/watch',title:'Lecture',platform:{site:'embedded'},videos:[{title:'Lecture',mediaKey:123}],tracks:[{language:'zh',name:'中文',source:'native'}]});
+ try{
+  for(const [code,label] of [['SOURCE_UNAVAILABLE','找到影片，但無下載來源'],['HTTP_AUTH','來源拒絕下載']]){
+   state.inspectHandler=async()=>({ok:false,error:'media failed',failure:{code,...(code==='HTTP_AUTH'?{httpStatus:403}:{})}});
+   await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').textContent===label);
+   assert.equal(documentMock.getElementById('videoTab').disabled,true);
+   assert.equal(documentMock.getElementById('subtitleTab').disabled,false);
+   await documentMock.getElementById('subtitleTab').click();
+   assert.equal(documentMock.getElementById('subtitleSection').hidden,false);
+   assert.equal(documentMock.getElementById('loadSubtitle').disabled,false);
+  }
+ }finally{state.snapshotHandler=null;state.inspectHandler=null;}
+});
+
 test('a delayed feed player is rescanned by identity before permalink fallback is attempted',async()=>{
  let release,scans=0;const inspected=[];
  const target={title:'PRIVATE',documentId:'fb-doc',frameId:0,mediaKey:2,mediaIdentity:'post-2',linkedMedia:{url:'https://www.facebook.com/reel/222/',id:'222'}};
@@ -256,6 +271,19 @@ test('switching a virtual feed clears old controls and inspects only the post-sc
   releaseWait({ready:true});await wait(()=>inspected.length===2&&!documentMock.getElementById('downloadSection').hidden);
   assert.equal(inspected[1].platform.id,'B');assert.equal(inspected[1].title,'actual B');assert.equal(documentMock.getElementById('subtitleTab').disabled,true);
  }finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
+});
+
+test('named options move above placeholders while switching retains the original player target',async()=>{
+ const videos=[{title:'影片 1',documentId:'doc',mediaKey:1},{title:'Named lesson',documentId:'doc',mediaKey:2},{title:'影片 3',documentId:'doc',mediaKey:3}];
+ state.snapshotHandler=message=>({url:'https://player.test/watch',documentId:'doc',mediaIndex:message.expectedTarget?2:0,platform:{site:'embedded'},videos,tracks:[]});
+ state.inspectHandler=async()=>({ok:true,result:readyInfo});
+ try{
+  await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);
+  const select=documentMock.getElementById('mediaSelect');
+  assert.deepEqual(select.options.map(option=>option.value),['1','0','2']);assert.equal(select.value,'0');
+  select.value='2';await select.dispatch('change');await wait(()=>state.lastReadiness?.mediaKey===3&&!documentMock.getElementById('download').disabled);
+  assert.equal(state.lastSnapshot.expectedTarget.mediaKey,3);assert.equal(select.value,'2');
+ }finally{state.snapshotHandler=null;state.inspectHandler=null;}
 });
 
 test('a transient Dailymotion refusal performs only one delayed snapshot retry',async()=>{
@@ -313,7 +341,7 @@ test('a duration without range capability hides advanced interval settings',asyn
 
 test('multiple actual heights keep the quality dropdown interactive',async()=>{
  const choices={...readyInfo.choices,video:{auto:{enabled:true,heights:[360,720],extensions:{360:'mp4',720:'mp4'},sizes:{360:{bytes:1},720:{bytes:1}}}}};state.inspectHandler=async()=>({ok:true,result:{...readyInfo,choices}});
- try{await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('height').hidden,false);assert.equal(documentMock.getElementById('heightValue').hidden,true);const height=documentMock.getElementById('height');height.value='720';await height.dispatch('change');assert.equal(documentMock.getElementById('videoFormatValue').textContent,'MP4');}
+ try{await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('height').hidden,false);assert.equal(documentMock.getElementById('heightValue').hidden,true);const height=documentMock.getElementById('height');assert.equal(height.options.find(option=>option.value==='0').textContent,'最佳（720p）');height.value='720';await height.dispatch('change');assert.equal(documentMock.getElementById('videoFormatValue').textContent,'MP4');}
  finally{const height=documentMock.getElementById('height');height.value='0';await height.dispatch('change');state.inspectHandler=null;}
 });
 

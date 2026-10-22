@@ -1,4 +1,9 @@
-importScripts('destinations.js', 'disk-media.js');
-let cancelled=false;onmessage=async({data})=>{if(data.action==='cancel'){cancelled=true;return;}cancelled=false;let access,writer;try{
- const input=await VideoPocketDiskMedia.openSyncMediaFile(data.path);access=input.access;const target=await VideoPocketDestinations.get(data.destinationId);if(!target)throw new Error('儲存位置已失效');writer=await target.createWritable();const size=access.getSize(),chunk=new Uint8Array(4*1024*1024);postMessage({type:'progress',progress:0});for(let at=0;at<size;){if(cancelled)throw new DOMException('已取消','AbortError');const count=access.read(chunk.subarray(0,Math.min(chunk.length,size-at)),{at});if(!count)throw new Error('檔案不完整');await writer.write(chunk.subarray(0,count));at+=count;postMessage({type:'progress',progress:at/size*100});}if(cancelled)throw new DOMException('已取消','AbortError');await writer.close();writer=null;postMessage({type:'done'});
- }catch(error){await writer?.abort().catch(()=>{});postMessage({type:'error',error:error.message,code:error.name==='AbortError'?'CANCELLED':error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':'SAVE_FAILED'});}finally{access?.close();}};
+importScripts('destinations.js','disk-media.js','file-save.js');
+let cancelled=false;
+onmessage=async({data})=>{
+ if(data.action==='cancel'){cancelled=true;return;}cancelled=false;
+ try{
+  const result=await VideoPocketFileSave({path:data.path,destinationId:data.destinationId,cancelled:()=>cancelled,onProgress:progress=>postMessage({type:'progress',progress})});
+  postMessage({type:'done',...result});
+ }catch(error){postMessage({type:'error',error:error.message,code:error.code,saveStage:error.saveStage,saveReason:error.saveReason});}
+};

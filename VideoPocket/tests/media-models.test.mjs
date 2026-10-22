@@ -5,6 +5,41 @@ import {
   extractMediaModels,
 } from "../extension/media-models.js";
 
+test('model size limits prioritize distinct high qualities over repeated low-quality backups',()=>{
+ const low=Array.from({length:40},(_,i)=>({url:`https://cdn.test/360-${i}.mp4`,height:360}));
+ const [model]=extractMediaModels({id:'quality-test',video_versions:[...low,{url:'https://cdn.test/1080.mp4',height:1080}]});
+ assert.equal(model.versions.length,32);assert.equal(model.versions[0].height,360);assert.equal(model.versions[1].height,1080);
+});
+
+test('X GraphQL quoted media matches its player ID and cannot borrow the outer tweet source',()=>{
+ const item=(id,url)=>({id_str:id,type:'video',video_info:{duration_millis:33000,variants:[{content_type:'video/mp4',url}]}});
+ const outer=item('outer-media','https://video.test/outer.mp4'),quoted=item('quoted-media','https://video.test/quoted.mp4');
+ const payload={rest_id:'outer-post',legacy:{extended_entities:{media:[outer]}},quoted_status_result:{result:{rest_id:'quoted-post',legacy:{full_text:'Quoted title',extended_entities:{media:[quoted]}}}}};
+ const store=createMediaModelStore();store.merge(extractMediaModels(payload));
+ const video={__reactProps$test:{videoId:'quoted-media'},currentSrc:'blob:quoted',getAttribute:()=>null,closest:()=>null,querySelectorAll:()=>[]};
+ video.parentElement={__reactProps$test:{videoId:'outer-post',media:outer},querySelectorAll:()=>[video]};
+ const model=store.modelFor(video,'https://x.com/profile');assert.equal(model.id,'quoted-media');assert.equal(model.title,'Quoted title');assert.ok(!model.aliases.includes('outer-post'));assert.equal(model.versions[0].url,'https://video.test/quoted.mp4');
+});
+
+test('X element-owned video_info is parsed before any playback quality switch',()=>{
+ const video={__reactProps$test:{videoId:'media-1',video:{id_str:'media-1',video_info:{duration_millis:10000,variants:[{content_type:'video/mp4',url:'https://video.test/720x1280/main.mp4'}]}}},currentSrc:'blob:initial',getAttribute:()=>null,closest:()=>null,querySelectorAll:()=>[]};
+ const store=createMediaModelStore(),model=store.modelFor(video,'https://x.com/profile');
+ assert.equal(model.id,'media-1');assert.equal(model.versions[0].height,1280);assert.equal(model.duration,10);
+});
+
+test('X completed broadcast metadata and playback response must agree before an owned player gets a source',()=>{
+ const metadata={broadcasts:{'broadcast-1':{id:'broadcast-1',media_key:'28_media1'}}};
+ const response={source:{noRedirectPlaybackUrl:'https://video.test/replay.m3u8'}};
+ const video={__reactProps$test:{broadcastId:'broadcast-1'},currentSrc:'blob:broadcast',getAttribute:()=>null,closest:()=>null,querySelectorAll:()=>[]};
+ const mapping=extractMediaModels(metadata,{baseUrl:'https://x.com/i/api/1.1/broadcasts/show.json?ids=broadcast-1'});
+ const source=extractMediaModels(response,{baseUrl:'https://x.com/i/api/1.1/live_video_stream/status/28_media1'});
+ for(const records of [[mapping,source],[source,mapping]]){
+  const store=createMediaModelStore();store.merge(records[0]);assert.equal(store.modelFor(video,'https://x.com/profile'),null);
+  store.merge(records[1]);const model=store.modelFor(video,'https://x.com/profile');assert.equal(model.manifestUrl,'https://video.test/replay.m3u8');assert.equal(model.bindingOnly,false);
+ }
+ const wrong=createMediaModelStore();wrong.merge(mapping);wrong.merge(extractMediaModels(response,{baseUrl:'https://x.com/i/api/1.1/live_video_stream/status/28_other'}));assert.equal(wrong.modelFor(video,'https://x.com/profile'),null);
+});
+
 test("Facebook delivery legacy fields produce compact ID-bound descriptor", () => {
   const [model] = extractMediaModels(
     {
@@ -218,6 +253,47 @@ test('an unchanged live document repopulates model data after its bounded cache 
   time=106;assert.equal(store.modelFor(video,'https://example/reel/post'),null);
   store.scanDocument(doc,'https://example/reel/post');assert.equal(store.modelFor(video,'https://example/reel/post').id,'post');
  }finally{Date.now=before;}
+});
+
+test('selected X document recovers streamed broadcast identity without spending budget on unrelated scripts',()=>{
+ const store=createMediaModelStore(),url='https://x.com/user/status/2112242739198959913';let taken=0;
+ const streamed=value=>({textContent:'window.stream.push({value:'+JSON.stringify(JSON.stringify(value))+'});throw new Error("must not run");',closest:()=>null});
+ const scripts=[...Array.from({length:40},()=>({textContent:'window.settings={color:"blue"};'})),
+  streamed({data:{tweet_result:{result:{rest_id:'2112242739198959913',card:{legacy:{binding_values:[{key:'broadcast_url',value:{string_value:'https://x.com/i/broadcasts/broadcast-123'}}]}}}}}}),
+  streamed({data:{broadcast_by_rest_id:{broadcast_id:'broadcast-123',media_key:'28_123456789'}}})];
+ const video={closest:()=>null,__reactProps$fixture:{videoId:'123456789'}},document={querySelectorAll:s=>s==='video'?[video]:scripts};video.ownerDocument=document;
+ store.scanDocument(document,url,[video],()=>++taken<=2);assert.equal(taken,2);
+ store.merge(extractMediaModels({source:{noRedirectPlaybackUrl:'https://video.example/replay.m3u8'}},{baseUrl:'https://x.com/i/api/live_video_stream/status/28_123456789'}));
+ const model=store.modelFor(video,url);assert.equal(model?.broadcastId,'broadcast-123');assert.ok(model?.aliases.includes('2112242739198959913'));assert.equal(model?.manifestUrl,'https://video.example/replay.m3u8');
+});
+
+test('selected media script is prioritized within the bounded discovery budget',()=>{
+ const store=createMediaModelStore(),url='https://www.tiktok.com/@creator/video/selected',video={closest:()=>null,getAttribute:key=>key==='data-video-id'?'selected':'',__reactProps$fixture:{videoId:'selected'}};
+ const noise=Array.from({length:8},(_,i)=>({textContent:JSON.stringify({id:`noise-${i}`,video_url:`https://cdn.example/noise-${i}.mp4`}),closest:()=>null}));
+ const selected={textContent:JSON.stringify({id:'selected',video_url:'https://cdn.example/selected.mp4'}),closest:()=>null};
+ const document={querySelectorAll:selector=>selector.startsWith('script')?[...noise,selected]:[video]};video.ownerDocument=document;
+ let taken=0;store.scanDocument(document,url,[video],()=>++taken<=1,video);
+ assert.ok(taken<=2);assert.equal(store.modelFor(video,url)?.id,'selected');
+});
+
+test('document retries progress past cached media scripts while priority reads stay bounded',()=>{
+ const store=createMediaModelStore(),url='https://example.test/feed';let reads=0;
+ const scripts=Array.from({length:70},(_,index)=>({get textContent(){reads++;return JSON.stringify({id:`post-${index}`,video_url:`https://cdn.example/${index}.mp4`});},closest:()=>null}));
+ const video={closest:()=>null,__reactProps$fixture:{videoId:'post-63'}},document={querySelectorAll:s=>s.startsWith('script')?scripts:[video]};video.ownerDocument=document;
+ let count=0;store.scanDocument(document,url,[video],()=>++count<=1,video);
+ assert.equal(reads,64,'priority lookup cannot read every script or reread it from the sort comparator');
+ assert.equal(store.modelFor(video,url)?.id,'post-63');
+ let retry=0;store.scanDocument(document,url,[video],()=>++retry<=1,video);
+ assert.ok(store.models().some(model=>model.id==='post-0'),'cached selected script leaves the next parsing slot available');
+});
+
+test('document priority respects rejected budgets and does not confuse ID prefixes',()=>{
+ const store=createMediaModelStore(),video={closest:()=>null,__reactProps$fixture:{videoId:'abc'}};let reads=0;
+ const scripts=[{id:'other',video_url:'https://cdn.example/abc123.mp4'},{id:'abc',video_url:'https://cdn.example/chosen.mp4'}].map(value=>({get textContent(){reads++;return JSON.stringify(value);},closest:()=>null}));
+ const document={querySelectorAll:s=>s.startsWith('script')?scripts:[video]};video.ownerDocument=document;
+ store.scanDocument(document,'https://example.test/feed',[video],()=>false,video);assert.equal(reads,0);
+ let steps=0;store.scanDocument(document,'https://example.test/feed',[video],()=>++steps<=1,video);
+ assert.equal(store.modelFor(video,'https://example.test/feed')?.id,'abc');
 });
 
 test('Vimeo API play response retains route identity and prefers HLS over JSON DASH',()=>{

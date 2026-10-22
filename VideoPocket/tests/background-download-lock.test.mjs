@@ -1,4 +1,4 @@
-import {attachNetworkSources} from '../extension/network-source.js';
+import {attachNetworkSources,networkFallbackReason,scopeDocumentCandidates,validateOwnedSourcePlan} from '../extension/network-source.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -12,12 +12,14 @@ import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex,co
 import {attachSocialSources} from '../extension/social-source.js';
 import {normalizeRange} from '../extension/media-range.js';
 import {mediaTime} from '../extension/media-time.js';
+import {validateDocumentMediaPlan} from '../extension/document-media.js';
 
-async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null}={}) {
+async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserSaveError}={}) {
   const source=await fs.readFile(new URL('../extension/background.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const stored={};let listener,tabUpdateListener,connectListener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,retainRelease;
-  const sources=new Map(),engineMessages=[];
+  const sources=new Map(),engineMessages=[],browserDownloads=[];let downloadChanged;
+  const browserItem={id:71,state:browserDownloadState};
   const pageSnapshotMock=()=>({});
   const session={
     async get(key){if(key===null)return {...stored};if(typeof key==='string')return {[key]:stored[key]};return Object.fromEntries(key.map(k=>[k,stored[k]]));},
@@ -37,9 +39,10 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
     storage:{session,onChanged:{addListener:()=>{}},local:{remove:async()=>{},get:async()=>({})}},
     offscreen:{createDocument:async()=>{}},
     declarativeNetRequest:{getSessionRules:async()=>[],updateSessionRules:async()=>{}},
-    downloads:{onChanged:{addListener:()=>{}},search:async()=>[],cancel:async()=>{},pause:async()=>{},resume:async()=>{}},
+    downloads:{onChanged:{addListener:fn=>{downloadChanged=fn;}},search:async()=>browserItem.state?[browserItem]:[],cancel:async()=>{},pause:async()=>{},resume:async()=>{},...(browserDownloadState||browserSaveError?{download:async options=>{browserDownloads.push(options);const error=typeof browserSaveError==='function'?browserSaveError(options,browserDownloads.length):browserSaveError;if(error)throw error;return browserItem.id;}}:{})},
     scripting:{executeScript:async request=>{
       if(request.files)return [];
+      if(request.func===validateDocumentMediaPlan||request.func===validateOwnedSourcePlan)return [{documentId:request.target.documentIds[0],result:{valid:metadataValidations.shift()===true}}];
       if(request.func===pageSnapshotMock&&request.target?.documentIds){const value=frameSnapshots.shift();return value?[{frameId:request.target.documentIds[0]==='child'?2:0,documentId:request.target.documentIds[0],result:value}]:[];}
       return frames;
     }},
@@ -49,16 +52,68 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   };
   const context={chrome,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,setInterval:()=>0,
     pageSnapshot:pageSnapshotMock,pageSubtitles:()=>({}),createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
-    ACTIVE_STATES, normalizeRange,mediaTime,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:e=>({...classifyFailure(e),code:e?.code||'INTERNAL_ERROR',message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
+    ACTIVE_STATES, normalizeRange,mediaTime,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,createFilenameRecorder:()=>async()=>{},mediaRequestHeaders:()=>[],
     VideoPocketDestinations:{remove:async()=>{},clear:async()=>{},get:async()=>false},
-    downloadKey,createDownloadClaims,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates}),attachNetworkSources,socialPageFetch:()=>{}};
+    downloadKey,createDownloadClaims,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates}),attachNetworkSources,networkFallbackReason,socialPageFetch:()=>{}};
   vm.runInNewContext(code,context,{filename:'background.js'});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(typeof listener,'function');
   const call=(message,sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:'popup-doc'})=>new Promise((resolve,reject)=>listener(message,sender,response=>response?.ok?resolve(response.result):reject(Object.assign(new Error(response?.error||'failed'),response?.failure||{}))));
-  return {connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
+  return {connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,browserDownloads,async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
 }
+
+test('browser save recovery keeps the finished blob alive until Chrome completes without restarting transfer',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'blob:completed-media',filename:'clip.mp4',blobId:'completed',saveFailure:{code:'SAVE_FAILED',saveStage:'open-target',saveReason:'permission'}},browserDownloadState:'in_progress'});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.browserDownloads.length;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.browserDownloads.length,1);assert.equal(rt.browserDownloads[0].url,'blob:completed-media');assert.equal(rt.browserDownloads[0].saveAs,true);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='release').length,0);
+ await new Promise(resolve=>setImmediate(resolve));await rt.completeDownload();
+ for(let i=0;i<100&&!rt.engineMessages.some(message=>message.action==='release');i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='release'&&message.blobId==='completed').length,1);
+ assert.equal(rt.stored.lastError,undefined);assert.ok(rt.jobs().every(job=>!ACTIVE_STATES.has(job.state)));
+});
+
+test('a cancelled browser save releases the finished file without restarting or reporting E06',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'blob:completed-media',filename:'clip.mp4',blobId:'completed'},browserSaveError:new Error('USER_CANCELED')});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.engineMessages.some(message=>message.action==='release');i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);assert.equal(rt.engineMessages.filter(message=>message.action==='release').length,1);
+ assert.equal(rt.stored.lastError,undefined);
+});
+
+test('an invalid native filename retries only the completed blob with a conservative name',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'blob:completed-media',filename:'COOKED_ Ep. 1 🧑‍🍳.mp4',blobId:'completed'},browserDownloadState:'complete',browserSaveError:(_,attempt)=>attempt===1?new Error('Invalid filename'):null});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.engineMessages.some(message=>message.action==='release');i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.browserDownloads.length,2);assert.equal(rt.browserDownloads[1].filename,'VideoPocket.mp4');assert.ok(rt.browserDownloads.every(item=>item.url==='blob:completed-media'));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);assert.equal(rt.stored.lastError,undefined);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='release').length,1);
+});
+
+test('native save refusal does not repeatedly retry and retains a bounded start failure',async()=>{
+ for(const [error,count,reason] of [['Invalid filename',2,'invalid-filename'],['FILE_ACCESS_DENIED',1,'permission']]){
+  const rt=await loadBackground({downloadResult:{url:'blob:completed-media',filename:'clip.mp4',blobId:'completed'},browserSaveError:new Error(error)});
+  const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+  await rt.call({action:'download',sourceId:source.id,kind:'video'});
+  for(let i=0;i<100&&!rt.engineMessages.some(message=>message.action==='release');i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(rt.browserDownloads.length,count);assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+  assert.equal(rt.stored.lastError.saveStage,'browser-start');assert.equal(rt.stored.lastError.saveReason,reason);
+ }
+});
+
+test('background retains safe native-save failure details across popup reopen',async()=>{
+ const rt=await loadBackground({downloadFailure:{code:'SAVE_FAILED',saveStage:'read-temp',saveReason:'unreadable',message:'C:/private/SECRET.mp4'}});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
+ const failure=await rt.call({action:'lastError'});assert.equal(failure.code,'SAVE_FAILED');assert.equal(failure.saveStage,'read-temp');assert.equal(failure.saveReason,'unreadable');assert.doesNotMatch(JSON.stringify(failure),/SECRET|private/);
+});
 
 test('background rejects invalid and unsupported ranges before reserving a job',async()=>{
  const rt=await loadBackground({inspectionInfo:{duration:10,range:{supported:false}}});
@@ -66,6 +121,30 @@ test('background rejects invalid and unsupported ranges before reserving a job',
  await assert.rejects(rt.call({action:'download',sourceId:source.id,range:{start:2,end:11}}),{code:'RANGE_INVALID'});
  await assert.rejects(rt.call({action:'download',sourceId:source.id,range:{start:2,end:3}}),{code:'RANGE_UNSUPPORTED'});
  assert.equal(rt.retainCount,0);assert.equal(rt.jobs().length,0);
+});
+
+test('metadata candidates are checked against their originating document before and after inspection',async()=>{
+ const descriptor={tabId:7,documentId:'private-doc',mediaKey:4,title:'Lesson',platform:{site:'metadata-media',validationToken:'opaque-proof',versions:[{url:'https://cdn.test/lesson.mp4',kind:'progressive'}]}};
+ const stale=await loadBackground({metadataValidations:[false]});
+ await assert.rejects(stale.call({action:'inspect',descriptor}),{code:'SOURCE_CHANGED'});
+ assert.equal(stale.engineMessages.filter(message=>message.action==='inspect').length,0);
+ const changed=await loadBackground({metadataValidations:[true,false]});
+ await assert.rejects(changed.call({action:'inspect',descriptor}),{code:'SOURCE_CHANGED'});
+ assert.equal(changed.engineMessages.filter(message=>message.action==='inspect').length,1);
+ assert.equal(changed.engineMessages.filter(message=>message.action==='forget').length,1,'discard the newly inspected stale source');
+ const stable=await loadBackground({metadataValidations:[true,true]});
+ assert.ok((await stable.call({action:'inspect',descriptor})).id);
+});
+test('selected-player alternatives are revalidated even when another player is on the page',async()=>{
+ const descriptor={tabId:7,documentId:'doc',mediaKey:4,platform:{site:'network-media',binding:'player-owned',bindingSource:'blob:current',expectedDuration:20,versions:[{url:'https://cdn.test/current.mp4',kind:'progressive'}]}};
+ const stale=await loadBackground({metadataValidations:[false]});
+ await assert.rejects(stale.call({action:'inspect',descriptor}),{code:'SOURCE_CHANGED'});
+ assert.equal(stale.engineMessages.filter(m=>m.action==='inspect').length,0);
+ const changed=await loadBackground({metadataValidations:[true,false]});
+ await assert.rejects(changed.call({action:'inspect',descriptor}),{code:'SOURCE_CHANGED'});
+ assert.equal(changed.engineMessages.filter(m=>m.action==='forget').length,1);
+ const stable=await loadBackground({metadataValidations:[true,true]});
+ assert.ok((await stable.call({action:'inspect',descriptor})).id);
 });
 test('background forwards only validated interval seconds to the engine',async()=>{
  const rt=await loadBackground({inspectionInfo:{duration:10,range:{supported:true}}});
@@ -236,6 +315,20 @@ test('expected snapshot target rejects an old index after the document replaces 
  await assert.rejects(rt.call({action:'snapshot',tabId:7,mediaIndex:0,preferPicked:false,expectedTarget:{frameId:2,documentId:'child',mediaKey:9,mediaIdentity:'post-old'}}),{code:'SOURCE_CHANGED'});
 });
 
+test('expected target can recover its deep-only identity but rejects changed or missing identity',async()=>{
+ const url='https://example.test/feed';
+ for(const resolvedId of ['model-1','model-2','']){
+  const video={mediaKey:9,url:'blob:same'},frames=[{frameId:0,documentId:'top',result:{url,videos:[],tracks:[]}},{frameId:2,documentId:'child',result:{url,discoveryMode:'summary',videos:[video],media:video,tracks:[]}}];
+  const selected={...video,...(resolvedId?{mediaContentId:resolvedId}:{})};
+  const fresh={url,videos:[selected],media:selected,tracks:[]};
+  const rt=await loadBackground({frames,frameSnapshots:[fresh]});
+  const request={action:'snapshot',tabId:7,preferPicked:false,expectedTarget:{frameId:2,documentId:'child',mediaKey:9,url:'blob:same',mediaContentId:'model-1'}};
+  if(resolvedId==='model-1'){
+   const result=await rt.call(request);assert.equal(result.selectionExpired,false);assert.equal(result.videos[0].mediaContentId,'model-1');
+  }else await assert.rejects(rt.call(request),{code:'SOURCE_CHANGED'});
+ }
+});
+
 test('background inspect sources atomically deduplicates same media and releases after cancel',async()=>{
   const rt=await loadBackground(),descriptor={tabId:7,documentId:'doc',frameId:0,mediaKey:22,url:'https://cdn/video',title:'Episode'};
   const [one,two]=await Promise.all([rt.call({action:'inspect',descriptor}),rt.call({action:'inspect',descriptor})]);
@@ -270,6 +363,20 @@ test('active reuse requires the Dailymotion ID and document identity to match',a
   await rt.call({action:'inspect',descriptor:{...base,platform:{site:'dailymotion',id:'other-video'}}});
   await rt.call({action:'inspect',descriptor:{...base,documentId:'new-frame'}});
   assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,before+2);
+  await rt.call({action:'cancel',id:job.id});
+});
+
+test('a recycled metadata player cannot reuse an active download for its previous blob or JSON',async()=>{
+  const rt=await loadBackground({metadataValidations:[true,true,true,true,true,false]});
+  const descriptor={tabId:7,documentId:'doc',frameId:0,mediaKey:1,platform:{site:'metadata-media',validationToken:'proof-a',bindingKey:'binding-a',versions:[{url:'https://cdn.test/a.mp4'}]}};
+  const first=await rt.call({action:'inspect',descriptor});
+  const job=await rt.call({action:'prepareDownload',sourceId:first.id,kind:'video'});
+  const reopened=await rt.call({action:'inspect',descriptor:{...descriptor,platform:{...descriptor.platform,validationToken:'new-proof-a'}}});
+  assert.equal(reopened.id,first.id);
+  const second=await rt.call({action:'inspect',descriptor:{...descriptor,platform:{...descriptor.platform,validationToken:'proof-b',bindingKey:'binding-b',versions:[{url:'https://cdn.test/b.mp4'}]}}});
+  assert.notEqual(second.id,first.id);assert.notEqual(second.downloadKey,first.downloadKey);
+  await assert.rejects(rt.call({action:'inspect',descriptor}),{code:'SOURCE_CHANGED'});
+  assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,2);
   await rt.call({action:'cancel',id:job.id});
 });
 

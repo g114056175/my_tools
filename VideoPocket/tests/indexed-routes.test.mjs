@@ -50,20 +50,24 @@ test('honours cancellation and disposes late loser results', async () => {
   assert.deepEqual(disposed.sort(), ['a-late', 'b-late']);
 });
 
-test('limits concurrent hedges and disposes a late loser after a winner', async () => {
+test('limits concurrent hedges and disposes a late loser after a winner', {timeout:3000}, async () => {
   let active = 0, maxActive = 0;
-  const disposed = [];
+  const disposed = [],complete=new Map();let thirdStarted;
+  const started=new Promise(resolve=>{thirdStarted=resolve;});
   const routes = createIndexedRoutes(['a', 'b', 'c', 'd'], { hedgeDelayMs: 10, maxHedges: 2, dispose: value => disposed.push(value) });
-  const result = await routes.run((url, signal) => new Promise((resolve, reject) => {
+  const pending = routes.run((url, signal) => new Promise(resolve => {
     active++; maxActive = Math.max(maxActive, active);
-    const done = () => { active--; };
+    let finished=false;const done = () => { if(!finished){finished=true;active--;} };
     signal.addEventListener('abort', done, { once: true });
-    if (url === 'c') return setTimeout(() => { done(); resolve('winner'); }, 20);
-    setTimeout(() => { done(); resolve(url); }, 100);
+    complete.set(url,value=>{done();resolve(value);});
+    if(url==='c')thirdStarted();
   }));
+  // Control completion explicitly: scheduler load must not decide the winner.
+  await started;assert.equal(active,3);assert.equal(complete.has('d'),false);
+  complete.get('c')('winner');const result=await pending;
   assert.equal(result.url, 'c');
   assert.equal(maxActive, 3);
-  await wait(110);
+  complete.get('a')('a');complete.get('b')('b');await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(disposed.sort(), ['a', 'b']);
 });
 

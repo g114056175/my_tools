@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const destinationSource = readFileSync(new URL('../extension/destinations.js', import.meta.url), 'utf8');
 const diskSource = readFileSync(new URL('../extension/disk-media.js', import.meta.url), 'utf8');
 const saveSource = readFileSync(new URL('../extension/save-worker.js', import.meta.url), 'utf8');
+const fileSaveSource = readFileSync(new URL('../extension/file-save.js', import.meta.url), 'utf8');
 
 function loadDestinations({ failures = 0, syncFailures = 0 } = {}) {
   let opens = 0;
@@ -52,25 +53,27 @@ test('production destinations module retries after a synchronous IndexedDB open 
   assert.equal(loaded.opens, 2);
 });
 
-function loadSaveWorker({ content = Uint8Array.from([1, 2, 3]), delayedWrite = false } = {}) {
+function loadSaveWorker({ content = Uint8Array.from([1, 2, 3]), delayedWrite = false, failureStage, failureName='NotAllowedError', readFailure=false } = {}) {
   let resolveWrite;
   const messages = [];
   let closed = false;
-  const access = { getSize: () => content.length, read(target, { at }) { const value = content.subarray(at, at + target.length); target.set(value); return value.length; }, close: () => { closed = true; } };
+  const access = { getSize: () => content.length, read(target, { at }) { if(readFailure)return 0;const value = content.subarray(at, at + target.length); target.set(value); return value.length; }, close: () => { closed = true; } };
   const file = { createSyncAccessHandle: async () => access };
   const directories = new Map([['video-pocket', new Map([['scope', new Map([['input.part', file]])]])]]);
   const root = { async getDirectoryHandle(name) { const value = directories.get(name); if (!value) throw new Error('missing directory'); return { async getDirectoryHandle(child) { const files = value.get(child); if (!files) throw new Error('missing scope'); return { async getFileHandle(name) { const handle = files.get(name); if (!handle) throw new Error('missing file'); return handle; } }; } }; } };
   const writes = [];
-  const writer = { async write(value) { writes.push(new Uint8Array(value)); if (delayedWrite) await new Promise(resolve => { resolveWrite = resolve; }); }, async close() { closed = true; }, async abort() { closed = true; } };
+  const fail=stage=>{if(failureStage===stage)throw new DOMException('/private/path?token=SECRET',failureName);};
+  let aborted=false;
+  const writer = { async write(value) { fail('write-target');writes.push(new Uint8Array(value)); if (delayedWrite) await new Promise(resolve => { resolveWrite = resolve; }); }, async close() { fail('close-target');closed = true; }, async abort() { aborted=true;closed = true; } };
   const context = {
     navigator: { storage: { getDirectory: async () => root } },
-    VideoPocketDestinations: { get: async () => ({ createWritable: async () => writer }) },
+    VideoPocketDestinations: { get: async () => {fail('get-target');return { createWritable: async () => {fail('open-target');return writer;} };} },
     postMessage: message => messages.push(message),
     DOMException,
-    importScripts(...names) { for (const name of names) if (name === 'disk-media.js') vm.runInNewContext(diskSource, context, { filename: name }); },
+    importScripts(...names) { for (const name of names) if (name === 'disk-media.js'||name==='file-save.js') vm.runInNewContext(name==='disk-media.js'?diskSource:fileSaveSource, context, { filename: name }); },
   };
   vm.runInNewContext(saveSource, context, { filename: 'save-worker.js' });
-  return { context, messages, writes, access, get closed() { return closed; }, releaseWrite: () => resolveWrite?.() };
+  return { context, messages, writes, access, get closed() { return closed; },get aborted(){return aborted;}, releaseWrite: () => resolveWrite?.() };
 }
 
 test('production save worker rejects an untrusted OPFS path and cleans a normal save', async () => {
@@ -92,4 +95,32 @@ test('production save worker cancellation aborts the writer and closes the OPFS 
   await pending;
   assert.equal(loaded.messages.at(-1).code, 'CANCELLED');
   assert.equal(loaded.closed, true);
+});
+
+test('target open, write and close failures preserve the completed input for browser saving',async()=>{
+ for(const failureStage of ['get-target','open-target','write-target','close-target']){
+  const loaded=loadSaveWorker({failureStage});
+  await loaded.context.onmessage({data:{path:'video-pocket/scope/input.part',destinationId:'dest'}});
+  const result=loaded.messages.at(-1);assert.equal(result.type,'done');assert.equal(result.saved,false);assert.equal(result.saveFailure.code,'SAVE_FAILED');assert.equal(result.saveFailure.saveStage,failureStage);assert.equal(result.saveFailure.saveReason,'permission');assert.ok(loaded.closed);
+  assert.equal(loaded.aborted,['write-target','close-target'].includes(failureStage));assert.ok(!JSON.stringify(result).includes('SECRET'));
+ }
+});
+
+test('a writer AbortError without user cancellation falls back instead of silently cancelling',async()=>{
+ const loaded=loadSaveWorker({failureStage:'close-target',failureName:'AbortError'});
+ await loaded.context.onmessage({data:{path:'video-pocket/scope/input.part',destinationId:'dest'}});
+ const result=loaded.messages.at(-1);assert.equal(result.saved,false);assert.equal(result.saveFailure.saveReason,'aborted');assert.ok(loaded.aborted);
+});
+
+test('empty or truncated input never becomes a successful browser fallback',async()=>{
+ for(const options of [{content:new Uint8Array()},{readFailure:true}]){
+  const loaded=loadSaveWorker(options);await loaded.context.onmessage({data:{path:'video-pocket/scope/input.part',destinationId:'dest'}});
+  const result=loaded.messages.at(-1);assert.equal(result.type,'error');assert.equal(result.code,'INCOMPLETE_MEDIA');assert.equal(result.saveStage,'read-temp');
+ }
+});
+
+test('destination quota failure does not get mislabeled as full temporary storage',async()=>{
+ const loaded=loadSaveWorker({failureStage:'write-target',failureName:'QuotaExceededError'});
+ await loaded.context.onmessage({data:{path:'video-pocket/scope/input.part',destinationId:'dest'}});
+ const result=loaded.messages.at(-1);assert.equal(result.saved,false);assert.equal(result.saveFailure.saveReason,'disk-full');assert.equal(result.saveFailure.code,'SAVE_FAILED');
 });

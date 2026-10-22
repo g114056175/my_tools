@@ -27,3 +27,18 @@ test('the shipped worker forwards a safe cause on a nonzero FFmpeg exit',async()
  await context.onmessage({data:{inputs:[{name:'video.mp4',file:{name:'video.mp4'}}],output:'output.mp4',args:['-i','input:video.mp4','-c','copy','output.mp4']}});
  const error=messages.find(message=>message.type==='error');assert.equal(error.errorCode,'MERGE_FAILED');assert.equal(error.processingReason,'invalid-input');assert.equal(error.ffmpegExitCode,1);assert.ok(!JSON.stringify(messages).includes('SECRET'));
 });
+
+test('FFmpeg seals its disk output before opening a target and preserves it for browser fallback',async()=>{
+ const worker=await fs.readFile(new URL('../extension/ffmpeg-worker.js',import.meta.url),'utf8');
+ for(const saved of [true,false]){
+  const messages=[];let sealed=false,aborted=false;
+  const context={URL,btoa:text=>Buffer.from(text).toString('base64'),location:{href:'https://extension.test/ffmpeg-worker.js'},importScripts(){},postMessage:message=>messages.push(message),
+   VideoPocketDiskMedia:{createSyncMediaFile:async()=>({access:{},finish(){sealed=true;return {path:'completed.mp4',size:8};},abort(){aborted=true;}})},
+   VideoPocketOutputFS:()=>({}),VideoPocketFileSave:async data=>{assert.ok(sealed);assert.equal(messages.at(-1).type,'readyToSave');assert.equal(data.path,'completed.mp4');return saved?{saved:true}:{saved:false,saveFailure:{code:'SAVE_FAILED',saveStage:'open-target',saveReason:'permission'}};},
+   createFFmpegCore:async()=>({FS:{filesystems:{WORKERFS:{}},mkdir(){},mount(){},unmount(){}},setLogger(){},setProgress(){},reset(){},exec(){return 0;}})};
+  context.self=context;vm.createContext(context);vm.runInContext(source,context);vm.runInContext(worker,context);
+  await context.onmessage({data:{inputs:[{name:'video.mp4',file:{name:'video.mp4'}}],destinationId:'target',output:'output.mp4',args:['-i','input:video.mp4','-c','copy','output.mp4']}});
+  assert.equal(aborted,false);assert.equal(messages.at(-1).type,'done');assert.equal(messages.at(-1).saved,saved);assert.equal(messages.at(-1).size,8);
+  if(!saved)assert.equal(messages.at(-1).saveFailure.saveReason,'permission');
+ }
+});

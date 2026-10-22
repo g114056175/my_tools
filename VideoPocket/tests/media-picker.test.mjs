@@ -89,3 +89,29 @@ test('picker never chooses a video hidden behind a login dialog',async()=>{
   assert.equal(prevented,false);state.documentMock.dispatch('keydown',{key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal((await pending).ok,false);
  }finally{state.restore();}
 });
+
+test('picker accepts an SVG inside an owned player button without activating playback',async()=>{
+ const video=new NodeMock('video'),state=world([video]);
+ const wrapper=new NodeMock('div'),button=new NodeMock('button'),icon=new NodeMock('path');
+ wrapper.parentElement=state.documentMock.body;wrapper.contains=node=>node===video||node===button||node===icon;
+ button.parentElement=wrapper;icon.closest=()=>button;
+ state.documentMock.elementsFromPoint=()=>[icon,button,wrapper];
+ try{
+  const pending=startMediaPicker({requestId:'svg-control'});let prevented=false;
+  state.documentMock.dispatch('click',{clientX:20,clientY:20,composedPath:()=>[icon,button,wrapper],preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+  assert.equal((await pending).ok,true);assert.equal(prevented,true);
+ }finally{state.restore();}
+});
+
+test('picker rejects covering card links and unrelated buttons outside the video',async()=>{
+ for(const kind of ['link','unrelated-button']){
+  const video=new NodeMock('video'),state=world([video]),wrapper=new NodeMock('div'),control=new NodeMock(kind==='link'?'a':'button'),icon=new NodeMock('span');
+  wrapper.parentElement=state.documentMock.body;wrapper.contains=node=>node===video||node===control;control.parentElement=wrapper;icon.closest=()=>control;
+  state.documentMock.elementsFromPoint=()=>[icon,control,wrapper];
+  try{
+   const pending=startMediaPicker({requestId:kind});let prevented=false;
+   state.documentMock.dispatch('click',{clientX:kind==='link'?20:500,clientY:20,composedPath:()=>[icon,control,wrapper],preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+   assert.equal(prevented,false);state.documentMock.dispatch('keydown',{key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal((await pending).ok,false);
+  }finally{state.restore();}
+ }
+});

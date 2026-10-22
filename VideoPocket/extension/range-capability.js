@@ -30,6 +30,9 @@ export function formatRangeCapability(format, { maxIndexBytes = RANGE_INDEX_MAX_
     }
     return reasonResult(true, null, 'segments');
   }
+  if ((format.mp4Index?.video || format.mp4Index?.audio) && Number.isSafeInteger(format.filesize) && format.filesize > 0) {
+    return reasonResult(true, null, 'mp4-samples');
+  }
   const index = parseByteRange(format.indexRange);
   if (!index) return reasonResult(false, '影音軌缺少可用區間索引', 'sidx');
   if (!Number.isSafeInteger(maxIndexBytes) || maxIndexBytes <= 0 || index.length > maxIndexBytes) {

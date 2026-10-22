@@ -5,12 +5,18 @@ export function downloadIdentity(descriptor = {}) {
   const site = String(platform.site || '').toLowerCase();
   const identity = site === 'youtube' && platform.id
     ? ['youtube', platform.id]
+    : site === 'twitch-clip' && platform.slug
+      ? ['twitch-clip', String(platform.slug)]
     : ['instagram','twitch','embedded'].includes(site) && platform.id
       ? [site, String(platform.id)]
     : site === 'dailymotion' && platform.id
       ? ['dailymotion', String(platform.id), descriptor.tabId ?? '', descriptor.documentId ?? '', descriptor.frameId ?? '']
     : site === 'bilibili' && (platform.bvid || platform.cid)
       ? ['bilibili', platform.bvid || '', Number(platform.cid) || 0, Number(platform.page) || 1]
+    : site === 'metadata-media' && platform.bindingKey
+      ? ['metadata-media', platform.bindingKey, descriptor.mediaKey ?? '', descriptor.frameId ?? '']
+    : site === 'network-media' && platform.binding === 'player-owned'
+      ? ['player-owned', platform.bindingSource || '', stableHash(platform.versions || []), descriptor.mediaKey ?? '', descriptor.frameId ?? '']
     : descriptor.linkedMedia?.id
       ? ['linked-media', String(descriptor.linkedMedia.id), descriptor.frameId ?? '']
       : [

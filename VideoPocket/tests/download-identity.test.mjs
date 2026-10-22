@@ -11,6 +11,13 @@ import {downloadLocked} from '../extension/jobs.js';
 
 const base={tabId:4,documentId:'doc-a',frameId:0,localMediaIndex:1,mediaKey:9,platform:{site:'youtube',id:'yt-1'}};
 
+test('owned-source fallback cannot reuse an active download after the player is recycled',()=>{
+ const d={...base,platform:{site:'network-media',binding:'player-owned',bindingSource:'blob:first',versions:[{url:'https://cdn/first.mp4',kind:'progressive'}]}};
+ assert.equal(downloadIdentity(d),downloadIdentity({...d,title:'Renamed'}));
+ assert.notEqual(downloadIdentity(d),downloadIdentity({...d,platform:{...d.platform,bindingSource:'blob:second'}}));
+ assert.notEqual(downloadIdentity(d),downloadIdentity({...d,platform:{...d.platform,versions:[{url:'https://cdn/second.mp4',kind:'progressive'}]}}));
+});
+
 test('same page media keeps identity across inspect ids, quality, and URL refresh',()=>{
   const one=downloadIdentity({...base,url:'https://cdn/a',height:360});
   const two=downloadIdentity({...base,url:'https://cdn/b',height:1080});
@@ -39,6 +46,12 @@ test('Instagram and Twitch SPA routes separate posts but retain locks across tok
     assert.equal(downloadIdentity(descriptor),downloadIdentity({...descriptor,url:'https://cdn/new-token',mediaKey:99}));
     assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,platform:{site,id:'post-2'}}));
   }
+});
+
+test('a reused Twitch Clip element separates slugs while refreshed signatures keep the same download lock',()=>{
+ const descriptor={...base,platform:{site:'twitch-clip',slug:'FirstClip'}};
+ assert.equal(downloadIdentity(descriptor),downloadIdentity({...descriptor,mediaKey:99,url:'https://cdn/clip.mp4?token=new'}));
+ assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,platform:{site:'twitch-clip',slug:'SecondClip'}}));
 });
 
 test('Dailymotion identity includes the current video and frame document',()=>{

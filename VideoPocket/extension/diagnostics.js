@@ -21,16 +21,24 @@ const CATALOG={
  MEMORY_LIMIT:['memory','瀏覽器記憶體不足，請降低品質重試',false],MERGE_FAILED:['merge','影音合併失敗，請換品質重試',true],
  SAVE_FAILED:['save','檔案儲存失敗，請重試',true],INTERNAL_ERROR:['internal','處理失敗，請重試',true]
 };
+export function saveFailureDetails(error={}){
+ return {...(['open-temp','read-temp','get-target','open-target','write-target','close-target','save-worker','browser-start','browser-write'].includes(error?.saveStage)?{saveStage:error.saveStage}:{}),...(['permission','blocked','not-found','unreadable','busy','invalid-state','aborted','disk-full','worker-failed','invalid-filename','file-too-large','file-io','unknown'].includes(error?.saveReason)?{saveReason:error.saveReason}:{})};
+}
 export function classifyFailure(error={},stage='download'){
  const raw=String(error?.message || error || ''),status=Number(error?.status || error?.httpStatus)||Number(raw.match(/(?:HTTP|status)\s*[:=(]?\s*(\d{3})/i)?.[1])||undefined;
  const requestMatch=raw.match(/HTTP\s+\d{3}[，,]\s*(HEAD|GET(?:\s+Range)?)[，,]\s*([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[，,）)]|\s|$)/i),requestMethod=String(error?.requestMethod || requestMatch?.[1] || '').toUpperCase(),requestHost=String(error?.requestHost || requestMatch?.[2] || '').toLowerCase();
  let code=Object.hasOwn(CATALOG,error?.code)?error.code:Object.hasOwn(CATALOG,raw)?raw:null;
- if(!code){
-  if(error.name==='AbortError'||/cancel|取消|USER_CANCELED/i.test(raw))code='CANCELLED';
+  if(!code){
+  // AbortError is also emitted when a response is interrupted or when a
+  // hedge/timeout cleans up a losing request.  Only an explicit cancellation
+  // marker is user cancellation; a bare AbortError is a transport failure.
+  const explicitCancel=error?.userCancelled===true||/^(?:已取消|cancel(?:led)?|user[_ -]?canceled)$/i.test(raw);
+  if(explicitCancel)code='CANCELLED';
   else if(/影片已變更|身份|identity|SOURCE_CHANGED/i.test(raw))code='SOURCE_CHANGED';
   else if(/DRM|ContentProtection/i.test(raw))code='DRM_UNSUPPORTED';
   else if(error.name==='QuotaExceededError'||/quota|空間不足|磁碟.*滿/i.test(raw))code='TEMP_STORAGE_FULL';
   else if(error.name==='TimeoutError'||/timed?\s*out|逾時|timeout/i.test(raw))code='NETWORK_TIMEOUT';
+  else if(error.name==='AbortError')code=stage==='save'?'SAVE_FAILED':'NETWORK_FAILURE';
   else if(/attestation|串流驗證|驗證.*拒絕/i.test(raw))code='STREAM_VERIFICATION';
   else if(status===401||status===403)code='HTTP_AUTH';else if(status===429)code='HTTP_RATE_LIMIT';
   else if(status===404||status===410)code='HTTP_NOT_FOUND';else if(status>=500)code='HTTP_SERVER';
@@ -45,7 +53,12 @@ export function classifyFailure(error={},stage='download'){
   else if(stage==='save')code='SAVE_FAILED';else code='INTERNAL_ERROR';
  }
  const [category,message,retryable]=CATALOG[code],apiCode=Number(error?.apiCode),subtitleStage=['list','file','parse','verify','context'].includes(error?.subtitleStage)?error.subtitleStage:undefined;
- return {code,category,message,retryable,...(['memory','storage','missing-track','unsupported-format','invalid-input','timestamps','file-io','unknown'].includes(error?.processingReason)?{processingReason:error.processingReason}:{}),...(Number.isInteger(error?.ffmpegExitCode)&&error.ffmpegExitCode>=0&&error.ffmpegExitCode<=255?{ffmpegExitCode:error.ffmpegExitCode}:{}),...(['linked-document','linked-redirect','linked-ambiguous','linked-no-model','dailymotion-metadata','dailymotion-manifest','bilibili-playurl','source-request','source-head','source-probe','stream-manifest','stream-segment'].includes(error?.sourceStage)?{sourceStage:error.sourceStage}:{}),...(Number.isInteger(status)&&status>=100&&status<=599?{httpStatus:status}:{}),...(['HEAD','GET','GET RANGE'].includes(requestMethod)?{requestMethod}:{}),...(requestHost&&/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(requestHost)?{requestHost}:{}),...(error?.apiCode!==undefined&&Number.isInteger(apiCode)&&Math.abs(apiCode)<=1000000?{apiCode}:{}),...(subtitleStage?{subtitleStage}:{})};
+ const saveDetails=saveFailureDetails(error);
+ if(stage==='save'&&code==='SAVE_FAILED'&&!saveDetails.saveReason){
+  const reasons={FILE_ACCESS_DENIED:'permission',FILE_NO_SPACE:'disk-full',FILE_NAME_TOO_LONG:'invalid-filename',FILE_TOO_LARGE:'file-too-large',FILE_BLOCKED:'blocked',FILE_SECURITY_CHECK_FAILED:'blocked',FILE_VIRUS_INFECTED:'blocked',FILE_TRANSIENT_ERROR:'busy',FILE_FAILED:'file-io'};
+  saveDetails.saveReason=/^Invalid filename\.?$/i.test(raw)?'invalid-filename':reasons[raw] || 'unknown';
+ }
+ return {code,category,message,retryable,...saveDetails,...(['memory','storage','missing-track','unsupported-format','invalid-input','timestamps','file-io','unknown'].includes(error?.processingReason)?{processingReason:error.processingReason}:{}),...(Number.isInteger(error?.ffmpegExitCode)&&error.ffmpegExitCode>=0&&error.ffmpegExitCode<=255?{ffmpegExitCode:error.ffmpegExitCode}:{}),...(['linked-document','linked-redirect','linked-ambiguous','linked-no-model','dailymotion-metadata','dailymotion-manifest','bilibili-playurl','source-request','source-head','source-probe','stream-manifest','stream-segment'].includes(error?.sourceStage)?{sourceStage:error.sourceStage}:{}),...(Number.isInteger(status)&&status>=100&&status<=599?{httpStatus:status}:{}),...(['HEAD','GET','GET RANGE'].includes(requestMethod)?{requestMethod}:{}),...(requestHost&&/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(requestHost)?{requestHost}:{}),...(error?.apiCode!==undefined&&Number.isInteger(apiCode)&&Math.abs(apiCode)<=1000000?{apiCode}:{}),...(subtitleStage?{subtitleStage}:{})};
 }
 export const ERROR_VISIBILITY_MS=6000;
 // A popup can close during a download. Retain one safe failure briefly so the
@@ -60,6 +73,7 @@ export function briefFailure(error){
  const [code,label]=groups[failure.category] || groups.internal;
  const labels={TEMP_STORAGE_FULL:'本機暫存空間不足',HTTP_AUTH:'來源拒絕存取',HTTP_NOT_FOUND:'來源已失效',HTTP_RATE_LIMIT:'來源暫時限制請求',NETWORK_TIMEOUT:'網路讀取逾時',SOURCE_CHANGED:'影片已變更',SUBTITLE_MISMATCH:'字幕與影片不符',SUBTITLE_SOURCE_UNAVAILABLE:'請先在播放器開啟所選字幕'};
  const processing={memory:'記憶體不足',storage:'暫存空間不足','missing-track':'缺少所需軌道','unsupported-format':'格式不支援','invalid-input':'輸入影音異常',timestamps:'時間戳異常','file-io':'檔案讀寫異常'}[failure.processingReason];
- return {code,message:(labels[failure.code] || label)+(processing&&failure.code==='MERGE_FAILED'?` · ${processing}`:'')};
+ const saving={permission:'儲存權限失效',blocked:'儲存遭到封鎖','not-found':'儲存位置失效',unreadable:'儲存位置無法讀取',busy:'檔案正被使用','disk-full':'儲存磁碟空間不足','worker-failed':'儲存程序中斷','invalid-filename':'檔名不受支援','file-too-large':'儲存檔案過大','file-io':'儲存檔案讀寫失敗'}[failure.saveReason];
+ return {code,message:(labels[failure.code] || label)+(processing&&failure.code==='MERGE_FAILED'?` · ${processing}`:saving&&failure.code==='SAVE_FAILED'?` · ${saving}`:'')};
 }
 export function visibleFailure(record,now=Date.now()){return record&&Number.isFinite(record.time)&&now>=record.time&&now-record.time<ERROR_RETENTION_MS?briefFailure(record):null;}

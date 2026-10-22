@@ -45,7 +45,7 @@ function sameContext(page,record){
 // enough to bind one of many social-feed videos without additional evidence.
 export function attachSocialSources(page,records=[]){
  const service=serviceForPage(page?.url);
- if(!service||page.selectionExpired||page.media?.drm)return page;
+ if(!service||page.selectionExpired||page.media?.drm||page.platform?.site==='metadata-media')return page;
  const selected=page.videos?.[page.mediaIndex || 0];if(!selected)return page;
  const known=[selected.downloadUrl,selected.url,page.platform?.manifestUrl,...(page.platform?.versions || []).map(v=>v.url)].filter(u=>serviceForCdn(u)===service);
  const keys=new Set(known.map(resourceKey).filter(Boolean));

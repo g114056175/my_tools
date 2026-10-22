@@ -62,6 +62,33 @@ test('generic observer source belongs to the selected video, not global resource
  const first=await snapshot({videos:[a,b],observer,mediaIndex:0,pageUrl:'https://new.example/feed'});assert.equal(first.platform,undefined);
 });
 
+test('page snapshot preserves source candidates per player without cross-player borrowing',{concurrency:false},async()=>{
+ const a=video({title:'A'}),b=video({title:'B'});
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:v=>({candidates:[{url:v===a?'https://cdn/a.m3u8':'https://cdn/b.m3u8',kind:'hls',downloadable:true,evidence:['player-owned-source'],sourceGroup:'player-current-sources'}]})};
+ const page=await snapshot({videos:[a,b],observer,mediaIndex:0,pageUrl:'https://player.example/feed'});
+ assert.deepEqual(page.videos[0].sourceCandidates.map(item=>item.url),['https://cdn/a.m3u8']);
+ assert.deepEqual(page.videos[1].sourceCandidates,[],'unselected player is kept as a summary entry');
+ assert.equal(page.videos[0].sourceCandidates[0].sourceGroup,'player-current-sources');
+});
+
+test('an empty source resolves to the document URL in the DOM but cannot preempt the observed manifest',async()=>{
+ const pageUrl='https://player.example.test/watch',v=video(),empty={src:pageUrl,getAttribute:()=>''},manifest='https://cdn.example.test/main.m3u8';
+ v.querySelectorAll=selector=>selector==='source'?[empty]:[];
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[{url:manifest,kind:'hls',downloadable:true}]})};
+ const result=await snapshot({videos:[v],observer,pageUrl});assert.equal(result.videos[0].downloadUrl,manifest);
+ const valid={src:'https://cdn.example.test/main.mp4',getAttribute:()=>'/main.mp4'};
+ v.querySelectorAll=selector=>selector==='source'?[empty,valid]:[];
+ const direct=await snapshot({videos:[v],pageUrl});assert.equal(direct.videos[0].downloadUrl,valid.src);
+});
+
+test('a live low-quality HLS child does not replace the bound full quality manifest',async()=>{
+ const v=video(),master='https://cdn.test/master.m3u8',child='https://cdn.test/360.m3u8';
+ const observer={scanDocument(){},modelFor:()=>({id:'current',manifestUrl:master,manifestType:'hls',manifestXml:'master fixture'}),sourcesFor:()=>({candidates:[{url:child,kind:'hls',downloadable:true,evidence:['mse-root']}]})};
+ const page=await snapshot({videos:[v],observer});
+ assert.equal(page.platform.manifestUrl,master);assert.equal(page.platform.manifestXml,'master fixture');
+ assert.deepEqual(page.platform.playbackManifest,{url:child,type:'hls'});
+});
+
 test('Dailymotion main player is selected before ads and only its context becomes a metadata request',{concurrency:false},async()=>{
  const main=video({id:'video',title:''}),ad=video({title:'Advertisement'});
  const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[],reason:'no-associated-source'}),pageContext:()=>({id:'x9qh9tw',title:'Current episode'})};
@@ -103,7 +130,10 @@ test('two videos use only the Video.js player attached to the selected video',{c
   const first=video({title:'主片'}),second=video({title:'廣告'});
   const page=await snapshot({videos:[first,second],players:[playerFor(first,firstMaster),playerFor(second,secondMaster)],resources:[firstMaster,secondMaster]});
   assert.equal(page.videos[0].downloadUrl,firstMaster);
-  assert.equal(page.videos[1].downloadUrl,secondMaster);
+  assert.equal(page.videos[1].downloadUrl,null,'unselected player registry is not explored');
+  const selected=await snapshot({videos:[first,second],players:[playerFor(first,firstMaster),playerFor(second,secondMaster)],mediaIndex:1,resources:[firstMaster,secondMaster]});
+  assert.equal(selected.videos[1].downloadUrl,secondMaster);
+  assert.equal(selected.videos[0].downloadUrl,null);
 });
 
 test('multiple performance manifests without a player registry remain ambiguous',{concurrency:false},async()=>{
@@ -176,4 +206,20 @@ test('unplayed Anime1 video supplies its exact API descriptor without starting p
  const result=await snapshot({videos:[v],pageUrl:'https://anime1.me/30114'});
  assert.equal(result.videos[0].downloadUrl,null);
  assert.equal(result.platform.site,'anime1');assert.equal(result.platform.apiRequest,token);
+});
+
+test('generic Reddit player labels are replaced by the owning post title or a numbered placeholder',async()=>{
+ const named=video({title:'影片播放器'}),unnamed=video({title:'影片播放器'});
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]}),titleFor:v=>v===named?'Actual Reddit post':'',isGenericTitle:t=>t==='影片播放器'};
+ const result=await snapshot({videos:[named,unnamed],observer,pageUrl:'https://www.reddit.com/r/example/'});
+ assert.equal(result.videos[0].title,'Actual Reddit post');assert.equal(result.videos[1].title,'影片 2');
+});
+
+test('Twitch channel trailer and Clips use only their selected player metadata',async()=>{
+ const trailer=video(),clip=video(),ad=video({title:'Advertisement'});
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]}),twitchPlayerFor:v=>v===trailer?{kind:'vod',id:'123456',title:'Channel trailer',duration:58}:v===clip?{kind:'clip',slug:'ClipSlug',title:'Actual clip',qualities:[]}:null};
+ const base={videos:[trailer,clip,ad],observer,pageUrl:'https://www.twitch.tv/twitch/clips?range=7d'};
+ const first=await snapshot(base);assert.equal(first.platform.site,'twitch');assert.equal(first.platform.id,'123456');assert.equal(first.videos[0].title,'Channel trailer');
+ const second=await snapshot({...base,mediaIndex:1});assert.equal(second.platform.site,'twitch-clip');assert.equal(second.platform.slug,'ClipSlug');assert.equal(second.videos[1].mediaIdentity,'twitch-clip:ClipSlug');
+ const advertising=await snapshot({...base,mediaIndex:2});assert.equal(advertising.platform,undefined);
 });

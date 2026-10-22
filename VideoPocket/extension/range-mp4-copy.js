@@ -208,6 +208,7 @@
 
   root.VideoPocketRangeMp4 = {
     tryCut,
+    capMovieDuration: capMoov,
     presentationDuration,
     inspectPresentation: presentationDuration,
     cancel() { for (const conversion of active) void conversion.cancel().catch(() => {}); },

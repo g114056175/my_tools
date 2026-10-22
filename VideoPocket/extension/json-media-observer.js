@@ -1,31 +1,78 @@
+import {isBroadcastIdentityField,isMediaField,isMediaIdentityField,isMediaPayloadText,isMediaShapeField,isMediaMetadataField} from './media-schema.js';
 const KEY=Symbol.for('video-pocket.json-metadata');
-const MARKERS=/"(?:videoDelivery\w*|video_versions|video_url|video_dash_manifest|dash_manifest(?:_xml_string)?|playable_url(?:_quality_hd|_dash)?|browser_native_(?:sd|hd)_url|playAddr|play_addr|downloadAddr|download_addr|qualities|contentUrl|progressive)"\s*:/i;
+const MEDIA_KEY = isMediaMetadataField;
+const MEDIA_CUE = key => isMediaField(key) || isMediaIdentityField(key) || isBroadcastIdentityField(key) || isMediaShapeField(key);
+const LARGE_TEXT=256*1024;
+const CONTAINER_KEY=/^(?:data|result|results|response|payload|props|player|config|attributes|metadata|item|items|entity|entities|legacy|graphql|body|value|source|video|media|files|assets|qualities|variants|video_info|videoInfo|videoDelivery.*)$/i;
 
 // Copy metadata only. Revivers can introduce getters, cycles and native
 // objects that were not present in the original JSON text.
-function metadataCopy(value){
- const seen=new WeakSet();let remaining=4096,characters=0,truncated=false;
- const copy=(node,depth=0)=>{
-  if(--remaining<0||depth>32){truncated=true;return;}
-  if(typeof node==='string'){characters+=node.length;if(characters>512*1024){truncated=true;return;}return node;}
+function metadataCopy(value,{targeted=false}={}){
+ const seen=new WeakSet();let remaining=4096,characters=0;
+ const copy=(node,depth=0,probe=false,inMedia=false)=>{
+  if(--remaining<0||depth>32)return;
+  if(typeof node==='string'){if(characters+node.length>512*1024)return;characters+=node.length;return node;}
   if(node==null||typeof node==='boolean'||typeof node==='number')return node;
   if(typeof node!=='object'||seen.has(node))return;
-  const proto=Object.getPrototypeOf(node);
+  let proto;try{proto=Object.getPrototypeOf(node)}catch{return;}
   if(!Array.isArray(node)&&proto!==Object.prototype&&proto!==null)return;
   seen.add(node);const out=Array.isArray(node)?[]:Object.create(null);
-  const keys=Object.keys(node);
-  if(keys.length>4096){truncated=true;return;}
+  let keys;
+  try{
+   if(targeted&&Array.isArray(node)){
+    const length=node.length;
+    if(length>256){
+     keys=[];
+     for(let index=0;index<128;index++)keys.push(String(index));
+     for(let index=Math.max(128,length-128);index<length;index++)keys.push(String(index));
+    }else keys=Array.from({length},(_,index)=>String(index));
+   }else keys=Object.keys(node);
+  }catch{return;}
+  if(keys.length>4096){
+   const priority=keys.filter(key=>CONTAINER_KEY.test(key)||MEDIA_KEY(key));
+   const rest=keys.filter(key=>!CONTAINER_KEY.test(key)&&!MEDIA_KEY(key));
+   keys=[...new Set([...priority.slice(0,4096),...rest.slice(0,Math.max(0,4096-priority.length))])];
+  }
   for(const key of keys){
-   if(truncated)break;
+   if(remaining<=0)break;
    const field=Object.getOwnPropertyDescriptor(node,key);
    if(!field||!Object.hasOwn(field,'value'))continue;
+   const childValue=field.value;
+   const keyRelevant=MEDIA_KEY(key)||CONTAINER_KEY.test(key);
+   const relevant=!targeted||Array.isArray(node)||keyRelevant;
+   const childObject=childValue&&typeof childValue==='object';
+   // Probe a few generic nesting levels to find an unfamiliar site's media
+   // object, but never retain unrelated primitive feed/cache fields.
+   if(targeted&&!relevant&&!((probe||inMedia)&&childObject&&(!Array.isArray(childValue)||childValue.length<=256)))continue;
+   if(targeted&&Array.isArray(childValue)&&!keyRelevant&&(!(probe||inMedia)||childValue.length>256))continue;
    characters+=key.length;
-   const child=copy(field.value,depth+1);if(child!==undefined)out[key]=child;
+   const child=copy(childValue,depth+1,targeted&&depth<6,inMedia||isMediaField(key));
+   const nonempty=child!==undefined&&childObject&&(Array.isArray(child)
+    ?child.some(item=>item&&typeof item==='object'&&Object.keys(item).length)
+    :Object.keys(child).length);
+   if(child!==undefined&&(!targeted||relevant||nonempty))out[key]=child;
   }
   return out;
  };
- const result=copy(value);return truncated?undefined:result;
+ return copy(value,0,true);
 }
+
+function hasMediaCue(value,seen=new WeakSet(),depth=0){
+ if(!value||typeof value!=='object'||seen.has(value)||depth>12)return false;
+ seen.add(value);
+ let keys;try{keys=Object.keys(value)}catch{return false;}
+ for(const key of keys){
+  const field=Object.getOwnPropertyDescriptor(value,key);
+  if(!field||!Object.hasOwn(field,'value'))continue;
+  if(MEDIA_CUE(key)&&((typeof field.value==='string'&&field.value.length<=16384)||typeof field.value==='number'))return true;
+  if(hasMediaCue(field.value,seen,depth+1))return true;
+ }
+ return false;
+}
+
+// Shared with deferred response observers so queued metadata uses exactly the
+// same bounded copy and media-cue decision as JSON.parse interception.
+export {metadataCopy as copyMediaMetadata, hasMediaCue as hasMediaMetadataCue};
 
 export function observeJsonMetadata(target,onValue,{now=()=>Date.now(),maxPerSecond=20}={}){
  if(target[KEY]?.dispose)return target[KEY];
@@ -40,13 +87,15 @@ export function observeJsonMetadata(target,onValue,{now=()=>Date.now(),maxPerSec
   try{
    // Do not coerce input twice or scan every application settings object.
    if(typeof text!=='string'||text.length<16)return value;
-   if(text.length>1024*1024){counts.oversized++;return value;}
-   if(!MARKERS.test(text))return value;
+   // Small payloads retain the cheap marker gate. Large payloads are already
+   // parsed by the native parser; scanning the entire text again is needless.
+   if(text.length<=LARGE_TEXT&&!isMediaPayloadText(text))return value;
    const time=now();if(time-windowStart>=1000||time<windowStart){windowStart=time;windowCount=0;}
    if(windowCount>=maxPerSecond){counts.throttled++;return value;}
    windowCount++;active=true;
-   const metadata=metadataCopy(value);
-   if(metadata!==undefined){onValue(metadata);counts.observed++;}
+   const metadata=metadataCopy(value,{targeted:text.length>LARGE_TEXT});
+   const usable=metadata!==undefined&&(text.length<=LARGE_TEXT||hasMediaCue(metadata));
+   if(usable){onValue(metadata);counts.observed++;}
    else counts.oversized++;
   }catch{counts.errors++;}
   finally{active=false;}

@@ -62,5 +62,8 @@ export function exportSubtitle(subtitle,format){
   return {format:format==='plain'?'txt':format,content:format==='srt'?toSrt(subtitle.cues):format==='vtt'?toVtt(subtitle.cues):format==='plain'?toPlainText(subtitle.cues):toText(subtitle.cues)};
 }
 export function safeName(value) {
-  return String(value || 'video').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').replace(/[. ]+$/g,'').slice(0,100) || 'video';
+  // The download API rejects invisible format characters (including the ZWJ
+  // inside some emoji) even when the native file picker accepts them.
+  const text=String(value || 'video').replace(/\p{Cf}/gu,'').replace(/[\p{Cc}\uD800-\uDFFF<>:"/\\|?*]/gu,'_');
+  return [...text].slice(0,100).join('').replace(/[. ]+$/g,'') || 'video';
 }

@@ -1,10 +1,12 @@
 import {
   ADTS,
   BlobSource,
+  CustomSource,
   Conversion,
   canEncodeVideo,
   Quality,
   VideoSampleSink,
+  VideoSampleSource,
   AudioSampleSink,
   QUALITY_HIGH,
   EncodedAudioPacketSource,
@@ -29,7 +31,7 @@ import {
 } from 'mediabunny';
 
 globalThis.VideoPocketMediabunny = {
-  ADTS, BlobSource, Conversion, canEncodeVideo, Quality, VideoSampleSink,
+  ADTS, BlobSource, CustomSource, Conversion, canEncodeVideo, Quality, VideoSampleSink, VideoSampleSource,
   AudioSampleSink,
   EncodedAudioPacketSource,
   EncodedPacketSink, EncodedVideoPacketSource, Input, MATROSKA, MP3,

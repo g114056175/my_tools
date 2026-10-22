@@ -1,4 +1,4 @@
-importScripts('disk-media.js','vendor/mediabunny.js','range-mp4-copy.js','range-smart.js','range-cut.js');
+importScripts('disk-media.js','vendor/mediabunny.js','range-mp4-copy.js','range-smart.js','range-h264-smart.js','range-cut.js');
 let cancelled=false;
 onmessage=async({data})=>{
  if(data.action==='cancel'){cancelled=true;VideoPocketRangeCut.cancel();return;}

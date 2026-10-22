@@ -21,6 +21,36 @@ test('invalid range or missing source clock fails before allocating an output fi
  await assert.rejects(rt.api.cutRange({range:{start:60,end:85},inputs:[{name:'video.webm'}]}),{code:'RANGE_PROCESSING_FAILED'});
  assert.equal(rt.writes,0);
 });
+test('conversion trim removes floating-point boundary sliver but keeps next frame',async()=>{
+ const rt=await runtime();
+ const clip=(sample,trim)=>{
+  const start=Math.max(trim.start,sample.timestamp),end=Math.min(trim.end,sample.timestamp+sample.duration);
+  return start>=end?null:{timestamp:start-trim.start,duration:end-start};
+ };
+ const cases=[
+  {start:0,end:.3},
+  {start:12,end:12.3},
+  {start:60.3,end:65.3},
+ ];
+ for(const {start,end} of cases){
+  const old={start,end},fixed=rt.api.trimBoundary(start,end);
+  const leadingTimestamp=start-.033;
+  const leading={timestamp:leadingTimestamp,duration:(start+1e-14)-leadingTimestamp};
+  const next={timestamp:start,duration:.033};
+  const trailingTimestamp=end-1e-14;
+  const trailing={timestamp:trailingTimestamp,duration:2e-14};
+  const oldSliver=clip(leading,old),fixedSliver=clip(leading,fixed),fixedNext=clip(next,fixed);
+  const oldTrailing=clip(trailing,old),fixedTrailing=clip(trailing,fixed);
+  if(start>0){
+   assert.ok(oldSliver&&oldSliver.duration>0&&oldSliver.duration<1e-6,`old trim should retain sliver at ${start}`);
+   assert.equal(fixedSliver,null,`fixed trim should remove sliver at ${start}`);
+  }else assert.equal(fixedSliver,null,'zero start has no preceding sliver');
+  assert.ok(oldTrailing&&oldTrailing.duration>0&&oldTrailing.duration<1e-6,`old trim should retain end sliver at ${end}`);
+  assert.equal(fixedTrailing,null,`fixed trim should remove end sliver at ${end}`);
+  assert.ok(fixedNext&&fixedNext.duration>.03,`fixed trim should retain next frame at ${start}`);
+  assert.ok(Math.abs((fixed.end-fixed.start)-(end-start-2e-6))<1e-12);
+ }
+});
 test('a cancelled range cannot produce or finalize a downloadable file',async()=>{
  const rt=await runtime();await assert.rejects(rt.api.cutRange({range:{start:60,end:85},inputs:[{}],signal:{aborted:true}}),{code:'CANCELLED'});assert.equal(rt.writes,0);
 });

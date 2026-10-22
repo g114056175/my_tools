@@ -7,6 +7,13 @@
  let activeConversion;
  function check(signal){if(signal?.aborted)throw Object.assign(new Error('已取消'),{code:'CANCELLED'});}
  function outputFormat(ext){switch(ext){case 'mp4':case 'm4a':return new M.Mp4OutputFormat({fastStart:false});case 'webm':return new M.WebMOutputFormat();case 'mkv':return new M.MkvOutputFormat();case 'ogg':return new M.OggOutputFormat();case 'mp3':return new M.Mp3OutputFormat();default:throw failure('此格式不支援精準區間裁切','RANGE_UNSUPPORTED');}}
+  // Conversion clamps every decoded sample against trim. A sample whose end is
+  // only floating-point noise past the trim start can otherwise survive with a
+  // sub-microsecond duration and be quantized to a duplicate zero-duration
+  // frame by the MP4 muxer. Move the boundaries inward by a tiny amount; this
+  // removes numerical slivers at both ends while staying far below the UI's
+  // 0.1-second precision.
+  const trimBoundary=(start,end)=>({start:start+1e-6,end:end-1e-6});
  function makeTarget(access,signal){return new M.StreamTarget(new WritableStream({write(chunk){check(signal);if(access.write(chunk.data,{at:chunk.position})!==chunk.data.byteLength)throw failure('裁切檔案寫入不完整');}}),{chunked:true,chunkSize:1024*1024});}
  async function entry(item){
   if(!Number.isFinite(item.timelineStart)||item.timelineStart<0)throw failure('缺少來源片段的時間位置');
@@ -72,8 +79,8 @@
      if(!key||key.timestamp<-.05||key.timestamp>.05||codedStart<-.05)throw failure('區間影片未從獨立影格開始，未儲存檔案');
      // Metadata alone cannot prove that the first frames or the smart splice
      // decode. Verify actual presentation samples, including contiguous coverage.
-     const sink=new M.VideoSampleSink(track),windows=[[0,Math.min(wanted,.5)]];
-     if(Number.isFinite(expected.splice)&&expected.splice>0&&expected.splice<wanted)windows.push([Math.max(0,expected.splice-.15),Math.min(wanted,expected.splice+.15)]);
+     const sink=new M.VideoSampleSink(track),windows=[[0,Math.min(wanted,.5)],[Math.max(0,wanted-.3),wanted]];
+     for(const splice of expected.splices||[expected.splice])if(Number.isFinite(splice)&&splice>0&&splice<wanted)windows.push([Math.max(0,splice-.15),Math.min(wanted,splice+.15)]);
      for(const [from,to] of windows){let covered=from,count=0;
       for await(const sample of sink.samples(from,to)){
        try{if(!Number.isFinite(sample.timestamp)||!Number.isFinite(sample.duration)||sample.duration<=0||sample.timestamp>covered+.05)throw failure('區間影片開頭或接合處缺少可解碼畫格');covered=Math.max(covered,sample.timestamp+sample.duration);count++;}finally{sample.close();}
@@ -84,7 +91,10 @@
     if(!expected.presentation)return {start:codedStart,end:codedEnd};
     // MP4 edit lists retain negative coded pre-roll. Validate the sample actually
     // presented at zero, rather than treating the earliest decode packet as UI time.
-    const sink=isVideo?new M.VideoSampleSink(track):new M.AudioSampleSink(track),sample=await sink.getSample(0);
+    const sink=isVideo?new M.VideoSampleSink(track):new M.AudioSampleSink(track);
+    // Whole AAC packets may start a few milliseconds after zero. Inspect that
+    // actual first sample using the same 100ms tolerance as the precise path.
+    const sample=await sink.getSample(0)||(!isVideo&&codedStart>0&&codedStart<=.1?await sink.getSample(codedStart):null);
     try{if(!sample||!Number.isFinite(sample.timestamp)||!Number.isFinite(sample.duration)||sample.duration<=0||sample.timestamp>.1||sample.timestamp+sample.duration<=0)throw failure('MP4 播放起點不符合區間');return {start:Math.max(0,sample.timestamp),codedStart,codedEnd,end:Math.min(codedEnd,presentation)};}finally{sample?.close();}
    }));
    if(times.some(t=>!Number.isFinite(t.start)||!Number.isFinite(t.end)||t.start<-.05||t.start>.1||Math.abs(t.end-wanted)>.15))throw failure('區間輸出的起點或長度不符，未儲存檔案');
@@ -123,17 +133,18 @@
    intermediate.finish();intermediate=null;check(signal);
    conversionInput=new M.Input({source:new M.BlobSource(await disk.readMediaFile(paths[0])),formats});
    const ext=output.split('.').pop().toLowerCase(),normalizedAt=Date.now();let smart,smartFallback,selectedVideo={};
-   for(const helper of [root.VideoPocketRangeMp4,root.VideoPocketRangeSmart].filter(Boolean)){
+   for(const helper of [root.VideoPocketRangeMp4,root.VideoPocketRangeSmart,root.VideoPocketRangeH264].filter(Boolean)){
     try{smart=await helper.tryCut({input:conversionInput,start:range.start-base,end:range.end-base,output,scope,kind,expectedAudio,signal,onProgress});if(smart)break;}catch(error){check(signal);smartFallback=error.message;}
    }
    let smartTiming;
-   if(smart){try{smartTiming=await validate(await disk.readMediaFile(smart.result.path),range.end-range.start,{video:!!video,audio:!!audio,presentation:Number.isFinite(smart.stats.presentationDuration),splice:smart.stats.encodedSeconds});}catch(error){check(signal);await disk.removeMediaFile(smart.result.path).catch(()=>{});smartFallback=error.message;smart=null;}}
+   if(smart){try{smartTiming=await validate(await disk.readMediaFile(smart.result.path),range.end-range.start,{video:!!video,audio:!!audio,presentation:Number.isFinite(smart.stats.presentationDuration),splice:smart.stats.encodedSeconds,splices:smart.stats.splices});}catch(error){check(signal);await disk.removeMediaFile(smart.result.path).catch(()=>{});smartFallback=error.message;smart=null;}}
    if(smart){result=smart.result;paths.push(result.path);}else{
     writer=await disk.createSyncMediaFile(scope,output);paths.push(writer.path);
     const destination=new M.Output({format:outputFormat(ext),target:makeTarget(writer.access,signal)});
     selectedVideo=video?await videoOptions(await conversionInput.getPrimaryVideoTrack(),destination.format,range.start-base):{discard:true};
     // One microsecond only compensates binary float noise at an exact frame end.
-    activeConversion=await M.Conversion.init({input:conversionInput,output:destination,trim:{start:range.start-base,end:range.end-base+1e-6},copy:{mode:'preferred',shiftTolerance:0,boundaryPolicy:'shrink',boundaryTolerance:.05},video:selectedVideo,audio:audio?{}:{discard:true},showWarnings:false});
+    const trim=trimBoundary(range.start-base,range.end-base);
+    activeConversion=await M.Conversion.init({input:conversionInput,output:destination,trim,copy:{mode:'preferred',shiftTolerance:0,boundaryPolicy:'shrink',boundaryTolerance:.05},video:selectedVideo,audio:audio?{}:{discard:true},showWarnings:false});
     if(!activeConversion.isValid||activeConversion.discardedTracks.length)throw failure('瀏覽器無法精準裁切此格式，未儲存檔案','RANGE_ENCODER_UNAVAILABLE');
     activeConversion.onProgress=value=>{check(signal);onProgress(value);};
     await activeConversion.execute();check(signal);result=writer.finish();writer=null;
@@ -144,5 +155,5 @@
   }catch(error){await activeConversion?.cancel().catch(()=>{});if(signal?.aborted)throw Object.assign(new Error('已取消'),{code:'CANCELLED'});throw error;}
   finally{activeConversion=null;intermediate?.abort();writer?.abort();conversionInput?.dispose();for(const e of entries)e.input.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
- root.VideoPocketRangeCut={cutRange,validate,videoOptions,packetWindow,cancel(){root.VideoPocketRangeMp4?.cancel();root.VideoPocketRangeSmart?.cancel();void activeConversion?.cancel().catch(()=>{});}};
+ root.VideoPocketRangeCut={cutRange,validate,videoOptions,packetWindow,trimBoundary,cancel(){root.VideoPocketRangeMp4?.cancel();root.VideoPocketRangeSmart?.cancel();root.VideoPocketRangeH264?.cancel();void activeConversion?.cancel().catch(()=>{});}};
 })(self);

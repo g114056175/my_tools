@@ -54,6 +54,7 @@ test('Bilibili bwp-video in an open shadow root is selected while an ad stays un
  const url='https://www.bilibili.com/video/BVshadow01/?p=2',context={URL,URLSearchParams,Symbol,WeakMap,AbortSignal,location:{href:url,hostname:'www.bilibili.com',pathname:'/video/BVshadow01/'},navigator:{languages:['zh-TW']},performance:{getEntriesByType:()=>[]},innerHeight:900,innerWidth:1200};context.window=context;
  context.__INITIAL_STATE__={videoData:{bvid:'BVshadow01',title:'Shadow 影片',pages:[{cid:11},{cid:22,duration:600}]}};
  context.document={title:'Shadow_哔哩哔哩_bilibili',documentElement:{lang:'zh'},scripts:[],querySelector:()=>null,querySelectorAll:s=>s==='video'?[ad]:s==='*'?[hostWithShadow]:[]};
+ context[Symbol.for('video-pocket.mediaObserver')]={videosSnapshot:()=>[main,ad]};
  context.fetch=async raw=>{const u=new URL(raw);return{ok:true,status:200,json:async()=>u.pathname.endsWith('/playurl')?{code:0,data:{bvid:'BVshadow01',cid:22,timelength:600000,dash:{video:[{baseUrl:'https://cdn.test/main.m4s'}]}}}:{code:0,data:{bvid:'BVshadow01',pages:[{cid:11},{cid:22,duration:600}]}}};};
  const page=await vm.runInNewContext(`(${pageSnapshot.toString()})()`,context);assert.equal(page.platform.site,'bilibili');assert.equal(page.videos.find(v=>v.bilibiliMain)?.downloadUrl,page.url);assert.equal(page.videos.find(v=>v.url==='https://ads.test/ad.mp4')?.bilibiliMain,undefined);
 });

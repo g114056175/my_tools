@@ -26,7 +26,7 @@ export async function directTransfer(format,request,signal,onBytes=()=>{},sink,c
  // The first fully verified prefix wins. A dead backup must not delay a fast CDN.
  if(selected)for(const controller of probeControllers)controller.abort();
  if(signal.aborted)throw signal.reason || new Error('已取消');
- if(!selected){let last;for(const url of [...ready.map(r=>r.url),...urls.filter(u=>!ready.some(r=>r.url===u))])try{return await run(async attemptSignal=>{const response=await request(url,{signal:AbortSignal.any([attemptSignal,AbortSignal.timeout(20000)])});return sink?await streamToFile(response,attemptSignal,sink,onBytes):await read(response,attemptSignal,MAX_TRANSFER_BYTES,onBytes);});}catch(error){last=error;if(signal.aborted)throw error;}throw last || new Error('來源下載失敗');}
+ if(!selected){let firstError;for(const url of [...ready.map(r=>r.url),...urls.filter(u=>!ready.some(r=>r.url===u))])try{return await run(async attemptSignal=>{const response=await request(url,{signal:AbortSignal.any([attemptSignal,AbortSignal.timeout(20000)])});return sink?await streamToFile(response,attemptSignal,sink,onBytes):await read(response,attemptSignal,MAX_TRANSFER_BYTES,onBytes);});}catch(error){firstError ||= error;if(signal.aborted)throw error;}throw firstError || new Error('來源下載失敗');}
  const total=selected.range.total,output=sink?null:new Uint8Array(total);if(sink)await sink.writeAt(selected.prefix,0);else output.set(selected.prefix);onBytes(selected.prefix.length);
  const chunkSize=2*1024*1024,parts=[];for(let start=selected.prefix.length;start<total;start+=chunkSize)parts.push({start,end:Math.min(total-1,start+chunkSize-1)});
  const candidates=[selected.url,...urls.filter(url=>url!==selected.url)];let cursor=0,hedges=0;

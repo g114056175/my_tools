@@ -28,6 +28,9 @@ function browser() {
     text() {
       return Promise.resolve(this.value);
     }
+    json() {
+      return Promise.resolve(typeof this.value === "string" ? JSON.parse(this.value) : this.value);
+    }
   }
   class FakeXHR {
     constructor() {
@@ -100,10 +103,10 @@ test('FB worker metadata binds only to the exact rendered player identity',()=>{
  assert.equal(target.Worker,nativeWorker);
 });
 
-test('working TikTok pages keep their original Worker constructor and transport',()=>{
+test('ordinary pages observe bounded Worker metadata and restore the constructor',()=>{
  const target=browser();target.location={href:'https://www.tiktok.com/',hostname:'www.tiktok.com'};
  target.Worker=class{};const native=target.Worker,observer=installMediaObserver(target);
- assert.equal(target.Worker,native);observer.dispose();
+ assert.notEqual(target.Worker,native);observer.dispose();assert.equal(target.Worker,native);
 });
 
 test('observer does not install in Cloudflare challenge frames',()=>{
@@ -124,6 +127,33 @@ test('observer installation never performs a network request',()=>{
  observer.dispose();
 });
 
+test('video registry discovers bounded open shadow roots and restores attachShadow',async()=>{
+ const target=browser();
+ const document={querySelectorAll:()=>[],documentElement:null};
+ const makeNode=(tag,children=[])=>({tagName:tag,children,ownerDocument:document,isConnected:true,getRootNode:()=>document});
+ const root=makeNode('HTML');document.documentElement=root;
+ class FakeElement {}
+ FakeElement.prototype.attachShadow=function(){const shadow={children:[],host:this,isConnected:true,getRootNode:()=>shadow};this.shadowRoot=shadow;return shadow;};
+ let mutationCallback;
+ target.MutationObserver=class{constructor(callback){mutationCallback=callback;}observe(){}disconnect(){}};
+ target.document=document;target.Element=FakeElement;
+ const host=makeNode('DIV');Object.setPrototypeOf(host,FakeElement.prototype);root.children.push(host);
+ const initial=host.attachShadow({mode:'open'});const first=makeNode('VIDEO');initial.children.push(first);
+ const observer=installMediaObserver(target);
+ try{
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(observer.videosSnapshot().includes(first));
+  const appended=makeNode('VIDEO');initial.children.push(appended);mutationCallback?.([{addedNodes:[appended]}]);
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(observer.videosSnapshot().includes(appended));
+  const later=makeNode('DIV');Object.setPrototypeOf(later,FakeElement.prototype);root.children.push(later);
+  const shadow=later.attachShadow({mode:'open'});const second=makeNode('VIDEO');shadow.children.push(second);
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(observer.videosSnapshot().includes(second));
+ }finally{observer.dispose();}
+ assert.equal(FakeElement.prototype.attachShadow.name,'');
+});
+
 test('application JSON.parse results retain ID-bound media without retaining the application object',()=>{
  const target=browser();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};
  target.JSON={parse:JSON.parse};const native=target.JSON.parse,observer=installMediaObserver(target);
@@ -139,6 +169,86 @@ test('application JSON.parse results retain ID-bound media without retaining the
   const diagnostics=observer.diagnosticsFor(first);assert.equal(diagnostics.json.observed,2);assert.equal(diagnostics.models,2);assert.equal(diagnostics.matches,1);
  }finally{observer.dispose();}
  assert.equal(target.JSON.parse,native);
+});
+
+test('deferred JSON and Response.json metadata are bounded snapshots drained on selection',async()=>{
+ const target=browser();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};target.JSON={parse:JSON.parse};
+ const observer=installMediaObserver(target),video={currentSrc:'',src:'',getAttribute:key=>key==='data-video-id'?'selected':'',closest:()=>null,__reactProps$test:{videoID:'selected'}};
+ const responseVideo={currentSrc:'',src:'',getAttribute:key=>key==='data-video-id'?'response-selected':'',closest:()=>null,__reactProps$test:{videoID:'response-selected'}};
+ video.ownerDocument=responseVideo.ownerDocument={querySelectorAll:selector=>selector==='video'?[video,responseVideo]:[]};
+ try{
+  const selected=target.JSON.parse(JSON.stringify({id:'selected',video_versions:[{url:'https://cdn.example/selected.mp4'}]}));
+  selected.video_versions[0].url='https://cdn.example/mutated-selected.mp4';
+  observer.drainMetadata(32);
+  const selectedModel=observer.modelFor(video,{drain:false});
+  assert.equal(selectedModel?.id,'selected');
+  assert.equal(selectedModel?.versions[0]?.url,'https://cdn.example/selected.mp4');
+  for(let i=0;i<40;i++)await new target.Response('https://social.example/api/video-'+i,JSON.stringify({id:`other-${i}`,video_versions:[{url:`https://cdn.example/other-${i}.mp4`}]}),'application/json').json();
+  const responseObject=await new target.Response('https://social.example/api/video-selected',JSON.stringify({id:'response-selected',video_versions:[{url:'https://cdn.example/response.mp4'}]}),'application/json').json();
+  responseObject.video_versions[0].url='https://cdn.example/mutated-response.mp4';
+  const queued=observer.diagnosticsFor(responseVideo);
+  assert.ok(queued.metadataQueue<=32);
+  assert.ok(queued.metadataQueueBytes>0);
+  const drained=observer.drainMetadata(32);
+  assert.ok(drained.count>0);assert.equal(drained.queued,0);
+  const responseModel=observer.modelFor(responseVideo,{drain:false});
+  assert.equal(responseModel?.id,'response-selected');
+  assert.equal(responseModel?.versions[0]?.url,'https://cdn.example/response.mp4');
+  assert.notEqual(responseModel?.versions[0]?.url,'https://cdn.example/mutated-response.mp4');
+  assert.equal(observer.diagnosticsFor(responseVideo).metadataQueue,0);
+ }finally{observer.dispose();}
+});
+
+test('selected deferred metadata is drained before unrelated queue entries',()=>{
+ const target=browser();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};target.JSON={parse:JSON.parse};
+ const observer=installMediaObserver(target),video={currentSrc:'',src:'',getAttribute:key=>key==='data-video-id'?'selected':'',closest:()=>null,__reactProps$test:{videoID:'selected'}};
+ video.ownerDocument={querySelectorAll:selector=>selector==='video'?[video]:[]};
+ try{
+  for(let i=0;i<19;i++)target.JSON.parse(JSON.stringify({id:`noise-${i}`,video_versions:[{url:`https://cdn.example/noise-${i}.mp4`}]}));
+  target.JSON.parse(JSON.stringify({id:'selected',video_versions:[{url:'https://cdn.example/selected.mp4'}]}));
+  const drained=observer.drainMetadata(16,undefined,video);
+  assert.ok(drained.count>=1);assert.equal(observer.modelFor(video,{drain:false})?.id,'selected');
+  assert.equal(drained.queued,4);
+  const earlier={...video,__reactProps$test:{videoID:'noise-18'}};
+  observer.drainMetadata(1,undefined,earlier);
+  assert.equal(observer.modelFor(earlier,{drain:false})?.versions[0]?.url,'https://cdn.example/noise-18.mp4','priority does not discard older generation entries');
+  observer.drainMetadata(32);
+  assert.equal(observer.diagnosticsFor(video).metadataQueueBytes,0);
+ }finally{observer.dispose();}
+});
+
+test('selected queue ranking respects an exhausted budget and exact identity tokens',()=>{
+ const target=browser();target.JSON={parse:JSON.parse};const observer=installMediaObserver(target);
+ let touches=0;const video={currentSrc:'',closest:()=>null,getAttribute:()=>{touches++;return '';},__reactProps$fixture:{videoId:'abc'}};
+ video.ownerDocument={querySelectorAll:s=>s==='video'?[video]:[]};
+ try{
+  target.JSON.parse(JSON.stringify({id:'other',video_url:'https://cdn.example/abc123.mp4'}));
+  target.JSON.parse(JSON.stringify({id:'abc',video_url:'https://cdn.example/selected.mp4'}));
+  assert.equal(observer.drainMetadata(1,()=>false,video).count,0);
+  assert.equal(touches,0,'no identity traversal when the supplied budget refuses work');
+  observer.drainMetadata(1,undefined,video);
+  assert.equal(observer.modelFor(video,{drain:false})?.id,'abc');
+ }finally{observer.dispose();}
+});
+
+test('deferred X broadcast survives unrelated API traffic and duplicate response observations',async()=>{
+ const target=browser();target.location={href:'https://x.com/OpenAIDevs/status/2112242739198959913',hostname:'x.com'};target.JSON={parse:JSON.parse};
+ const observer=installMediaObserver(target),video={currentSrc:'blob:current',getAttribute:()=>null,closest:()=>null,__reactProps$fixture:{videoId:'123456789'}};
+ video.ownerDocument={querySelectorAll:selector=>selector==='video'?[video]:[]};
+ try{
+  const metadata={data:{broadcast_by_rest_id:{broadcast_id:'broadcast-123',media_key:'28_123456789',status:'Replay'}}};
+  const status={source:{noRedirectPlaybackUrl:'https://video.example/replay.m3u8'}};
+  for(let i=0;i<40;i++){
+   await new target.Response('https://x.com/i/api/BroadcastQuery',metadata,'application/json').json();
+   await new target.Response('https://x.com/i/api/live_video_stream/status/28_123456789',status,'application/json').json();
+   await new target.Response('https://x.com/i/api/analytics',{event:{duration:3,url:'https://metrics.example/event',id:String(i)}},'application/json').json();
+   await new target.Response('https://x.com/i/api/settings',JSON.stringify({id:String(i),title:'Settings',url:'https://x.com/settings'}),'application/json').text();
+  }
+  assert.equal(observer.diagnosticsFor(video).metadataQueue,2,'only two distinct playback payloads remain queued');
+  observer.drainMetadata(8);const model=observer.modelFor(video,{drain:false});
+  assert.equal(model?.broadcastId,'broadcast-123');assert.equal(model?.manifestUrl,status.source.noRedirectPlaybackUrl);
+  assert.ok(model.aliases.includes('123456789'));assert.equal(observer.diagnosticsFor(video).metadataQueue,0);
+ }finally{observer.dispose();}
 });
 
 test('the same JSON hook handles a qualities schema on a previously unnamed website',()=>{

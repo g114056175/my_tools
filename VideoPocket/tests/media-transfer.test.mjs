@@ -1,7 +1,8 @@
-import test from 'node:test';
+import test, {mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {createMediaTransfer} from '../extension/media-transfer.js';
 import {assembleSegments} from '../extension/ordered-segments.js';
+import {TransferControl} from '../extension/transfer-control.js';
 
 const bytes = value => new Uint8Array(value);
 function response(data, range, status = 206) {
@@ -63,6 +64,47 @@ test('abort removes a partially downloaded output', async () => {
   setTimeout(() => abort.abort(new Error('cancelled')), 2);
   await assert.rejects(pending);
   assert.ok(disk.removed.length > 0);
+});
+
+test('continuous slow HLS segment data can exceed the no-progress window', async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const timeoutMock = mock.method(AbortSignal, 'timeout', function (ms) { return originalTimeout.call(this, ms === 20000 ? 10 : ms); });
+  const disk = diskMock(), chunks = [bytes([1]), bytes([2]), bytes([3])];
+  const request = async () => ({status: 200, headers: {get: () => null}, body: new ReadableStream({start(controller) {
+    chunks.forEach((chunk, index) => setTimeout(() => controller.enqueue(chunk), index * 8));
+    setTimeout(() => controller.close(), 25);
+  }})});
+  const service = createMediaTransfer({request, disk, directTransfer: async () => {}, assembleSegments, progressTimeoutMs: 10});
+  try {
+    const result = await service.downloadTrack({url: 'https://x', segments: [{resolvedUri: 's'}]}, '', new AbortController().signal, () => {}, 'job', {wait: async () => {}, run: operation => operation(new AbortController().signal)});
+    assert.deepEqual([...disk.files.get(result.path)], [1, 2, 3]);
+  } finally { timeoutMock.mock.restore(); }
+});
+
+test('a stalled HLS segment times out and retries while user cancellation stays explicit', async () => {
+  const disk = diskMock(), abort = new AbortController(); let calls = 0;
+  const request = async () => ({status: 200, headers: {get: () => null}, body: new ReadableStream({start(controller) {
+    calls++;
+    if (calls === 1) return;
+    controller.enqueue(bytes([7])); controller.close();
+  }})});
+  const control = new TransferControl(abort.signal, () => {}, {delay: 1, attempts: 1});
+  const service = createMediaTransfer({request, disk, directTransfer: async () => {}, assembleSegments, progressTimeoutMs: 8});
+  const result = await service.downloadTrack({url: 'https://x', segments: [{resolvedUri: 's'}]}, '', abort.signal, () => {}, 'job', control);
+  assert.deepEqual([...disk.files.get(result.path)], [7]); assert.equal(calls, 2);
+
+  const cancel = new AbortController();
+  const cancelService = createMediaTransfer({request: async () => ({status: 200, headers: {get: () => null}, body: new ReadableStream({start() {}})}), disk, directTransfer: async () => {}, assembleSegments, progressTimeoutMs: 50});
+  const pending = cancelService.downloadTrack({url: 'https://x', segments: [{resolvedUri: 's'}]}, '', cancel.signal, () => {}, 'cancel', {wait: async () => {}, run: operation => operation(cancel.signal)});
+  setTimeout(() => cancel.abort(Object.assign(new Error('已取消'), {code: 'CANCELLED'})), 2);
+  await assert.rejects(pending, error => error.code === 'CANCELLED');
+});
+
+test('indexed route aggregate keeps the first underlying failure', async () => {
+  const disk = diskMock(), errors = [new Error('primary failed'), new Error('backup failed')], aggregate = new AggregateError(errors);
+  const service = createMediaTransfer({request: async () => { throw errors[0]; }, disk, directTransfer: async () => {}, assembleSegments: async (jobs, options) => options.download(jobs[0], 0, options.signal)});
+  const format = {url: 'https://x', rangeRoutes: {run: async () => { throw aggregate; }}, segments: [{resolvedUri: 's', byterange: {offset: 0, length: 1}}]};
+  await assert.rejects(service.downloadTrack(format, '', new AbortController().signal, () => {}, 'job', {wait: async () => {}, run: operation => operation(new AbortController().signal)}), error => error === errors[0]);
 });
 
 test('AES segments use the safe lower concurrency while retaining decrypt path', async () => {

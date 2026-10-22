@@ -1,3 +1,6 @@
+import { isGenericMediaTitle } from './media-titles.js';
+import {saveFailureDetails} from './diagnostics.js';
+
 const enabledChoices = choices => Object.values(choices || {}).some(choice => choice?.enabled);
 
 // Single-title headers use CSS ellipsis. Native select options need a measured
@@ -11,6 +14,11 @@ export function mediaTitleLabel(title,maxWidth=Infinity,measure) {
   let low=0,high=characters.length;
   while(low<high){const middle=Math.ceil((low+high)/2);if(measure(characters.slice(0,middle).join('')+suffix)<=maxWidth)low=middle;else high=middle-1;}
   return characters.slice(0,low).join('').trimEnd()+suffix;
+}
+
+export function orderedMediaOptions(videos=[]){
+ return videos.map((video,index)=>({index,title:String(video.title || '').trim() || `影片 ${index+1}`}))
+   .sort((a,b)=>Number(isGenericMediaTitle(a.title))-Number(isGenericMediaTitle(b.title)));
 }
 
 export function mediaAvailability(info) {
@@ -61,12 +69,18 @@ export async function sourceDeadline(operation,timeoutMs=30000) {
 // A shareable diagnostic has no titles, post IDs, URLs, cookies or raw logs.
 export function sourceInspectionDiagnostic({page,mediaIndex=0,phase,failure}={}){
  const selected=page?.videos?.[mediaIndex],d=page?.media?.discoveryDiagnostics || {},count=value=>Number.isInteger(value)&&value>=0?value:0;
- const result={schema:1,version:'1.0.0',build:'cut-sync-5',phase:['detecting','inspecting','ready','failed'].includes(phase)?phase:'unknown',videoCount:count(page?.videos?.length),selectedIndex:count(mediaIndex)+1,hasPermalink:!!selected?.linkedMedia,hasDirectSource:!!selected?.downloadUrl,hasPlatform:!!page?.platform,discovery:{json:count(d.json?.observed),oversized:count(d.json?.oversized),throttled:count(d.json?.throttled),models:count(d.models),matches:count(d.matches),playerIds:count(d.playerIds),localNetworkCandidates:count(d.localNetworkCandidates),unboundFallbackBlocked:!!d.unboundFallbackBlocked}};
+ const result={schema:1,version:'1.0.0',build:'schema-contract-17',phase:['detecting','inspecting','ready','failed'].includes(phase)?phase:'unknown',videoCount:count(page?.videos?.length),selectedIndex:count(mediaIndex)+1,hasPermalink:!!selected?.linkedMedia,hasDirectSource:!!selected?.downloadUrl,hasPlatform:!!page?.platform,discovery:{json:count(d.json?.observed),oversized:count(d.json?.oversized),throttled:count(d.json?.throttled),models:count(d.models),matches:count(d.matches),playerIds:count(d.playerIds),localNetworkCandidates:count(d.localNetworkCandidates),unboundFallbackBlocked:!!d.unboundFallbackBlocked}};
+ if(Number.isInteger(d.metadataQueue))result.discovery.metadataQueue=count(d.metadataQueue);
+ if(['complete','item-budget','time-budget','metadata-budget','document-budget'].includes(d.explorationReason))result.discovery.exploration={reason:d.explorationReason,steps:count(d.count),elapsedMs:count(d.timingMs)};
+ if(['incomplete-context','multiple-players','missing-duration','no-exact-binding'].includes(d.networkFallbackReason))result.discovery.networkFallbackReason=d.networkFallbackReason;
+ if(['protected','explicit-identity','multiple-players','missing-duration','not-blob','no-live-metadata','too-many-candidates','stale-metadata','unknown-source-kind','verification-required'].includes(d.metadataReason)){
+  result.discovery.metadataReason=d.metadataReason;result.discovery.metadataCandidates=count(d.metadataCandidates);
+ }
  if(['no-model','no-player-identity','identity-unmatched','ambiguous-model','matched'].includes(d.reason))result.discovery.reason=d.reason;
  result.discovery.manifests=count(d.manifests);
- const site=page?.platform?.site;if(['youtube','bilibili','dailymotion','embedded','social-network','network-media','instagram','twitch','anime1'].includes(site))result.platformKind=site;
+ const site=page?.platform?.site;if(['youtube','bilibili','dailymotion','embedded','social-network','network-media','metadata-media','instagram','twitch','twitch-clip','anime1'].includes(site))result.platformKind=site;
  result.mainPlayer=!!(selected?.dailymotionMain||selected?.bilibiliMain);if(page?.bilibiliContext){result.bilibili={routeResolved:true,routeFallback:!!selected?.routeOnly,ownedPlayers:count(page.videos?.filter(v=>v.bilibiliMain&&!v.routeOnly).length)};}
- if(failure){result.failure={code:String(failure.code || '').match(/^[A-Z][A-Z0-9_]{0,48}$/)?.[0] || 'UNKNOWN'};if(Number.isInteger(failure.httpStatus))result.failure.httpStatus=failure.httpStatus;
+ if(failure){result.failure={code:String(failure.code || '').match(/^[A-Z][A-Z0-9_]{0,48}$/)?.[0] || 'UNKNOWN',...saveFailureDetails(failure)};if(Number.isInteger(failure.httpStatus))result.failure.httpStatus=failure.httpStatus;
   if(Number.isInteger(failure.apiCode)&&Math.abs(failure.apiCode)<=1000000)result.failure.apiCode=failure.apiCode;
   if(['HEAD','GET','GET RANGE'].includes(failure.requestMethod))result.failure.method=failure.requestMethod;
   if(typeof failure.requestHost==='string'&&/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/i.test(failure.requestHost))result.failure.host=failure.requestHost;

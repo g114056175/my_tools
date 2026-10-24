@@ -15,7 +15,7 @@
 </tr>
 </table>
 
-<img src="docs/usage.gif" width="840" alt="VideoPocket 操作示範：開啟工具、調整片段時間並下載影片">
+<img src="docs/download-demo.gif" width="339" alt="VideoPocket 操作示範：開啟工具、調整片段時間並下載影片">
 
 <details>
 <summary><strong>安裝方式</strong></summary>

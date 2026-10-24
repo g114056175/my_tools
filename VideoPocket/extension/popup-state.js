@@ -1,5 +1,6 @@
 import { isGenericMediaTitle } from './media-titles.js';
 import {saveFailureDetails} from './diagnostics.js';
+import {BUILD_ID} from './build-info.js';
 
 const enabledChoices = choices => Object.values(choices || {}).some(choice => choice?.enabled);
 
@@ -69,7 +70,8 @@ export async function sourceDeadline(operation,timeoutMs=30000) {
 // A shareable diagnostic has no titles, post IDs, URLs, cookies or raw logs.
 export function sourceInspectionDiagnostic({page,mediaIndex=0,phase,failure}={}){
  const selected=page?.videos?.[mediaIndex],d=page?.media?.discoveryDiagnostics || {},count=value=>Number.isInteger(value)&&value>=0?value:0;
- const result={schema:1,version:'1.0.0',build:'schema-contract-17',phase:['detecting','inspecting','ready','failed'].includes(phase)?phase:'unknown',videoCount:count(page?.videos?.length),selectedIndex:count(mediaIndex)+1,hasPermalink:!!selected?.linkedMedia,hasDirectSource:!!selected?.downloadUrl,hasPlatform:!!page?.platform,discovery:{json:count(d.json?.observed),oversized:count(d.json?.oversized),throttled:count(d.json?.throttled),models:count(d.models),matches:count(d.matches),playerIds:count(d.playerIds),localNetworkCandidates:count(d.localNetworkCandidates),unboundFallbackBlocked:!!d.unboundFallbackBlocked}};
+ const result={schema:1,version:'1.0.0',build:BUILD_ID,phase:['detecting','inspecting','ready','failed'].includes(phase)?phase:'unknown',videoCount:count(page?.videos?.length),selectedIndex:count(mediaIndex)+1,hasPermalink:!!selected?.linkedMedia,hasDirectSource:!!selected?.downloadUrl,hasPlatform:!!page?.platform,discovery:{json:count(d.json?.observed),oversized:count(d.json?.oversized),throttled:count(d.json?.throttled),models:count(d.models),matches:count(d.matches),playerIds:count(d.playerIds),localNetworkCandidates:count(d.localNetworkCandidates),unboundFallbackBlocked:!!d.unboundFallbackBlocked}};
+ if(typeof d.observerBuild==='string'&&/^[a-z0-9-]{1,64}$/.test(d.observerBuild))result.discovery.observerBuild=d.observerBuild;
  if(Number.isInteger(d.metadataQueue))result.discovery.metadataQueue=count(d.metadataQueue);
  if(['complete','item-budget','time-budget','metadata-budget','document-budget'].includes(d.explorationReason))result.discovery.exploration={reason:d.explorationReason,steps:count(d.count),elapsedMs:count(d.timingMs)};
  if(['incomplete-context','multiple-players','missing-duration','no-exact-binding'].includes(d.networkFallbackReason))result.discovery.networkFallbackReason=d.networkFallbackReason;
@@ -84,7 +86,7 @@ export function sourceInspectionDiagnostic({page,mediaIndex=0,phase,failure}={})
   if(Number.isInteger(failure.apiCode)&&Math.abs(failure.apiCode)<=1000000)result.failure.apiCode=failure.apiCode;
   if(['HEAD','GET','GET RANGE'].includes(failure.requestMethod))result.failure.method=failure.requestMethod;
   if(typeof failure.requestHost==='string'&&/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/i.test(failure.requestHost))result.failure.host=failure.requestHost;
-  if(['linked-document','linked-redirect','linked-ambiguous','linked-no-model','dailymotion-metadata','dailymotion-manifest','bilibili-playurl','source-request','source-head','source-probe','stream-manifest','stream-segment'].includes(failure.sourceStage))result.failure.stage=failure.sourceStage;
+  if(['selection-inventory','linked-document','linked-redirect','linked-ambiguous','linked-no-model','dailymotion-metadata','dailymotion-manifest','bilibili-playurl','source-request','source-head','source-probe','stream-manifest','stream-segment'].includes(failure.sourceStage))result.failure.stage=failure.sourceStage;
  }
  return result;
 }

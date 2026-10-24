@@ -1,6 +1,7 @@
 import {verifiedNetworkSource} from './network-source.js';
 import {networkHttpUrl} from './network-media.js';
 import {classifyFailure} from './diagnostics.js';
+import {qualityOfFormat} from './browser-media.js';
 
 // Keep the first (often already playing) source, then prioritize distinct
 // higher qualities before filling remaining slots with same-quality backups.
@@ -9,7 +10,7 @@ export function prioritizeMediaVersions(versions=[],limit=6){
  const byUrl=new Map();for(const item of versions)if(networkHttpUrl(item?.url)&&!byUrl.has(item.url))byUrl.set(item.url,item);
  const unique=[...byUrl.values()];
  if(!unique.length)return [];
- const height=item=>Number.isFinite(Number(item.height))&&Number(item.height)>0?Number(item.height):0;
+ const height=qualityOfFormat;
  const quality=item=>height(item)?`${Number(item.width)||0}x${height(item)}`:item.url;
  const first=unique.shift(),primary=[first],backup=[],seen=new Set([quality(first)]);
  unique.sort((a,b)=>height(b)-height(a));
@@ -71,7 +72,7 @@ function mergeSources(sources) {
 
 // Unbound URLs are only hints. Probe a bounded scope and require one verified
 // match; do not assume a frame's last request belongs to the selected player.
-export async function resolveNetworkCandidates(platform,{signal,probe,timeoutMs=8000,totalTimeoutMs=12000,maxCandidates=12}={}) {
+export async function resolveNetworkCandidates(platform,{signal,probe,timeoutMs=8000,totalTimeoutMs=12000,maxCandidates=12,requireMediaPacket=false}={}) {
   const versions=(platform?.versions || []).filter(v=>networkHttpUrl(v?.url)&&(!v.kind||['hls','dash','progressive'].includes(v.kind)));
   const candidates=prioritizeMediaVersions(versions,Math.max(1,Math.min(Number(maxCandidates)||12,12))).map(v=>({...v,kind:v.kind || 'progressive'}));
   const verified=[],batch=new AbortController();let cursor=0,firstError,fatal,readable=false,deadlineExceeded=false;
@@ -82,7 +83,7 @@ export async function resolveNetworkCandidates(platform,{signal,probe,timeoutMs=
       signal?.throwIfAborted();const variant=candidates[cursor++];
       const probeSignal=AbortSignal.any([batch.signal,...(signal?[signal]:[]),AbortSignal.timeout(Math.max(1,Math.min(timeoutMs,remaining)))]);
       try{
-        const candidate=await probe(variant,probeSignal);probeSignal.throwIfAborted();readable=true;
+        const candidate=await probe(variant,probeSignal,{requireMediaPacket});probeSignal.throwIfAborted();readable=true;
         if(verifiedNetworkSource(candidate,platform.expectedDuration))verified.push({variant,source:candidate});
       }catch(error){
         signal?.throwIfAborted();

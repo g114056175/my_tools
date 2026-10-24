@@ -1,6 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {mediaChoices,selectedPlan,metadataCodecs,parseMp4Codecs} from '../extension/browser-media.js';
+import {mediaChoices,selectedPlan,metadataCodecs,parseMp4Codecs,qualityOfFormat} from '../extension/browser-media.js';
 import {assertComplete} from '../extension/youtube-download.js';
+
+test('portrait and landscape quality use the short edge without altering raw media dimensions',()=>{
+ const portrait={id:'portrait',url:'https://cdn/portrait',width:1080,height:1920,videoCodec:'h264',audioCodec:'aac',ext:'mp4'},landscape={...portrait,id:'landscape',url:'https://cdn/landscape',width:1280,height:720},low={...portrait,id:'low',url:'https://cdn/low',width:360,height:640};
+ const c=mediaChoices({formats:[low,landscape,portrait]});
+ assert.deepEqual(c.choices.video.auto.heights,[1080,720,360]);
+ const selected=selectedPlan(c,{kind:'video',height:1080});assert.equal(selected.video,portrait);assert.equal(selected.video.width,1080);assert.equal(selected.video.height,1920);
+ assert.equal(selectedPlan(c,{kind:'video',height:0}).video,portrait);assert.equal(selectedPlan(c,{kind:'video',height:720}).video,landscape);
+ assert.equal(qualityOfFormat({width:720,height:1280}),720);assert.equal(qualityOfFormat({width:3840,height:2160}),2160);assert.equal(qualityOfFormat({height:480}),480);
+});
 test('equal-resolution H264 variants consistently choose the higher bitrate',()=>{
  const low={id:'low',url:'https://cdn/low',height:1080,videoCodec:'h264',audioCodec:'aac',ext:'mp4',bitrate:1000000},high={...low,id:'high',url:'https://cdn/high',bitrate:5000000};
  for(const formats of [[low,high],[high,low]])assert.equal(selectedPlan(mediaChoices({formats}),{kind:'video'}).video.id,'high');

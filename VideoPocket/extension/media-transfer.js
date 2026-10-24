@@ -62,7 +62,7 @@ export function createMediaTransfer({request, disk, directTransfer, assembleSegm
   async function downloadTrack(f, referer, signal, onBytes, scope, control, onSegment = () => {}, abortJob = () => {}, onSegmentBytes = () => {}, clearSegmentAttempt = () => {}) {
     const output = await disk.createMediaFile(scope, 'input');
     if (!f.segments?.length) {
-      try { return await directTransfer(f, (url, options) => request(url, referer, {...options, pageContext: f.pageContext}), signal, onBytes, output, control); }
+      try { return await directTransfer(f, (url, options) => request(url, referer, {...options, sourceStage:'stream-segment', pageContext: f.pageContext}), signal, onBytes, output, control); }
       catch (error) { await output.abort(); throw error; }
     }
     const jobs = [], seenMap = new Set(), keys = new Map();

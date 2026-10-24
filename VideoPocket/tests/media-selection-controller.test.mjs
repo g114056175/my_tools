@@ -30,6 +30,24 @@ test('selectedMediaIndex requires page, frame, document, media identity and sour
   assert.equal(selectedMediaIndex([{...videos[0], url: 'https://cdn/new-post.mp4'}], selection, url), -1);
 });
 
+test('picker model identity survives summary evidence identity changing before deep snapshot',()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const selection={pageToken:stableHash(url),frameId:0,documentId:'x-doc',mediaKey:11,sourceToken:stableHash('blob:broadcast'),modelToken:stableHash('broadcast-model'),selectionIdentity:'x-broadcast',selectionToken:stableHash('x-broadcast')};
+ // Picker captured the deep model ID; summary only exposes the post-scoped
+ // evidence key. The stable element key still identifies the same player.
+ const summary=[{frameId:0,documentId:'x-doc',mediaKey:11,url:'blob:broadcast',mediaIdentity:'x.com:2112242739198959913',selectionIdentity:'x-broadcast'}];
+ assert.equal(selectedMediaIndex(summary,selection,url),0);
+});
+
+test('stable selection identity does not permit a changed element identity or source',()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const selection={pageToken:stableHash(url),frameId:0,documentId:'x-doc',mediaKey:11,sourceToken:stableHash('blob:broadcast'),selectionIdentity:'x-broadcast',selectionToken:stableHash('x-broadcast')};
+ const base={frameId:0,documentId:'x-doc',mediaKey:11,selectionIdentity:'x-broadcast',url:'blob:broadcast'};
+ assert.equal(selectedMediaIndex([{...base}],selection,url),0);
+ assert.equal(selectedMediaIndex([{...base,selectionIdentity:'x-other'}],selection,url),-1);
+ assert.equal(selectedMediaIndex([{...base,url:'blob:changed'}],selection,url),-1);
+});
+
 test('Twitch selection survives player replacement for the same VOD but never another VOD or frame',()=>{
  const url='https://www.twitch.tv/videos/123',id='twitch-vod:123',selection={pageToken:stableHash(url),frameId:0,documentId:'doc',mediaKey:1,sourceToken:stableHash('blob:old'),modelToken:stableHash(id)};
  const video={frameId:0,documentId:'doc',mediaKey:99,url:'blob:new',mediaIdentity:id};

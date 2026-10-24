@@ -113,6 +113,21 @@
    if(kind==='video'&&!video||expectedAudio&&!audio||kind==='audio'&&!audio)throw failure('來源缺少所選影音軌');
    const tracks=await Promise.all([video,audio].filter(Boolean).map(info=>packetWindow(info,range))),base=Math.min(...tracks.map(t=>t.firstTime));
    if(!Number.isFinite(base)||base>range.start+.1)throw failure('來源片段未覆蓋所選起點');
+   // Low-I/O fast path: only a single muxed MP4 with an unshifted source and
+   // an exact independently decodable keyframe may bypass normalization. Any
+   // copy or presentation validation failure falls through to the normal path.
+   const fastEligible=kind==='video'&&entries.length===1&&String(entries[0].item.name||'').toLowerCase().endsWith('.mp4')&&entries[0].item.timelineStart===0&&Math.abs(entries[0].offset)<=.001&&!!audio&&String(output||'').toLowerCase().endsWith('.mp4')&&!!root.VideoPocketRangeMp4;
+   if(fastEligible){let fastResult,fastPath,fastValidationMs=0;try{
+    const key=await new M.EncodedPacketSink(video.track).getKeyPacket(range.start,{verifyKeyPackets:true});
+    if(key&&Math.abs(key.timestamp-range.start)<=1e-6){
+     fastResult=await root.VideoPocketRangeMp4.tryCut({input:videoEntry.input,start:range.start,end:range.end,output,scope,kind:'video',expectedAudio:true,signal,onProgress});
+     fastPath=fastResult?.result?.path;
+     if(fastPath){const validationBegan=Date.now();let timing;try{timing=await validate(await disk.readMediaFile(fastPath),range.end-range.start,{video:true,audio:true,presentation:true});}finally{fastValidationMs=Date.now()-validationBegan;}
+      result=fastResult.result;paths.push(result.path);completed=true;return {...result,timing,processing:{normalizeMs:0,convertMs:Math.max(0,Date.now()-began-fastValidationMs),validateMs:fastValidationMs,hardwareRequested:false,strategy:'mp4-keyframe-copy',...(fastResult.stats||{})}};
+     }
+    }
+   }catch(error){if(fastPath)await disk.removeMediaFile(fastPath).catch(()=>{});if(signal?.aborted||error?.code==='CANCELLED')throw error;check(signal);}
+   }
    intermediate=await disk.createSyncMediaFile(scope,'range-normalized.mkv');paths.push(intermediate.path);
    const aligned=new M.Output({format:new M.MkvOutputFormat(),target:makeTarget(intermediate.access,signal)});
    const sources=tracks.map(info=>{
@@ -132,12 +147,12 @@
    }catch(error){await aligned.cancel().catch(()=>{});throw error;}
    intermediate.finish();intermediate=null;check(signal);
    conversionInput=new M.Input({source:new M.BlobSource(await disk.readMediaFile(paths[0])),formats});
-   const ext=output.split('.').pop().toLowerCase(),normalizedAt=Date.now();let smart,smartFallback,selectedVideo={};
+   const ext=output.split('.').pop().toLowerCase(),normalizedAt=Date.now(),conversionBegan=normalizedAt;let smart,smartFallback,selectedVideo={},validationMs=0;
    for(const helper of [root.VideoPocketRangeMp4,root.VideoPocketRangeSmart,root.VideoPocketRangeH264].filter(Boolean)){
     try{smart=await helper.tryCut({input:conversionInput,start:range.start-base,end:range.end-base,output,scope,kind,expectedAudio,signal,onProgress});if(smart)break;}catch(error){check(signal);smartFallback=error.message;}
    }
    let smartTiming;
-   if(smart){try{smartTiming=await validate(await disk.readMediaFile(smart.result.path),range.end-range.start,{video:!!video,audio:!!audio,presentation:Number.isFinite(smart.stats.presentationDuration),splice:smart.stats.encodedSeconds,splices:smart.stats.splices});}catch(error){check(signal);await disk.removeMediaFile(smart.result.path).catch(()=>{});smartFallback=error.message;smart=null;}}
+   if(smart){const validationBegan=Date.now();try{smartTiming=await validate(await disk.readMediaFile(smart.result.path),range.end-range.start,{video:!!video,audio:!!audio,presentation:Number.isFinite(smart.stats.presentationDuration),splice:smart.stats.encodedSeconds,splices:smart.stats.splices});}catch(error){check(signal);await disk.removeMediaFile(smart.result.path).catch(()=>{});smartFallback=error.message;smart=null;}finally{validationMs+=Date.now()-validationBegan;}}
    if(smart){result=smart.result;paths.push(result.path);}else{
     writer=await disk.createSyncMediaFile(scope,output);paths.push(writer.path);
     const destination=new M.Output({format:outputFormat(ext),target:makeTarget(writer.access,signal)});
@@ -149,11 +164,12 @@
     activeConversion.onProgress=value=>{check(signal);onProgress(value);};
     await activeConversion.execute();check(signal);result=writer.finish();writer=null;
    }
-   const convertedAt=Date.now(),timing=smartTiming||await validate(await disk.readMediaFile(result.path),range.end-range.start,{video:!!video,audio:!!audio});
-   const processing={normalizeMs:normalizedAt-began,convertMs:convertedAt-normalizedAt,validateMs:Date.now()-convertedAt,hardwareRequested:selectedVideo.hardwareAcceleration==='prefer-hardware',strategy:'copy-or-convert',...(smart?.stats||{}),...(smartFallback?{smartFallback}:{})};
+   const convertedAt=Date.now(),convertMs=Math.max(0,convertedAt-conversionBegan-validationMs);let timing=smartTiming;
+   if(!timing){const validationBegan=Date.now();try{timing=await validate(await disk.readMediaFile(result.path),range.end-range.start,{video:!!video,audio:!!audio});}finally{validationMs+=Date.now()-validationBegan;}}
+   const processing={normalizeMs:normalizedAt-began,convertMs,validateMs:validationMs,hardwareRequested:selectedVideo.hardwareAcceleration==='prefer-hardware',strategy:'copy-or-convert',...(smart?.stats||{}),...(smartFallback?{smartFallback}:{})};
    completed=true;return {...result,timing,processing};
   }catch(error){await activeConversion?.cancel().catch(()=>{});if(signal?.aborted)throw Object.assign(new Error('已取消'),{code:'CANCELLED'});throw error;}
-  finally{activeConversion=null;intermediate?.abort();writer?.abort();conversionInput?.dispose();for(const e of entries)e.input.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
+  finally{activeConversion=null;await Promise.resolve(intermediate?.abort?.()).catch(()=>{});await Promise.resolve(writer?.abort?.()).catch(()=>{});conversionInput?.dispose();for(const e of entries)e.input.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
  root.VideoPocketRangeCut={cutRange,validate,videoOptions,packetWindow,trimBoundary,cancel(){root.VideoPocketRangeMp4?.cancel();root.VideoPocketRangeSmart?.cancel();root.VideoPocketRangeH264?.cancel();void activeConversion?.cancel().catch(()=>{});}};
 })(self);

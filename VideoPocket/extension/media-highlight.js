@@ -56,8 +56,11 @@ export function highlightMedia(options = {}) {
     margin:'0',padding:'0',transition:'none',animation:'none',transform:'none',
   });
   const label=globalThis.document.createElement('div');
-  label.textContent=String(options.title || video.getAttribute?.('aria-label') || video.title || globalThis.document.title || '影片').trim() || '影片';
-  Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'calc(100% - 6px)',padding:'3px 6px',borderRadius:'3px',background:'#16856b',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
+  // Labels are presentation-only. Only a caller-supplied title is trusted;
+  // generic aria/title/document strings frequently describe the page rather
+  // than this media element.
+  label.textContent=String(options.title ?? '').trim() || '影片';
+  Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'min(calc(100% - 6px), calc(100vw - 12px))',boxSizing:'border-box',padding:'3px 6px',borderRadius:'3px',background:'#16856b',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
   frame.append(label);
   const blockedByDialog=()=>{
     try{return [...globalThis.document.querySelectorAll('dialog[open],[role="dialog"],[aria-modal="true"]')].some(dialog=>{
@@ -81,7 +84,10 @@ export function highlightMedia(options = {}) {
       const sx=bounds&&parent.offsetWidth?bounds.width/parent.offsetWidth:1,sy=bounds&&parent.offsetHeight?bounds.height/parent.offsetHeight:1;
       const left=parent?(value.left-(bounds?.left||0))/sx+(parent.scrollLeft||0)-(parent.clientLeft||0):value.left+(globalThis.scrollX||0);
       const top=parent?(value.top-(bounds?.top||0))/sy+(parent.scrollTop||0)-(parent.clientTop||0):value.top+(globalThis.scrollY||0);
-      Object.assign(frame.style,{left:`${left}px`,top:`${top}px`,width:`${value.width/sx}px`,height:`${value.height/sy}px`,visibility:'visible'});
+      const viewportRight=Number.isFinite(globalThis.innerWidth)?globalThis.innerWidth-value.left-6:Infinity;
+      const frameWidth=value.width/sx;
+      label.style.maxWidth=`${Math.max(0,Math.min(frameWidth-6,viewportRight/sx))}px`;
+      Object.assign(frame.style,{left:`${left}px`,top:`${top}px`,width:`${frameWidth}px`,height:`${value.height/sy}px`,visibility:'visible'});
     }catch{frame.style.display='none';}
   };
   const clear = () => {

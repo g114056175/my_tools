@@ -24,6 +24,12 @@ async function serialAssembler(jobs, options) {
   for (let i = 0; i < jobs.length; i++) { await options.consume(parts.get(i), i); await options.dispose(parts.get(i), i); }
 }
 
+test('progressive body requests use media streaming deadlines rather than metadata deadlines',async()=>{
+ const stages=[],disk=diskMock(),service=createMediaTransfer({disk,assembleSegments,request:async(url,referer,options)=>{stages.push(options.sourceStage);assert.equal(options.pageContext.tabId,7);return new Response(new Uint8Array([1,2,3]));},directTransfer:async(format,request,signal,onBytes,sink)=>{const response=await request(format.url,{signal});await sink.append(new Uint8Array(await response.arrayBuffer()));return sink.finish();}});
+ const result=await service.downloadTrack({url:'https://cdn.test/file.mp4',pageContext:{tabId:7}},'https://page.test/',new AbortController().signal,()=>{},'job');
+ assert.deepEqual(stages,['stream-segment']);assert.equal(result.size,3);
+});
+
 test('known unencrypted ranges write directly at concatenated offsets and preserve order', async () => {
   const disk = diskMock(), source = [bytes([1, 2]), bytes([3, 4]), bytes([5, 6])];
   const request = async (url, _referer, {headers}) => { const i = Number(url.slice(1)); const range = {offset: i * 2, length: 2, total: 6}; return response(source[i], range); };

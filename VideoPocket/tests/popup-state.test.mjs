@@ -1,5 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {BUILD_ID} from '../extension/build-info.js';
+
+test('selection expiry diagnostic carries a reason without exposing the selected source',()=>{
+ const value=sourceInspectionDiagnostic({page:{videos:[{url:'blob:private'}]},phase:'failed',failure:{code:'SOURCE_CHANGED',sourceStage:'selection-inventory'}});
+ assert.equal(value.failure.code,'SOURCE_CHANGED');assert.equal(value.failure.stage,'selection-inventory');assert.ok(!JSON.stringify(value).includes('private'));
+});
 import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,sourceHeader,sourceDeadline,mediaTitleLabel,orderedMediaOptions,sourceInspectionDiagnostic} from '../extension/popup-state.js';
 
 test('named media precede numbered placeholders without changing selection indices or within-group order',()=>{
@@ -32,10 +38,17 @@ test('source diagnostics contain only safe counts and failure stages',()=>{
 
 test('shareable save diagnostics preserve only allowlisted storage failure details',()=>{
  const value=sourceInspectionDiagnostic({phase:'failed',failure:{code:'SAVE_FAILED',saveStage:'write-target',saveReason:'disk-full',message:'C:/private/SECRET.mp4'}});
- assert.equal(value.build,'schema-contract-17');assert.equal(value.failure.saveStage,'write-target');assert.equal(value.failure.saveReason,'disk-full');
+ assert.equal(value.build,BUILD_ID);assert.equal(value.failure.saveStage,'write-target');assert.equal(value.failure.saveReason,'disk-full');
  assert.doesNotMatch(JSON.stringify(value),/SECRET|private/);
  const unsafe=sourceInspectionDiagnostic({failure:{code:'SAVE_FAILED',saveStage:'private',saveReason:'SECRET'}});
  assert.equal(unsafe.failure.saveStage,undefined);assert.equal(unsafe.failure.saveReason,undefined);
+});
+
+test('diagnostics distinguish the popup build from the actual injected observer',()=>{
+ const page={media:{discoveryDiagnostics:{observerBuild:'older-build-19'}}};
+ assert.equal(sourceInspectionDiagnostic({page}).discovery.observerBuild,'older-build-19');
+ page.media.discoveryDiagnostics.observerBuild='https://private.example/?secret';
+ assert.equal(sourceInspectionDiagnostic({page}).discovery.observerBuild,undefined);
 });
 
 test('source diagnostics expose a bounded network fallback reason',()=>{

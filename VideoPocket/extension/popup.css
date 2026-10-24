@@ -101,3 +101,4 @@ textarea{display:block;margin-top:9px;width:100%;height:88px;min-height:88px;max
 .range-times input:disabled{color:#a9b0b5}
 .range-times input[aria-invalid="true"]{border-color:#cfaaa2}
 .range-message{margin-top:6px;color:#9a6358;font-size:11px;line-height:16px;text-align:left;white-space:nowrap}
+.range-warning{margin-top:6px;color:#9a6b11;font-size:11px;line-height:16px;text-align:left}

@@ -51,6 +51,7 @@ export function stableHash(value) {
 export function createDownloadClaims() {
   const claims = new Map();
   return {
+    get size() { return claims.size; },
     claim(key, id) {
       if (!key) return {claimed: false};
       const existing = claims.get(key);

@@ -95,6 +95,12 @@ test('name badge lasts eight seconds and hides while a different modal covers th
  }finally{highlightMedia({clear:true});Object.assign(globalThis,old);state.restore();}
 });
 
+test('missing title uses the neutral media label instead of page or aria text',()=>{
+ const video=new NodeMock('video');video.getAttribute=()=> '頁面標題';video.title='播放器控制';const state=world([video]);
+ try{identities([[video,6]]);highlightMedia({mediaKey:6});assert.equal(state.body.children[0].children[0].textContent,'影片');}
+ finally{highlightMedia({clear:true});state.restore();}
+});
+
 test('marker is positioned within its local scaled containing block',()=>{
  const video=new NodeMock('video',{left:140,top:100,width:240,height:140}),state=world([video]);const parent=new NodeMock('div',{left:100,top:80,width:400,height:300});parent.offsetWidth=200;parent.offsetHeight=150;parent.scrollLeft=5;parent.scrollTop=7;parent.clientLeft=1;parent.clientTop=2;
  const create=state.body.append.bind(state.body);state.body.append=(frame)=>{frame.offsetParent=parent;create(frame);};

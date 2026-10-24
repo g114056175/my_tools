@@ -6,10 +6,10 @@ import { mediaSchemaFixtures } from "./fixtures/media-schema-contract.mjs";
 import { extractMediaModels } from "../extension/media-models.js";
 import { installMediaObserver } from "../extension/media-observer-source.js";
 
-const partsOf = fixture => fixture.parts || [{value: fixture.value, baseUrl: "https://social.example.test/video/contract"}];
+const partsOf = fixture => fixture.parts || [{value: fixture.value, baseUrl: fixture.name.startsWith('Instagram') ? 'https://www.instagram.com/reel/contract' : "https://social.example.test/video/contract"}];
 const pageFor = fixture => fixture.name.startsWith("X ") ? "https://x.com/example/status/contract" : fixture.name.startsWith("Facebook") ? "https://www.facebook.com/reel/contract" : fixture.name.startsWith("TikTok") ? "https://www.tiktok.com/@example/video/contract" : fixture.name.startsWith("Instagram") ? "https://www.instagram.com/reel/contract" : "https://social.example.test/video/contract";
 const baseline = fixture => partsOf(fixture).flatMap(part => extractMediaModels(part.value, {baseUrl: part.baseUrl}));
-function selectedIdentity(fixture) { if (fixture.name === "X quoted video_info") return "x-quoted-media"; const model = baseline(fixture).find(item => item.versions?.length || item.manifestUrl); return model?.id || model?.aliases?.[0]; }
+function selectedIdentity(fixture) { if(fixture.playerId)return fixture.playerId; if (fixture.name === "X quoted video_info") return "x-quoted-media"; const model = baseline(fixture).find(item => item.versions?.length || item.manifestUrl); return model?.id || model?.aliases?.[0]; }
 function expectedModel(fixture) { const id = selectedIdentity(fixture); return baseline(fixture).find(model => model.aliases.includes(id)) || baseline(fixture).find(model => model.versions?.length || model.manifestUrl); }
 
 function targetFor(fixture) {
@@ -60,7 +60,7 @@ function bundledResult(context,id) {
   `,context);
 }
 
-for(const name of ["Facebook response delivery","TikTok PlayAddrStruct and bitrateInfo","Instagram video_versions","Threads video_versions","X ordinary video_info","X quoted video_info"]){
+for(const name of ["Facebook response delivery","TikTok PlayAddrStruct and bitrateInfo","Instagram video_versions","Instagram Polaris numeric player identity","Threads video_versions","X ordinary video_info","X quoted video_info"]){
   test(`media pipeline contract: shipped bundle large JSON ${name}`,()=>{
     const fixture=mediaSchemaFixtures.find(item=>item.name===name),context=bundleContext(pageFor(fixture));
     // Only the targeted-copy entry is supplied. No small JSON or Response leg

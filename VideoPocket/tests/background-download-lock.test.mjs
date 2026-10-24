@@ -12,6 +12,7 @@ import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex,co
 import {attachSocialSources} from '../extension/social-source.js';
 import {normalizeRange} from '../extension/media-range.js';
 import {mediaTime} from '../extension/media-time.js';
+import {isGenericMediaTitle} from '../extension/media-titles.js';
 import {validateDocumentMediaPlan} from '../extension/document-media.js';
 
 async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserSaveError}={}) {
@@ -52,8 +53,8 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   };
   const context={chrome,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,setInterval:()=>0,
     pageSnapshot:pageSnapshotMock,pageSubtitles:()=>({}),createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
-    ACTIVE_STATES, normalizeRange,mediaTime,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
-    CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,createFilenameRecorder:()=>async()=>{},mediaRequestHeaders:()=>[],
+    ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
+    CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,mediaRequestHeaders:()=>[],
     VideoPocketDestinations:{remove:async()=>{},clear:async()=>{},get:async()=>false},
     downloadKey,createDownloadClaims,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates}),attachNetworkSources,networkFallbackReason,socialPageFetch:()=>{}};
   vm.runInNewContext(code,context,{filename:'background.js'});
@@ -62,6 +63,33 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   const call=(message,sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:'popup-doc'})=>new Promise((resolve,reject)=>listener(message,sender,response=>response?.ok?resolve(response.result):reject(Object.assign(new Error(response?.error||'failed'),response?.failure||{}))));
   return {connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,browserDownloads,async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
 }
+
+test('opening an idle popup cleans orphaned media without requiring a video inspection',async()=>{
+ const rt=await loadBackground(),before=rt.engineMessages.filter(m=>m.action==='recoverMedia').length;
+ const result=await rt.call({action:'recoverDownloads'});
+ assert.equal(result.cleaned,true);assert.equal(rt.engineMessages.filter(m=>m.action==='recoverMedia').length,before+1);
+ assert.ok(!rt.engineMessages.some(m=>m.action==='inspect'));
+});
+
+test('stage timings are session-only numeric diagnostics and reject arbitrary fields or popup writers',async()=>{
+ const rt=await loadBackground(),source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}}),job=await rt.call({action:'prepareDownload',sourceId:source.id,kind:'video'});
+ const data={action:'performance',id:job.id,timings:{downloadMs:123.4,normalizeMs:40,convertMs:200,validateMs:15,saveMs:-1,browserSaveMs:NaN,url:'https://secret.test',strategy:'raw private message'}};
+ await rt.call(data,{id:'ext',url:'chrome-extension://ext/offscreen.html'});
+ assert.equal(rt.jobs()[0].timings.downloadMs,123);assert.deepEqual(Object.keys(rt.jobs()[0].timings).sort(),['convertMs','downloadMs','normalizeMs','validateMs']);
+ await assert.rejects(rt.call(data));await rt.call({action:'cancel',id:job.id});
+});
+
+test('popup recovery preserves a download being prepared and a queued destination',async()=>{
+ const rt=await loadBackground(),source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ rt.blockRetain();const pending=rt.call({action:'prepareDownload',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.retainCount;i++)await new Promise(resolve=>setImmediate(resolve));
+ const before=rt.engineMessages.filter(m=>m.action==='recoverMedia').length;
+ assert.equal((await rt.call({action:'recoverDownloads'})).active,true);
+ rt.releaseRetain();const job=await pending;
+ assert.equal((await rt.call({action:'recoverDownloads'})).active,true);
+ assert.equal(rt.engineMessages.filter(m=>m.action==='recoverMedia').length,before);
+ await rt.call({action:'cancel',id:job.id});
+});
 
 test('browser save recovery keeps the finished blob alive until Chrome completes without restarting transfer',async()=>{
  const rt=await loadBackground({downloadResult:{url:'blob:completed-media',filename:'clip.mp4',blobId:'completed',saveFailure:{code:'SAVE_FAILED',saveStage:'open-target',saveReason:'permission'}},browserDownloadState:'in_progress'});
@@ -345,6 +373,14 @@ test('background inspect sources atomically deduplicates same media and releases
   assert.notEqual(retried.id,first.id);assert.ok(rt.jobs().some(job=>ACTIVE_STATES.has(job.state)));
 });
 
+test('generic retained player labels cannot replace the actual popup title in a prepared download',async()=>{
+  const rt=await loadBackground();
+  const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'doc',frameId:0,mediaKey:22,url:'https://cdn/video',title:'YouTube 影片播放器'}});
+  const prepared=await rt.call({action:'prepareDownload',sourceId:source.id,title:'真正的影片標題',kind:'video'});
+  assert.equal(rt.jobs().find(job=>job.id===prepared.id).title,'真正的影片標題');
+  await rt.call({action:'cancel',id:prepared.id});
+});
+
 test('active download reuses its verified inspect result when popup reopens',async()=>{
   const rt=await loadBackground(),descriptor={tabId:7,documentId:'dm-frame',frameId:2,mediaKey:22,url:'https://geo.dailymotion.com/player/x.html',platform:{site:'dailymotion',id:'x-video'},title:'Episode'};
   const first=await rt.call({action:'inspect',descriptor});
@@ -424,4 +460,70 @@ test('a failed download keeps its network cause when the popup was closed throug
  for(let i=0;i<20&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
  const failure=await rt.call({action:'lastError'});assert.equal(failure.code,'HTTP_AUTH');assert.equal(failure.stage,'download');assert.equal(failure.httpStatus,403);assert.equal(failure.sourceStage,'stream-segment');assert.ok(!JSON.stringify(failure).includes('private CDN response'));
  const close=rt.connect();assert.equal((await rt.call({action:'lastError'})).id,failure.id);close();
+});
+
+test('X multi-player expected target uses unique mediaKey when post content identity is shared',async()=>{
+ const postId='x-post-shared',url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const primary={mediaKey:11,mediaContentId:postId,mediaIdentity:postId,selectionIdentity:'x-broadcast',url:'blob:broadcast',downloadUrl:'https://cdn.example/broadcast.m3u8',title:'broadcast'};
+ const replyGif={mediaKey:22,mediaContentId:postId,mediaIdentity:postId,selectionIdentity:'x-reply-gif',url:'blob:gif',downloadUrl:'https://cdn.example/reply.gif',title:'reply'};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:{url,videos:[primary,replyGif],media:primary,tracks:[]}}]});
+ await assert.doesNotReject(rt.call({action:'snapshot',tabId:7,mediaIndex:0,preferPicked:false,expectedTarget:{frameId:0,documentId:'x-doc',mediaKey:11,mediaContentId:postId,selectionIdentity:'x-broadcast',selectionToken:stableHash('x-broadcast'),url:'blob:broadcast'}}));
+});
+
+test('X multi-player expected target rejects ambiguous duplicate mediaKey despite shared post identity',async()=>{
+ const postId='x-post-shared',url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const first={mediaKey:11,mediaContentId:postId,mediaIdentity:postId,selectionIdentity:'x-broadcast',url:'blob:first'};
+ const second={mediaKey:11,mediaContentId:'different-post',mediaIdentity:'different-post',selectionIdentity:'x-other',url:'blob:second'};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:{url,videos:[first,second],media:first,tracks:[]}}]});
+ await assert.rejects(rt.call({action:'snapshot',tabId:7,mediaIndex:0,preferPicked:false,expectedTarget:{frameId:0,documentId:'x-doc',mediaKey:11,mediaContentId:postId,selectionIdentity:'x-broadcast',selectionToken:stableHash('x-broadcast')}}),{code:'SOURCE_CHANGED'});
+});
+
+test('remembered picker selection survives evidence key to deep model identity transition',async()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const summaryVideo={mediaKey:11,mediaContentId:'x.com:2112242739198959913',mediaIdentity:'x.com:2112242739198959913',selectionIdentity:'x-broadcast',url:'blob:broadcast'};
+ const deepVideo={mediaKey:11,mediaContentId:'broadcast-model',mediaIdentity:'broadcast-model',selectionIdentity:'x-broadcast',url:'blob:broadcast',downloadUrl:'https://cdn.example/broadcast.m3u8'};
+ const summary={url,discoveryMode:'summary',videos:[summaryVideo],media:summaryVideo,tracks:[]};
+ const deep={url,videos:[deepVideo],media:deepVideo,tracks:[],platform:{site:'embedded',id:'broadcast-model',versions:[{url:deepVideo.downloadUrl}]}};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:summary}],frameSnapshots:[deep]});
+ rt.stored[selectionStorageKey(7)]={frameId:0,documentId:'x-doc',mediaKey:11,pageToken:stableHash(url),sourceToken:stableHash('blob:broadcast'),modelToken:stableHash('broadcast-model'),selectionIdentity:'x-broadcast',selectionToken:stableHash('x-broadcast')};
+ const result=await rt.call({action:'snapshot',tabId:7});
+ assert.equal(result.selectionExpired,false);
+});
+
+test('background applies page preferredMediaIndex only when there is no remembered or explicit selection',async()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const gif={mediaKey:1,url:'https://video.example/reply.gif',title:'reply'};
+ const broadcast={mediaKey:2,url:'blob:broadcast',downloadUrl:'https://cdn.example/broadcast.m3u8',title:'broadcast'};
+ const top={url,discoveryMode:'summary',preferredMediaIndex:1,videos:[gif,broadcast],media:gif,tracks:[]};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:top}],frameSnapshots:[{...top,discoveryMode:'deep',media:broadcast},{...top,discoveryMode:'deep',media:gif}]});
+ const automatic=await rt.call({action:'snapshot',tabId:7});
+ assert.equal(automatic.mediaIndex,1);
+ const manual=await rt.call({action:'snapshot',tabId:7,mediaIndex:0,preferPicked:false,expectedTarget:{frameId:0,documentId:'x-doc',mediaKey:1,url:gif.url}});
+ assert.equal(manual.mediaIndex,0);
+});
+
+test('legacy build20 selection migrates modelToken to selectionToken after deep verification',async()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const summaryVideo={mediaKey:11,mediaContentId:'x.com:2112242739198959913',mediaIdentity:'x.com:2112242739198959913',selectionIdentity:'x-broadcast',url:'blob:broadcast'};
+ const deepVideo={mediaKey:11,mediaContentId:'broadcast-model',mediaIdentity:'broadcast-model',selectionIdentity:'x-broadcast',url:'blob:broadcast',downloadUrl:'https://cdn.example/broadcast.m3u8'};
+ const summary={url,discoveryMode:'summary',videos:[summaryVideo],media:summaryVideo,tracks:[]};
+ const deep={url,videos:[deepVideo],media:deepVideo,tracks:[],platform:{site:'embedded',id:'broadcast-model',versions:[{url:deepVideo.downloadUrl}]}};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:summary}],frameSnapshots:[deep]});
+ rt.stored[selectionStorageKey(7)]={frameId:0,documentId:'x-doc',mediaKey:11,pageToken:stableHash(url),sourceToken:stableHash('blob:broadcast'),modelToken:stableHash('broadcast-model')};
+ const result=await rt.call({action:'snapshot',tabId:7});
+ assert.equal(result.selectionExpired,false);
+ assert.equal(rt.stored[selectionStorageKey(7)].selectionToken,stableHash('x-broadcast'));
+});
+
+test('legacy selection migration stays expired when deep model or source changes',async()=>{
+ const url='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const summaryVideo={mediaKey:11,mediaContentId:'x.com:2112242739198959913',mediaIdentity:'x.com:2112242739198959913',selectionIdentity:'x-broadcast',url:'blob:broadcast'};
+ const deepVideo={mediaKey:11,mediaContentId:'different-model',mediaIdentity:'different-model',selectionIdentity:'x-broadcast',url:'blob:other',downloadUrl:'https://cdn.example/other.m3u8'};
+ const summary={url,discoveryMode:'summary',videos:[summaryVideo],media:summaryVideo,tracks:[]};
+ const deep={url,videos:[deepVideo],media:deepVideo,tracks:[],platform:{site:'embedded',id:'different-model',versions:[{url:deepVideo.downloadUrl}]}};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'x-doc',result:summary}],frameSnapshots:[deep]});
+ rt.stored[selectionStorageKey(7)]={frameId:0,documentId:'x-doc',mediaKey:11,pageToken:stableHash(url),sourceToken:stableHash('blob:broadcast'),modelToken:stableHash('broadcast-model')};
+ const result=await rt.call({action:'snapshot',tabId:7});
+ assert.equal(result.selectionExpired,true);
+ assert.equal(rt.stored[selectionStorageKey(7)].selectionToken,undefined);
 });

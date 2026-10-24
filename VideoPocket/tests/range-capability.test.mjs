@@ -37,3 +37,11 @@ test('returns UI plan booleans and a concise failure reason', () => {
   assert.deepEqual(result.plans.video, { good: true, bad: false });
   assert.equal(result.supported, true);
 });
+
+test('full-file fallback is opt-in, separate from partial capability, and requires a known finite duration',()=>{
+ const progressive={video:{url:'https://media.test/a.mp4',ext:'mp4',videoCodec:'h264'},ext:'mp4'},indexed={...progressive,video:{...progressive.video,indexRange:'0-30'}},plans={plans:{video:{auto:{0:progressive,720:indexed}},audio:{original:{}}}};
+ assert.equal(rangeCapability({duration:60},plans).plans.video[0],false);
+ const fallback=rangeCapability({duration:60},plans,{allowFullCut:true});
+ assert.equal(fallback.planDetails.video[0].mode,'full-cut');assert.equal(fallback.planDetails.video[720].mode,'partial');
+ assert.equal(rangeCapability({duration:Infinity},plans,{allowFullCut:true}).supported,false);
+});

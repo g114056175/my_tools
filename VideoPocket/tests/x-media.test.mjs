@@ -45,7 +45,13 @@ test('extracts one legacy video and adds its tweet alias', () => {
   const [m] = extractXMediaModels({ rest_id: 'tweet-1', legacy: { id_str: 'tweet-1', full_text: 'tweet body', extended_entities: { media: [media('media-1', 'https://video.example/a.mp4')] } } });
   assert.deepEqual(m.aliases, ['media-1', 'tweet-1']); assert.equal(m.provider, 'x'); assert.equal(m.ownerPostId, 'tweet-1');
   assert.equal(m.duration, 33); assert.equal(m.manifestType, 'hls'); assert.equal(m.versions[0].bitrate, 500000);
-  assert.equal(m.title, 'tweet body'); assert.equal(m.versions.some(v => /m3u8/.test(v.url)), false);
+  assert.equal(m.title, undefined); assert.equal(m.versions.some(v => /m3u8/.test(v.url)), false);
+});
+
+test('explicit media title is retained while tweet copy is ignored', () => {
+  const item = media('media-title', 'https://video.example/title.mp4'); item.title = 'COOKED: Ep. 1';
+  const [model] = extractXMediaModels({ rest_id: 'tweet-title', legacy: { full_text: 'Here is what we are cooking...', extended_entities: { media: [item] } } });
+  assert.equal(model.title, 'COOKED: Ep. 1');
 });
 
 test('quoted tweet has its own owner and outer tweet is never borrowed', () => {

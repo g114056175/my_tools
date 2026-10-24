@@ -1,4 +1,5 @@
 /* The single policy used by inspection and range execution. */
+import {fullCutPolicy} from './full-cut-policy.js';
 
 export const RANGE_INDEX_MAX_BYTES = 131072;
 
@@ -56,12 +57,17 @@ export function planRangeCapability(plan, { duration, sabr = false, maxIndexByte
 }
 
 /** Build the UI-facing capability maps for a resolved source. */
-export function rangeCapability(source, capability, { maxIndexBytes = RANGE_INDEX_MAX_BYTES } = {}) {
+export function rangeCapability(source, capability, { maxIndexBytes = RANGE_INDEX_MAX_BYTES, allowFullCut = false } = {}) {
   const duration = Number(source?.duration);
   const sabr = !!source?.sabr;
   const videoPlans = capability?.plans?.video?.auto || {};
   const audioPlans = capability?.plans?.audio?.original || {};
-  const inspect = plan => planRangeCapability(plan, { duration, sabr, maxIndexBytes });
+  const inspect = plan => {
+    const partial = planRangeCapability(plan, { duration, sabr, maxIndexBytes });
+    if(partial.supported)return {...partial,mode:'partial'};
+    const fallback=allowFullCut?fullCutPolicy(source,plan):null;
+    return fallback?.supported?fallback:{...partial,mode:'unsupported'};
+  };
   const video = Object.fromEntries(Object.entries(videoPlans).map(([key, plan]) => [key, inspect(plan)]));
   const audio = Object.fromEntries(Object.entries(audioPlans).map(([key, plan]) => [key, inspect(plan)]));
   const all = [...Object.values(video), ...Object.values(audio)];
@@ -75,6 +81,7 @@ export function rangeCapability(source, capability, { maxIndexBytes = RANGE_INDE
       video: Object.fromEntries(Object.entries(video).map(([key, value]) => [key, value.supported])),
       audio: Object.fromEntries(Object.entries(audio).map(([key, value]) => [key, value.supported]))
     },
+    planDetails: { video, audio },
     reason: supported ? null : (failure?.reason || '沒有可用的影音區間計畫')
   };
 }

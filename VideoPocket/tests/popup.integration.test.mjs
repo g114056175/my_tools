@@ -21,7 +21,7 @@ class Element {
   get clientHeight() { return 24; }
 }
 class DocumentMock {
-  constructor() { this.nodes = new Map(); for (const id of ['sourceLabel','pageTitle','mediaSelect','pickMedia','refresh','downloadSection','subtitleSection','videoTab','audioTab','subtitleTab','videoSettings','audioSettings','videoFormat','videoFormatValue','audioFormat','audioFormatValue','height','heightValue','audioQuality','audioQualityValue','download','language','subtitleFormat','subtitleFormatValue','loadSubtitle','subtitleContent','preview','copy','saveSubtitle','job','notice','diagnosticRow','diagnosticText','dismissError','rangeSettings','rangeSliders','rangeStart','rangeEnd','rangeStartSlider','rangeEndSlider']) this.nodes.set(id, new Element(id.includes('Select') || ['mediaSelect','videoFormat','audioFormat','height','audioQuality','language','subtitleFormat'].includes(id) ? 'select' : 'div'));for(const [id,value] of [['videoFormat','auto'],['audioFormat','original'],['subtitleFormat','txt']]){this.nodes.get(id).add({value,textContent:value,disabled:false});this.nodes.get(id).value=value;}this.nodes.get('job').hidden=true;this.nodes.get('downloadSection').hidden=true; }
+  constructor() { this.nodes = new Map(); for (const id of ['sourceLabel','pageTitle','mediaSelect','pickMedia','refresh','downloadSection','subtitleSection','videoTab','audioTab','subtitleTab','videoSettings','audioSettings','videoFormat','videoFormatValue','audioFormat','audioFormatValue','height','heightValue','audioQuality','audioQualityValue','download','language','subtitleFormat','subtitleFormatValue','loadSubtitle','subtitleContent','preview','copy','saveSubtitle','job','notice','diagnosticRow','diagnosticText','dismissError','rangeSettings','rangeWarning','rangeSliders','rangeStart','rangeEnd','rangeStartSlider','rangeEndSlider']) this.nodes.set(id, new Element(id.includes('Select') || ['mediaSelect','videoFormat','audioFormat','height','audioQuality','language','subtitleFormat'].includes(id) ? 'select' : 'div'));for(const [id,value] of [['videoFormat','auto'],['audioFormat','original'],['subtitleFormat','txt']]){this.nodes.get(id).add({value,textContent:value,disabled:false});this.nodes.get(id).value=value;}this.nodes.get('job').hidden=true;this.nodes.get('downloadSection').hidden=true; }
   getElementById(id) { return this.nodes.get(id); }
   createElement(tag) { return new Element(tag); }
 }
@@ -382,4 +382,80 @@ test('a download failure remains visible while media inspection refreshes and ca
 test('sub-second range duration remains visible on the download button without a middle duration field',async()=>{
  state.phase=3;state.inspectHandler=async()=>({ok:true,result:{...readyInfo,duration:60,range:{supported:true,duration:60,plans:{video:{0:true,360:true},audio:{}}}}});
  try{await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('rangeStart').disabled);const details=documentMock.getElementById('rangeSettings');details.open=true;await details.dispatch('toggle');const start=documentMock.getElementById('rangeStart'),end=documentMock.getElementById('rangeEnd');start.value='00:00:10';await start.dispatch('change');end.value='00:00:10.1';await end.dispatch('change');assert.match(documentMock.getElementById('download').textContent,/00:00\.1/);}finally{state.inspectHandler=null;}
+});
+
+test('TikTok delayed source retries one bounded wait and preserves the selected video',async()=>{
+ let scans=0,inspects=0,waits=0;
+ const selected={title:'TikTok clip',documentId:'tt-doc',frameId:0,mediaKey:7,mediaContentId:'clip-7'};
+ const audioReady={...readyInfo,choices:{...readyInfo.choices,audio:{original:{enabled:true,qualities:['best'],extensions:{best:'m4a'},sizes:{best:{bytes:1}}}}}};
+ state.snapshotHandler=message=>{scans++;if(scans>1)assert.equal(message.expectedTarget?.mediaKey,7);return {url:'https://www.tiktok.com/@creator/video/7',title:'TikTok',documentId:'tt-doc',mediaIndex:0,platform:{site:'embedded'},videos:[{...selected,downloadUrl:scans>1?'https://cdn.test/tt-7.mp4':''}],tracks:[],media:{discoveryDiagnostics:{metadataQueue:0}}};};
+ state.inspectHandler=async()=>{inspects++;if(inspects===1)return {ok:false,error:'source unavailable',failure:{code:'SOURCE_UNAVAILABLE'}};return {ok:true,result:audioReady};};
+ state.readinessHandler=async()=>{waits++;return {ready:true,changed:false};};
+ try{await documentMock.getElementById('refresh').click();await wait(()=>inspects===2&&!documentMock.getElementById('audioTab').disabled);assert.equal(scans,2);assert.equal(waits,1);assert.equal(inspects,2);assert.equal(state.lastSnapshot.expectedTarget.mediaKey,7);}
+ finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
+});
+
+test('TikTok readiness change rejects the selected source without retrying or looping',async()=>{
+ let scans=0,inspects=0,waits=0;
+ const selected={title:'TikTok clip',documentId:'tt-doc-change',frameId:0,mediaKey:9,mediaContentId:'clip-9'};
+ state.snapshotHandler=()=>{scans++;return {url:'https://www.tiktok.com/@creator/video/9',title:'TikTok',documentId:'tt-doc-change',mediaIndex:0,platform:{site:'embedded'},videos:[selected],tracks:[],media:{discoveryDiagnostics:{metadataQueue:0}}};};
+ state.inspectHandler=async()=>{inspects++;return {ok:false,error:'source unavailable',failure:{code:'SOURCE_UNAVAILABLE'}};};
+ state.readinessHandler=async()=>{waits++;return {ready:false,changed:true};};
+ try{await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').textContent.includes('變更'));assert.equal(scans,1);assert.equal(inspects,1);assert.equal(waits,1);}
+ finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
+});
+
+test('TikTok source with pending metadata retries once when audio is initially absent',async()=>{
+ let scans=0,inspects=0,waits=0;
+ const selected={title:'TikTok audio',documentId:'tt-doc-audio',frameId:0,mediaKey:11,mediaContentId:'clip-11',downloadUrl:'https://cdn.test/tt-11.mp4'};
+ const noAudio={...readyInfo,choices:{...readyInfo.choices,audio:{original:{enabled:false}}}};
+ const audioReady={...readyInfo,choices:{...readyInfo.choices,audio:{original:{enabled:true,qualities:['best'],extensions:{best:'m4a'},sizes:{best:{bytes:1}}}}}};
+ state.snapshotHandler=()=>{scans++;return {url:'https://www.tiktok.com/@creator/video/11',title:'TikTok',documentId:'tt-doc-audio',mediaIndex:0,platform:{site:'embedded'},videos:[selected],tracks:[],media:{discoveryDiagnostics:{metadataQueue:scans===1?2:0}}};};
+ state.inspectHandler=async()=>{inspects++;return {ok:true,result:inspects===1?noAudio:audioReady};};
+ state.readinessHandler=async()=>{waits++;return {ready:true,changed:false};};
+ try{await documentMock.getElementById('refresh').click();await wait(()=>inspects===2&&!documentMock.getElementById('audioTab').disabled);assert.equal(scans,2);assert.equal(waits,1);assert.equal(inspects,2);}
+ finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
+});
+
+test('TikTok silent inspection without pending metadata does not trigger a retry',async()=>{
+ let scans=0,inspects=0,waits=0;
+ const selected={title:'TikTok silent',documentId:'tt-doc-silent',frameId:0,mediaKey:13,mediaContentId:'clip-13',downloadUrl:'https://cdn.test/tt-13.mp4'};
+ state.snapshotHandler=()=>{scans++;return {url:'https://www.tiktok.com/@creator/video/13',title:'TikTok',documentId:'tt-doc-silent',mediaIndex:0,platform:{site:'embedded'},videos:[selected],tracks:[],media:{discoveryDiagnostics:{metadataQueue:0}}};};
+ state.inspectHandler=async()=>{inspects++;return {ok:true,result:{...readyInfo,choices:{...readyInfo.choices,audio:{original:{enabled:false}}}}};};
+ state.readinessHandler=async()=>{waits++;return {ready:true,changed:false};};
+ try{await documentMock.getElementById('refresh').click();await wait(()=>inspects===1&&documentMock.getElementById('sourceLabel').textContent==='影片：');assert.equal(scans,1);assert.equal(waits,0);}
+ finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
+});
+
+test('automatic quality is a distinct action that resolves downloads while preserving the original preference',async()=>{
+ const height=documentMock.getElementById('height');let tiers=[1080,720,480];
+ state.phase=3;state.inspectHandler=async()=>({ok:true,result:{...readyInfo,browserSourceId:'quality-source',downloadKey:'quality-policy',duration:60,choices:{...readyInfo.choices,video:{auto:{enabled:true,heights:tiers,sizes:Object.fromEntries(['0',...tiers.map(String)].map(k=>[k,{bytes:1000}])),extensions:Object.fromEntries(['0',...tiers.map(String)].map(k=>[k,'mp4']))}}},range:{supported:true,duration:60,plans:{video:{0:true,1080:true,720:true,480:true}}}}});
+ try{
+  await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);
+  height.value='1080';await height.dispatch('change');await wait(()=>state.savedPreferences.height==='1080');
+  tiers=[720,480];await documentMock.getElementById('refresh').click();await wait(()=>height.value==='preferred');
+  assert.deepEqual(height.options.map(o=>o.textContent),['最佳（720p）','720p（自動）','720p','480p']);
+  assert.equal(documentMock.getElementById('rangeSettings').hidden,false);
+  await height.dispatch('change');assert.equal(state.savedPreferences.height,'1080');
+  await documentMock.getElementById('download').click();assert.equal(state.lastDownload.height,720);assert.equal(state.savedPreferences.height,'1080');
+  height.value='720';await height.dispatch('change');await wait(()=>state.savedPreferences.height==='720');assert.equal(height.value,'720');assert.ok(!height.options.some(o=>o.value==='preferred'));
+  height.value='0';await height.dispatch('change');await wait(()=>state.savedPreferences.height==='0');assert.equal(height.value,'0');
+  height.value='480';await height.dispatch('change');await wait(()=>state.savedPreferences.height==='480');
+  height.value='1080';await height.dispatch('change');
+  tiers=[1080,720];await documentMock.getElementById('refresh').click();await wait(()=>height.value==='1080');assert.equal(state.savedPreferences.height,'1080');
+ }finally{height.value='0';await height.dispatch('change');state.inspectHandler=null;}
+});
+
+test('full-cut warning follows the selected plan and unknown durations keep range controls disabled',async()=>{
+ let fullCut=true,known=true,sizeKnown=false,estimatedInputBytes=8*1024**2;state.phase=3;
+ state.inspectHandler=async()=>({ok:true,result:{...readyInfo,duration:known?60:0,range:{supported:known,duration:known?60:0,plans:{video:{0:known,360:known}},planDetails:{video:{0:{mode:fullCut?'full-cut':'partial',sizeKnown,estimatedInputBytes},360:{mode:fullCut?'full-cut':'partial',sizeKnown,estimatedInputBytes}}}}}});
+ try{
+  await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('rangeSettings').hidden);
+  assert.equal(documentMock.getElementById('rangeWarning').hidden,false);
+  assert.equal(documentMock.getElementById('rangeWarning').title,'完整來源：約 8.0 MB');
+  sizeKnown=true;await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('rangeWarning').title,'完整來源：約 8.0 MB');
+  estimatedInputBytes=null;await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('rangeWarning').title,'完整來源大小未知');
+  fullCut=false;await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('rangeWarning').hidden,true);
+  known=false;await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);assert.equal(documentMock.getElementById('rangeSettings').hidden,true);assert.equal(documentMock.getElementById('rangeStart').disabled,true);
+ }finally{state.inspectHandler=null;}
 });

@@ -123,7 +123,11 @@ export async function readMp4Metadata(readRange, initial = new Uint8Array(), tot
       const audio = AUDIO.get(kind);
       if (video) {
         result.videoCodec ||= video;
-        if (at + 36 <= bytes.byteLength) result.videoHeight ||= (bytes[at + 34] << 8) | bytes[at + 35];
+        if (size >= 36 && at + 36 <= bytes.byteLength) {
+          const width=(bytes[at + 32] << 8) | bytes[at + 33];
+          if(width)result.videoWidth ||= width;
+          result.videoHeight ||= (bytes[at + 34] << 8) | bytes[at + 35];
+        }
       }
       if (audio) result.audioCodec ||= audio;
       if (kind === 'encv' || kind === 'enca') result.drm = true;

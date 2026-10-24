@@ -71,13 +71,24 @@ export function startMediaPicker(options = {}) {
     const entry = registryIndex >= 0 ? registry.videos[registryIndex] : null;
     const source = () => { try { return video.currentSrc || video.src || video.querySelector?.('source')?.src || ''; } catch { return ''; } };
     const mediaObserver=globalThis[Symbol.for('video-pocket.mediaObserver')];let twitchOwned;
-    let ownedTitle='';try{twitchOwned=mediaObserver?.twitchPlayerFor?.(video,videos);ownedTitle=twitchOwned?.title || mediaObserver?.titleFor?.(video) || '';}catch{}
-    const title = String(ownedTitle || entry?.title || video.getAttribute?.('aria-label') || video.title || document.title || `影片 ${index + 1}`).trim();
-    let mediaIdentity='';try{mediaIdentity=globalThis[Symbol.for('video-pocket.mediaObserver')]?.modelFor?.(video)?.id || globalThis[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video,root:document,pageUrl:location.href})?.identity?.key || '';}catch{}
+    let ownedTitle='';try{twitchOwned=mediaObserver?.twitchPlayerFor?.(video,videos);ownedTitle=twitchOwned?.title || mediaObserver?.titleFor?.(video,{includeAria:false}) || '';}catch{}
+    const named=value=>{const text=String(value || '').replace(/\s+/g,' ').trim();if(!text)return '';try{if(mediaObserver?.isGenericTitle?.(text))return '';}catch{}return /^(?:(?:youtube|twitch|facebook|instagram|tiktok|twitter|bilibili|x)\s*[-:：|·]?\s*)?(?:(?:html5|embedded|嵌入式?|嵌入)\s*)?(?:video|media|影片|视频|視頻)\s*(?:player|播放器)?\s*\d*$/i.test(text)?'':text;};
+    let modelTitle='',mediaIdentity='',selectionIdentity='';try{selectionIdentity=globalThis[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video,root:document,pageUrl:location.href})?.identity?.key || '';const model=mediaObserver?.modelFor?.(video);modelTitle=named(model?.title);mediaIdentity=model?.id || selectionIdentity;}catch{}
+    let platformTitle='';try{
+      const page=new URL(location.href),owner=document.querySelector?.('#movie_player');
+      if(/(^|\.)youtube\.com$/i.test(page.hostname)&&owner?.contains(video)){
+        const response=owner.getPlayerResponse?.() || globalThis.ytInitialPlayerResponse,id=page.searchParams.get('v') || page.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
+        if(response?.videoDetails?.videoId&&(!id||response.videoDetails.videoId===id))platformTitle=named(response.videoDetails.title);
+      }
+    }catch{}
+    let socialPage=false;try{const page=new URL(location.href);socialPage=/(^|\.)\b(?:x|twitter|reddit|tiktok|instagram|facebook|threads)\.(?:com|net)$/i.test(page.hostname)||/(^|\.)twitch\.tv$/i.test(page.hostname)&&/\/clips\/?$/i.test(page.pathname);}catch{}
+    let title=[platformTitle,twitchOwned?.title,modelTitle,entry?.title,ownedTitle,video.title,video.getAttribute?.('data-video-title'),!socialPage&&videos.length===1?document.title:'',video.getAttribute?.('aria-label')].map(named).find(Boolean) || `影片 ${index+1}`;
     try{const page=new URL(location.href),id=page.pathname.match(/^\/videos\/(\d+)/)?.[1];if(/(^|\.)twitch\.tv$/i.test(page.hostname)&&id&&(video.closest?.('[data-a-target="video-player"]')||videos.length===1))mediaIdentity='twitch-vod:'+id;}catch{}
     if(twitchOwned)mediaIdentity=`twitch-${twitchOwned.kind}:${twitchOwned.kind==='clip'?twitchOwned.slug:twitchOwned.id}`;
     try{const page=new URL(location.href),id=page.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || page.searchParams.get('bvid');if(/(^|\.)bilibili\.com$/i.test(page.hostname)&&id&&((()=>{let node=video;for(let depth=0;node&&depth<16;depth++){if(node.closest?.('#bilibili-player,#bilibiliPlayer,.bpx-player-container,.bilibili-player-video,bwp-video'))return true;const host=node.getRootNode?.()?.host;if(!host||host===node)break;node=host;}return false;})()||videos.length===1))mediaIdentity=`bilibili:${id}:${Math.max(1,Number(page.searchParams.get('p'))||1)}`;}catch{}
-    return {mediaKey: keyOf(video), localMediaIndex: index, frameId, documentId, frameUrl: location.href, title, url: source(),mediaIdentity};
+    if(mediaIdentity.startsWith('bilibili:')){const detail=globalThis.__INITIAL_STATE__?.videoData;if(detail?.bvid&&mediaIdentity.split(':')[1]===detail.bvid)title=named(detail.title)||title;}
+    if(mediaIdentity.startsWith('bilibili:'))selectionIdentity=mediaIdentity;
+    return {mediaKey: keyOf(video), localMediaIndex: index, frameId, documentId, frameUrl: location.href, title, url: source(),mediaIdentity,selectionIdentity};
   };
   let highlighted = null;
   let closed = false;

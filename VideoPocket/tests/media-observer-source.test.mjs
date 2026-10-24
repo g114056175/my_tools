@@ -1,11 +1,39 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {BUILD_ID} from '../extension/build-info.js';
 import {
   installMediaObserver,
   OBSERVER_SYMBOL,
   mediaModelsFromText,
   shouldInstallMediaObserver,
 } from "../extension/media-observer-source.js";
+
+test('reinjecting after extension reload replaces stale MAIN-world hooks exactly once', () => {
+  const target = browser(), original = target.Response.prototype.json;
+  let disposed = 0;
+  target.Response.prototype.json = function () { throw Error('obsolete parser'); };
+  const stale = {build:'old-build',sourcesFor:()=>({candidates:[]}),dispose(){disposed++;target.Response.prototype.json=original;delete target[OBSERVER_SYMBOL];}};
+  target[OBSERVER_SYMBOL]=stale;
+  const current=installMediaObserver(target);
+  try {
+    assert.notEqual(current,stale);
+    assert.equal(disposed,1);
+    assert.equal(current.build,BUILD_ID);
+    assert.equal(current.diagnosticsFor().observerBuild,BUILD_ID);
+    const hook=target.Response.prototype.json;
+    assert.equal(installMediaObserver(target),current);
+    assert.equal(target.Response.prototype.json,hook);
+    assert.equal(disposed,1);
+  } finally {current.dispose();}
+  assert.equal(target.Response.prototype.json,original);
+});
+
+test('legacy observers without a build marker are replaced on reinjection', () => {
+  const target=browser();let disposed=false;
+  target[OBSERVER_SYMBOL]={sourcesFor:()=>({candidates:[]}),dispose(){disposed=true;}};
+  const current=installMediaObserver(target);
+  try {assert.ok(disposed);assert.equal(current.build,BUILD_ID);}finally{current.dispose();}
+});
 
 function browser() {
   let serial = 0;
@@ -444,6 +472,86 @@ test('incremental GraphQL records and multipart wrappers produce ID-bound models
  assert.deepEqual(mediaModelsFromText('--boundary\r\nContent-Type: application/json\r\n\r\n'+first+'\r\n--boundary--').map(m=>m.id),['a']);
  assert.equal(mediaModelsFromText('window.secret='+first).length,0);
  assert.equal(mediaModelsFromText(' '.repeat(512*1024+1)+first).length,0);
+});
+
+const feedRecord=id=>JSON.stringify({data:{video:{__typename:'Video',id,videoDeliveryResponseFragment:{videoDeliveryResponseResult:{progressive_urls:[{progressive_url:`https://cdn.example/${id}.mp4`}]}}}}});
+const oversizedFeed=()=>feedRecord('selected')+'\n'+JSON.stringify({data:{padding:'x'.repeat(560000)}})+'\n'+feedRecord('outside-budget');
+
+test('repeated feed envelopes do not evict an earlier selected video with unrelated deferred text',async()=>{
+ const target=browser();target.location.href='https://social.example/reel/selected';
+ const observer=installMediaObserver(target);
+ try{
+  // Real feed failure: the first video is in a >512 KiB NDJSON response;
+  // later responses describe other videos. The page remains open before
+  // the user selects the first video, so all metadata is still deferred.
+  await new target.Response('https://social.example/api/graphql/',oversizedFeed(),'text/html').text();
+  for(let i=0;i<6;i++){
+   const body=feedRecord('neighbour')+'\n'+JSON.stringify({data:{padding:'x'.repeat(460000),cursor:i}});
+   await new target.Response('https://social.example/api/graphql/',body,'text/html').text();
+  }
+  assert.ok(observer.diagnosticsFor().metadataQueueBytes<10000);
+  assert.equal(observer.modelFor({closest:()=>null})?.id,'selected');
+  target.location.href='https://social.example/reel/neighbour';
+  assert.equal(observer.modelFor({closest:()=>null})?.id,'neighbour');
+  target.location.href='https://social.example/reel/missing';
+  assert.equal(observer.modelFor({closest:()=>null}),null);
+ }finally{observer.dispose();}
+});
+
+test('empty delivery envelopes cannot evict actual playback records before player selection',async()=>{
+ const target=browser();target.location.href='https://social.example/reel/selected';
+ const observer=installMediaObserver(target);
+ try{
+  await new target.Response('https://social.example/api/graphql/',feedRecord('selected'),'text/html').text();
+  for(let i=0;i<40;i++){
+   const empty=JSON.stringify({data:{id:`feed-${i}`,videoDeliveryResponseFragment:{videoDeliveryResponseResult:{progressive_urls:[]}},padding:'x'.repeat(80000)}});
+   await new target.Response('https://social.example/api/graphql/',empty,'text/html').text();
+  }
+  await new target.Response('https://social.example/api/graphql/',feedRecord('neighbour'),'text/html').text();
+  const video={getAttribute:k=>k==='data-video-id'?'selected':null,closest:()=>null};
+  assert.ok(observer.diagnosticsFor().metadataQueueBytes<=2*1024*1024);
+  observer.drainMetadata(1,undefined,video);
+  assert.equal(observer.modelFor(video)?.id,'selected');
+  target.location.href='https://social.example/reel/missing';
+  assert.equal(observer.modelFor({closest:()=>null}),null);
+ }finally{observer.dispose();}
+});
+
+test('oversized GraphQL body retains complete records within the existing budget only',()=>{
+ assert.deepEqual(mediaModelsFromText(oversizedFeed()).map(m=>m.id),['selected']);
+ assert.deepEqual(mediaModelsFromText(JSON.stringify({padding:'x'.repeat(560000),video:{id:'hidden',video_url:'https://cdn.example/hidden.mp4'}})),[]);
+});
+
+for(const entry of ['response-text','xhr','fetch-stream'])test(`FB feed record survives an oversized response through ${entry}`,async()=>{
+ const target=browser(),text=oversizedFeed();target.location.href='https://social.example/reel/selected';
+ let clones=0;
+ if(entry==='fetch-stream')target.fetch=async()=>({url:'https://social.example/api/graphql/',headers:{get:k=>k==='content-type'?'text/html':k==='content-length'?String(text.length):null},body:{},clone(){clones++;return new Response(text);}});
+ const observer=installMediaObserver(target);
+ try{
+  if(entry==='response-text')await new target.Response('https://social.example/api/graphql/',text,'text/html').text();
+  if(entry==='xhr'){
+   const xhr=new target.XMLHttpRequest();xhr.open('GET','https://social.example/api/graphql/');xhr.responseType='text';xhr.responseText=text;xhr.getResponseHeader=()=> 'text/html';xhr.send();
+  }
+  if(entry==='fetch-stream'){await target.fetch('/api/graphql/');await new Promise(resolve=>setImmediate(resolve));assert.equal(clones,1);}
+  const video={closest:()=>null};
+  assert.equal(observer.modelFor(video)?.versions[0].url,'https://cdn.example/selected.mp4');
+  target.location.href='https://social.example/reel/outside-budget';
+  assert.equal(observer.modelFor(video),null);
+ }finally{observer.dispose();}
+});
+
+test('GraphQL fetch stream preserves a selected record when UTF-8 chunks split at newlines', async () => {
+ const target=browser(), selected=feedRecord('selected'), neighbour=feedRecord('neighbour');
+ const text=selected+'\n'+neighbour+'\n'+'x'.repeat(560000), bytes=new TextEncoder().encode(text), split=selected.length+1;
+ target.location.href='https://social.example/reel/selected';
+ target.fetch=async()=>({url:'https://social.example/api/graphql/',headers:{get:k=>k==='content-type'?'text/html':k==='content-length'?String(bytes.length):null},body:{},clone(){
+   return new Response(new ReadableStream({start(controller){controller.enqueue(bytes.slice(0,split));controller.enqueue(bytes.slice(split));controller.close();}}));
+ }});
+ const observer=installMediaObserver(target);
+ try { await target.fetch('/api/graphql/'); await new Promise(resolve=>setImmediate(resolve));
+   const video={currentSrc:'',src:'',getAttribute:key=>key==='data-video-id'?'selected':'',closest:()=>null,__reactProps$test:{videoID:'selected'}};
+   assert.equal(observer.modelFor(video)?.id,'selected');
+ } finally { observer.dispose(); }
 });
 
 test('fetch metadata clone observes streamed responses while leaving the original body readable',async()=>{

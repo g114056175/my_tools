@@ -12,7 +12,7 @@ async function initCore(){
 }
 onmessage=async({data})=>{
  if(data.action==='cancel'){cancelled=true;return;}cancelled=false;
- const mounts=[],diagnostics=VideoPocketFFmpegDiagnostics();let output,finished=false,failureCode;
+ const processingBegan=Date.now(),mounts=[],diagnostics=VideoPocketFFmpegDiagnostics();let output,finished=false,failureCode;
  try{
   core=await initCore();core.setLogger(({message})=>{diagnostics.observe(message);if(/out of memory|Cannot enlarge memory|memory access out of bounds|allocation failed/i.test(message))failureCode='MEMORY_LIMIT';if(/No space left on device|QuotaExceededError/i.test(message))failureCode='TEMP_STORAGE_FULL';});
   const inputs=data.inputs || [];if(inputs.some(f=>!f.file?.name)||!core.FS.filesystems?.WORKERFS)throw new Error('合併輸入檔格式無效');
@@ -27,8 +27,9 @@ onmessage=async({data})=>{
   for(const mount of mounts.splice(0).reverse())core.FS.unmount(mount);
   const result=output.finish();finished=true;
   if(data.destinationId)postMessage({type:'readyToSave',...result});
+  const processingMs=Date.now()-processingBegan,saveBegan=Date.now();
   const saved=data.destinationId?await VideoPocketFileSave({path:result.path,destinationId:data.destinationId,cancelled:()=>cancelled,onStart:()=>postMessage({type:'saving'}),onProgress:progress=>postMessage({type:'saveProgress',progress})}):{saved:false};
-  postMessage({type:'done',...result,...saved});
- }catch(error){postMessage({type:'error',error:error.message || String(error),errorCode:error.code || (error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':failureCode),saveStage:error.saveStage,saveReason:error.saveReason,...(error.processingReason?{processingReason:error.processingReason,ffmpegExitCode:error.ffmpegExitCode}:{})});}
- finally{for(const mount of mounts.reverse())try{core.FS.unmount(mount);}catch{}if(output&&!finished)output.abort();core?.reset();}
+  postMessage({type:'done',...result,...saved,timings:{processingMs,...(data.destinationId?{saveMs:Date.now()-saveBegan}:{})}});
+ }catch(error){if(output&&!finished){await Promise.resolve(output.abort?.()).catch(()=>{});output=null;}postMessage({type:'error',error:error.message || String(error),errorCode:error.code || (error.name==='QuotaExceededError'?'TEMP_STORAGE_FULL':failureCode),saveStage:error.saveStage,saveReason:error.saveReason,...(error.processingReason?{processingReason:error.processingReason,ffmpegExitCode:error.ffmpegExitCode}:{})});}
+ finally{for(const mount of mounts.reverse())try{core.FS.unmount(mount);}catch{}if(output&&!finished)await Promise.resolve(output.abort?.()).catch(()=>{});core?.reset();}
 };

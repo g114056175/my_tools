@@ -9,7 +9,7 @@
       <div id="audioSettings" class="settings" hidden><label>格式<select id="audioFormat" disabled><option value="original">來源音訊</option></select><span id="audioFormatValue" class="choice-value" hidden aria-hidden="true"></span></label><label>品質<select id="audioQuality" disabled><option value="best">最佳</option><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="320">320 kbps</option></select><span id="audioQualityValue" class="choice-value" hidden aria-hidden="true"></span></label></div>
       <button id="download" class="primary" disabled>下載影片</button>
       <details id="rangeSettings" class="range-settings" hidden>
-        <summary>進階設定</summary>
+        <summary>片段下載</summary>
         <div id="rangeControls">
         <div id="rangeSliders" class="range-timeline" role="group" aria-label="影片區間">
           <div class="range-rail" aria-hidden="true"><div class="range-fill"></div></div>
@@ -21,6 +21,7 @@
           <input id="rangeEnd" type="text" inputmode="numeric" maxlength="10" autocomplete="off" spellcheck="false" aria-label="區間終點時間" aria-describedby="rangeMessage">
         </div>
         <div id="rangeMessage" class="range-message" role="status" aria-live="polite" hidden></div>
+        <div id="rangeWarning" class="range-warning" role="status" hidden>此來源需完整下載後裁切</div>
         </div>
       </details>
       <div id="subtitleSection" aria-label="字幕" hidden>

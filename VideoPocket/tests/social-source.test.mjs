@@ -17,6 +17,15 @@ test('preserves working non-FB/TikTok platforms and stale or DRM selections verb
  for(const original of [page({selectionExpired:true}),page({media:{drm:true}})])assert.equal(attachSocialSources(original,[record('https://v16.tiktokcdn.com/a.mp4')]),original);
 });
 
+test('TikTok first snapshot can miss a not-yet-observed source, while a later same-document snapshot binds it',()=>{
+ const original=page({media:{duration:12},platform:undefined});
+ const first=attachSocialSources(original,[]);
+ assert.equal(first.platform,undefined);
+ const later=attachSocialSources(original,[record('https://v16.tiktokcdn.com/video/tos/opaque/file?token=fresh')]);
+ assert.equal(later.platform.site,'social-network');
+ assert.equal(later.platform.networkService,'tiktok');
+});
+
 test('prioritizes the actually observed CDN URL for the exact known resource',()=>{
  const old='https://v16.tiktokcdn.com/video/tos/long-opaque-object-id/?token=old',fresh='https://v19.tiktokcdn.com/video/tos/long-opaque-object-id/?token=fresh';
  const result=attachSocialSources(page({platform:{site:'embedded',id:'post',versions:[{url:old}]} }),[record(fresh),record('https://v19.tiktokcdn.com/video/tos/different-opaque-object/?token=other')]);

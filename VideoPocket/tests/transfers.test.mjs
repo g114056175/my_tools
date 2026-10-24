@@ -1,6 +1,27 @@
 import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';
 import {directTransfer} from '../extension/transfers.js';
 const payload=Uint8Array.from({length:6*1024*1024+237},(_,i)=>i%251);
+
+test('a continuous non-range file can outlive the read deadline without restarting',async()=>{
+ let whole=0,received=0;const bytes=[];
+ const request=async(url,{headers,signal})=>{
+  if(headers?.Range)return new Response('',{status:200});whole++;
+  let index=0;return new Response(new ReadableStream({async pull(controller){await new Promise(r=>setTimeout(r,40));if(signal.aborted){controller.error(signal.reason);return;}if(index===8){controller.close();return;}controller.enqueue(new Uint8Array([++index]));}}),{headers:{'content-length':'8'}});
+ };
+ const sink={async truncate(){bytes.length=0;},async append(b){bytes.push(...b);},async finish(){return {size:bytes.length};}};
+ const result=await directTransfer({url:'https://source/continuous'},request,new AbortController().signal,n=>received+=n,sink,undefined,{readTimeoutMs:200});
+ assert.equal(result.size,8);assert.deepEqual(bytes,[1,2,3,4,5,6,7,8]);assert.equal(received,8);assert.equal(whole,1);
+});
+
+test('a non-range body that stops returning data still times out and is cancelled',async()=>{
+ let cancelled=false;
+ const request=async(url,{headers,signal})=>{
+  if(headers?.Range)return new Response('',{status:200});
+  return new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array([1]));signal.addEventListener('abort',()=>{cancelled=true;controller.error(signal.reason);},{once:true});}}));
+ };
+ await assert.rejects(directTransfer({url:'https://source/stalled'},request,new AbortController().signal,()=>{},undefined,undefined,{readTimeoutMs:20}),{name:'TimeoutError'});
+ assert.equal(cancelled,true);
+});
 const responseFor=(bytes,start,end,total,signal,{failAfterFirst=false,stallAfterFirst=false}={})=>{
  const body=bytes.subarray(start,end+1),half=Math.max(1,Math.ceil(body.length/2));
  return new Response(new ReadableStream({start(controller){

@@ -54,12 +54,15 @@ export function createSubtitleCaptureManager({storage,read,now=Date.now,sleep=(m
    return Object.entries(all).filter(([key,record])=>key.startsWith(prefix)&&record?.version===CAPTURE_VERSION&&record.scope===scope).map(([key,record])=>({key,...record}));
   },
   removeTab(tabId){
-   const id=Number(tabId);tabGenerations.set(id,(tabGenerations.get(id)||0)+1);
-   const prefix=CAPTURE_PREFIX+id+':',operation=writes.catch(()=>{}).then(async()=>{const all=await storage.get(null);await storage.remove(Object.keys(all).filter(key=>key.startsWith(prefix)));});
+    const id=Number(tabId);tabGenerations.set(id,(tabGenerations.get(id)||0)+1);
+    const prefix=CAPTURE_PREFIX+id+':';
+    for(const key of pending.keys())if(key.startsWith(prefix))pending.delete(key);
+    const operation=writes.catch(()=>{}).then(async()=>{const all=await storage.get(null);await storage.remove(Object.keys(all).filter(key=>key.startsWith(prefix)));});
    writes=operation.catch(()=>{});return operation;
   },
   clearAll(){
    sessionGeneration++;
+    pending.clear();
    const operation=writes.catch(()=>{}).then(async()=>{const all=await storage.get(null);await storage.remove(Object.keys(all).filter(key=>key.startsWith(CAPTURE_PREFIX)));});
    writes=operation.catch(()=>{});return operation;
   },

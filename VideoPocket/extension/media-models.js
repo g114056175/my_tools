@@ -63,10 +63,16 @@ const url = (value, base) => {
   }
 };
 
-function aliasesOf(value) {
-  return [
+function aliasesOf(value, base = '') {
+  const aliases = [
     ...new Set(ID_KEYS.map((key) => typeof value?.[key]==='number'?String(value[key]):string(value?.[key]).slice(0,256)).filter(Boolean)),
   ];
+  // Instagram's Polaris GraphQL envelope prefixes the same decimal media ID
+  // exposed by the rendered player. Preserve both exact spellings; never
+  // strip arbitrary prefixes or convert long decimal IDs through Number.
+  let instagram=false;if(aliases.some(id=>/^POLARIS_\d{10,24}$/.test(id)))try{instagram=/(^|\.)instagram\.com$/i.test(new URL(base).hostname);}catch{}
+  if(instagram)for(const id of [...aliases]){const match=id.match(/^POLARIS_(\d{10,24})$/);if(match&&!aliases.includes(match[1]))aliases.push(match[1]);}
+  return aliases;
 }
 
 function version(value, base) {
@@ -107,12 +113,12 @@ function descriptor(value, base, parentAliases = [], parentTitle = '') {
       : null;
   const rawResponse = responseResultOf(value);
   const playerFiles=value.request?.files,play=value.play,qualitySources=qualityMediaSources(value.qualities,base),definitionSources=definitionMediaSources(value.mediaDefinitions,base);
-  const ownAliases = [...new Set([...aliasesOf(value),...(playerFiles?aliasesOf(value.video):[]),...(String(value.uri||'').match(/^\/videos\/(\d+)$/)?.slice(1)||[])])];
-  const matches=child=>!aliasesOf(child).length||!ownAliases.length||aliasesOf(child).some(alias=>ownAliases.includes(alias));
+  const ownAliases = [...new Set([...aliasesOf(value,base),...(playerFiles?aliasesOf(value.video,base):[]),...(String(value.uri||'').match(/^\/videos\/(\d+)$/)?.slice(1)||[])])];
+  const matches=child=>!aliasesOf(child,base).length||!ownAliases.length||aliasesOf(child,base).some(alias=>ownAliases.includes(alias));
   const delivery = matches(rawDelivery) ? rawDelivery : null;
   const response = matches(rawResponse) ? rawResponse : null;
   const aliases = [
-    ...new Set([...ownAliases, ...aliasesOf(delivery), ...aliasesOf(response), ...parentAliases]),
+    ...new Set([...ownAliases, ...aliasesOf(delivery,base), ...aliasesOf(response,base), ...parentAliases]),
   ];
   const sourceManifestUrls = [];
   const versions = [
@@ -228,7 +234,9 @@ function descriptor(value, base, parentAliases = [], parentTitle = '') {
       : undefined,
     width: number(value.width || value.original_width || delivery?.width),
     height: number(value.height || value.original_height || delivery?.height),
-    title: string(value.name || value.title || value.video_title || value.desc || value.video?.title || value.video?.desc || parentTitle).slice(0,512),
+    // Descriptions/full_text are post copy, not media names. Keep only
+    // explicit names exposed by the media/player object (or VideoObject).
+    title: string(value.name || value.title || value.video_title || value.video?.title).slice(0,512),
     updatedAt: Date.now(),
   };
 }
@@ -237,6 +245,8 @@ export function extractMediaModels(
   value,
   { baseUrl = "", budget = MAX_VALUE } = {},
 ) {
+  // X extraction already distinguishes media.title from tweet copy. Preserve
+  // that provenance rather than deleting a genuine title in this entry point.
   const models = extractXMediaModels(value,{baseUrl,budget}),
     visited = new WeakSet();
   let used = 0;
@@ -264,7 +274,7 @@ export function extractMediaModels(
       if (child && typeof child === "object") {
         const isMediaChild = ["video", "media", "video_data", "videoData"].includes(key);
         const aliases = isMediaChild ? [...parentAliases, ...ownMediaIds] : parentAliases;
-        const title = isMediaChild && ownMediaIds.length ? string(node.desc || node.title || node.name || parentTitle) : parentTitle;
+        const title = isMediaChild && ownMediaIds.length ? string(node.title || node.name || parentTitle) : parentTitle;
         visit(child, depth + 1, aliases, title);
       }
   };

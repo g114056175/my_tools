@@ -94,6 +94,26 @@ test('ending the Chrome session clears captures and blocks late writes from acti
  assert.deepEqual(Object.keys(storage.values).filter(name=>name.startsWith('subtitleCapture:')),[]);
 });
 
+test('navigation invalidates an old pending capture so a new capture can start',async()=>{
+ const storage=sessionStorage();let firstFinish,attempts=0;
+ const manager=createSubtitleCaptureManager({storage,read:request=>{attempts++;if(attempts===1)return new Promise(resolve=>{firstFinish=resolve;});return Promise.resolve({cues:[{start:0,end:1,text:'新頁'}]});},retryDelays:[]});
+ const scope='scope-navigation',key=await captureKey(7,scope,track),first=manager.start({key,tabId:7,scope,track});
+ await new Promise(resolve=>setImmediate(resolve));await manager.removeTab(7);
+ const second=manager.start({key,tabId:7,scope,track});assert.equal((await second).cues[0].text,'新頁');
+ firstFinish({cues:[{start:0,end:1,text:'舊頁'}]});await first;
+ assert.equal(attempts,2);assert.equal(storage.values[key].value.cues[0].text,'新頁');
+});
+
+test('session clear invalidates pending deduplication',async()=>{
+ const storage=sessionStorage();let firstFinish,attempts=0;
+ const manager=createSubtitleCaptureManager({storage,read:()=>{attempts++;if(attempts===1)return new Promise(resolve=>{firstFinish=resolve;});return Promise.resolve({cues:[{start:0,end:1,text:'新會期'}]});},retryDelays:[]});
+ const scope='scope-session',key=await captureKey(8,scope,track),first=manager.start({key,tabId:8,scope,track});
+ await new Promise(resolve=>setImmediate(resolve));await manager.clearAll();
+ const second=manager.start({key,tabId:8,scope,track});assert.equal((await second).cues[0].text,'新會期');
+ firstFinish({cues:[{start:0,end:1,text:'舊會期'}]});await first;
+ assert.equal(attempts,2);assert.equal(storage.values[key].value.cues[0].text,'新會期');
+});
+
 test('identity changes and access denial fail immediately instead of retrying another caption',async()=>{
  for(const code of ['SOURCE_CHANGED','HTTP_AUTH']){
   const storage=sessionStorage();let attempts=0;

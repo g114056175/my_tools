@@ -67,7 +67,7 @@
 
   async function createSyncMediaFile(scope,name){
     const dir=await directory(scope),filename=safe(name)+'-'+crypto.randomUUID().replaceAll('-','')+'.part',handle=await dir.getFileHandle(filename,{create:true}),access=await handle.createSyncAccessHandle();
-    return {path:PREFIX+'/'+safe(scope)+'/'+filename,access,finish(){access.flush();const size=access.getSize();access.close();return {path:this.path,size};},abort(){try{access.close();}catch{}}};
+    return {path:PREFIX+'/'+safe(scope)+'/'+filename,access,finish(){access.flush();const size=access.getSize();access.close();return {path:this.path,size};},async abort(){try{access.close();}catch{}await dir.removeEntry(filename).catch(()=>{});}};
   }
 
   async function readMediaFile(path) {

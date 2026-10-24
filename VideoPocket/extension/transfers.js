@@ -1,14 +1,19 @@
 // Direct file transfer with verified HTTP ranges. No page or player controls.
 export const MAX_TRANSFER_BYTES=Infinity;
 function rangeInfo(response){const m=response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/i);return m?{start:Number(m[1]),end:Number(m[2]),total:Number(m[3])}:null;}
-async function read(response,signal,limit,onBytes=()=>{}){
+async function withReadDeadline(signal,timeoutMs,operation){
+ const stalled=new AbortController(),readSignal=AbortSignal.any([signal,stalled.signal]);
+ const timed=async task=>{readSignal.throwIfAborted();const timer=setTimeout(()=>stalled.abort(new DOMException('來源持續沒有回傳資料','TimeoutError')),timeoutMs);try{return await task();}catch(error){throw readSignal.aborted?readSignal.reason:error;}finally{clearTimeout(timer);}};
+ return operation(readSignal,timed);
+}
+async function read(response,signal,limit,onBytes=()=>{},timed=task=>task()){
  const reader=response.body.getReader(),parts=[];let size=0;
- try{while(true){if(signal.aborted)throw signal.reason || new Error('已取消');const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>limit)throw new Error('來源檔案超過可處理的大小');parts.push(value);onBytes(value.length);}}
+ try{while(true){if(signal.aborted)throw signal.reason || new Error('已取消');const {value,done}=await timed(()=>reader.read());if(done)break;size+=value.length;if(size>limit)throw new Error('來源檔案超過可處理的大小');parts.push(value);onBytes(value.length);}}
  catch(error){await reader.cancel().catch(()=>{});throw error;}
  const bytes=new Uint8Array(size);let at=0;for(const p of parts){bytes.set(p,at);at+=p.length;}return bytes;
 }
-async function streamToFile(response,signal,sink,onBytes){const reader=response.body.getReader();let size=0;await sink.truncate(0);try{while(true){if(signal.aborted)throw signal.reason;const {value,done}=await reader.read();if(done)break;size+=value.length;await sink.append(value);onBytes(value.length);}const expected=Number(response.headers.get('content-length'));if(expected>0&&!response.headers.get('content-encoding')&&size!==expected)throw new Error('來源檔案長度不完整');return await sink.finish();}catch(error){await reader.cancel().catch(()=>{});throw error;}}
-export async function directTransfer(format,request,signal,onBytes=()=>{},sink,control){
+async function streamToFile(response,signal,sink,onBytes,timed){const reader=response.body.getReader();let size=0;await sink.truncate(0);try{while(true){if(signal.aborted)throw signal.reason;const {value,done}=await timed(()=>reader.read());if(done)break;size+=value.length;await sink.append(value);onBytes(value.length);}const expected=Number(response.headers.get('content-length'));if(expected>0&&!response.headers.get('content-encoding')&&size!==expected)throw new Error('來源檔案長度不完整');return await sink.finish();}catch(error){await reader.cancel().catch(()=>{});throw error;}}
+export async function directTransfer(format,request,signal,onBytes=()=>{},sink,control,{readTimeoutMs=20000}={}){
  const run=operation=>control?control.run(operation):operation(signal);
  const urls=[...new Set([format.url,...(format.backupUrls || [])])].filter(Boolean);if(!urls.length)throw new Error('來源網址已失效');
  // A small, bounded probe measures available routes and supplies exact length.
@@ -26,14 +31,15 @@ export async function directTransfer(format,request,signal,onBytes=()=>{},sink,c
  // The first fully verified prefix wins. A dead backup must not delay a fast CDN.
  if(selected)for(const controller of probeControllers)controller.abort();
  if(signal.aborted)throw signal.reason || new Error('已取消');
- if(!selected){let firstError;for(const url of [...ready.map(r=>r.url),...urls.filter(u=>!ready.some(r=>r.url===u))])try{return await run(async attemptSignal=>{const response=await request(url,{signal:AbortSignal.any([attemptSignal,AbortSignal.timeout(20000)])});return sink?await streamToFile(response,attemptSignal,sink,onBytes):await read(response,attemptSignal,MAX_TRANSFER_BYTES,onBytes);});}catch(error){firstError ||= error;if(signal.aborted)throw error;}throw firstError || new Error('來源下載失敗');}
+ if(!selected){let firstError;for(const url of [...ready.map(r=>r.url),...urls.filter(u=>!ready.some(r=>r.url===u))])try{return await run(attemptSignal=>withReadDeadline(attemptSignal,readTimeoutMs,async(readSignal,timed)=>{const response=await timed(()=>request(url,{signal:readSignal}));return sink?await streamToFile(response,readSignal,sink,onBytes,timed):await read(response,readSignal,MAX_TRANSFER_BYTES,onBytes,timed);}));}catch(error){firstError ||= error;if(signal.aborted)throw error;}throw firstError || new Error('來源下載失敗');}
  const total=selected.range.total,output=sink?null:new Uint8Array(total);if(sink)await sink.writeAt(selected.prefix,0);else output.set(selected.prefix);onBytes(selected.prefix.length);
  const chunkSize=2*1024*1024,parts=[];for(let start=selected.prefix.length;start<total;start+=chunkSize)parts.push({start,end:Math.min(total-1,start+chunkSize-1)});
  const candidates=[selected.url,...urls.filter(url=>url!==selected.url)];let cursor=0,hedges=0;
  const partBytes=async (part,url,controller,attemptSignal=signal,onRead=()=>{})=>{
-  const partSignal=AbortSignal.any([attemptSignal,controller.signal,AbortSignal.timeout(20000)]),response=await request(url,{signal:partSignal,headers:{Range:`bytes=${part.start}-${part.end}`}}),range=rangeInfo(response);
+  return withReadDeadline(AbortSignal.any([attemptSignal,controller.signal]),readTimeoutMs,async(partSignal,timed)=>{
+  const response=await timed(()=>request(url,{signal:partSignal,headers:{Range:`bytes=${part.start}-${part.end}`}})),range=rangeInfo(response);
   if(response.status!==206||!range||range.total!==total||range.start!==part.start||range.end!==part.end){await response.body?.cancel();throw new Error('來源未提供正確的檔案範圍');}
-  const data=await read(response,partSignal,part.end-part.start+1,onRead);if(data.length!==part.end-part.start+1)throw new Error('來源片段長度不完整');return data;
+  const data=await read(response,partSignal,part.end-part.start+1,onRead,timed);if(data.length!==part.end-part.start+1)throw new Error('來源片段長度不完整');return data;});
  };
  await Promise.all(Array.from({length:Math.min(4,parts.length)},async()=>{while(cursor<parts.length){const part=parts[cursor++];const controllers=[],attemptProgress=new Map();let visibleBytes=0,attemptId=0;
   const reportAttempt=(id,delta)=>{const previous=attemptProgress.get(id)||0,next=Math.max(0,previous+delta);attemptProgress.set(id,next);const aggregate=Math.max(0,...attemptProgress.values()),visibleDelta=aggregate-visibleBytes;if(visibleDelta){visibleBytes=aggregate;onBytes(visibleDelta);}};

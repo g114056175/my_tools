@@ -5,6 +5,13 @@ import {
   extractMediaModels,
 } from "../extension/media-models.js";
 
+test('shared model entry preserves an explicit X media title and ignores tweet copy',()=>{
+ const payload=title=>({rest_id:'post',legacy:{full_text:'Unrelated post and translation',extended_entities:{media:[{id_str:'media',type:'video',...(title?{title}:{}),video_info:{variants:[{content_type:'video/mp4',url:'https://video.test/current.mp4'}]}}]}}});
+ const [named]=extractMediaModels(payload('Real media title')),[unnamed]=extractMediaModels(payload());
+ assert.equal(named.title,'Real media title');assert.ok(named.aliases.includes('post'));
+ assert.equal(unnamed.title,undefined);assert.equal(unnamed.versions[0].url,named.versions[0].url);
+});
+
 test('model size limits prioritize distinct high qualities over repeated low-quality backups',()=>{
  const low=Array.from({length:40},(_,i)=>({url:`https://cdn.test/360-${i}.mp4`,height:360}));
  const [model]=extractMediaModels({id:'quality-test',video_versions:[...low,{url:'https://cdn.test/1080.mp4',height:1080}]});
@@ -18,7 +25,7 @@ test('X GraphQL quoted media matches its player ID and cannot borrow the outer t
  const store=createMediaModelStore();store.merge(extractMediaModels(payload));
  const video={__reactProps$test:{videoId:'quoted-media'},currentSrc:'blob:quoted',getAttribute:()=>null,closest:()=>null,querySelectorAll:()=>[]};
  video.parentElement={__reactProps$test:{videoId:'outer-post',media:outer},querySelectorAll:()=>[video]};
- const model=store.modelFor(video,'https://x.com/profile');assert.equal(model.id,'quoted-media');assert.equal(model.title,'Quoted title');assert.ok(!model.aliases.includes('outer-post'));assert.equal(model.versions[0].url,'https://video.test/quoted.mp4');
+ const model=store.modelFor(video,'https://x.com/profile');assert.equal(model.id,'quoted-media');assert.equal(model.title,undefined);assert.ok(!model.aliases.includes('outer-post'));assert.equal(model.versions[0].url,'https://video.test/quoted.mp4');
 });
 
 test('X element-owned video_info is parsed before any playback quality switch',()=>{
@@ -310,7 +317,7 @@ test('TikTok style playback URLs bind to the owning aweme ID without borrowing s
  const fixture={aweme_detail:{aweme_id:'7420000000000000001',desc:'Sample clip',video:{duration:12500,bitrateInfo:[{PlayAddr:{UrlList:['https://v16.tiktokcdn.example/video/tos/sample.mp4'],DataSize:1200}}]}}};
  const [model]=extractMediaModels(fixture,{baseUrl:'https://www.tiktok.com/@creator/video/7420000000000000001'});
  assert.equal(model.id,'7420000000000000001');
- assert.equal(model.title,'Sample clip');
+ assert.equal(model.title,'');
  assert.deepEqual(model.versions.map(item=>item.url),['https://v16.tiktokcdn.example/video/tos/sample.mp4']);
  const store=createMediaModelStore();store.merge([model]);
  assert.equal(store.modelFor({closest:()=>null},'https://www.tiktok.com/@creator/video/7420000000000000001').id,model.id);
@@ -337,7 +344,7 @@ test('bounded script scan recognizes JSON with TikTok playback field names',()=>
 test('TikTok ItemStruct keeps the post title, resource aliases and explicit playback structure',()=>{
  const model=extractMediaModels({id:'7690095904514297106',desc:'Post description',author:{id:'author'},video:{id:'7690095904514297106',videoID:'resource',PlayAddrStruct:{UrlList:['https://cdn.example/current.mp4']},playAddr:'https://cdn.example/play.mp4',bitrateInfo:[{GearName:'normal_720_0',PlayAddr:{Width:1280,Height:720,UrlList:['https://cdn.example/720.mp4']}}]}})[0];
  assert.ok(model.aliases.includes('7690095904514297106'));assert.ok(model.aliases.includes('resource'));
- assert.equal(model.title,'Post description');assert.ok(model.versions.some(v=>v.url.endsWith('current.mp4')));
+ assert.equal(model.title,'');assert.ok(model.versions.some(v=>v.url.endsWith('current.mp4')));
  assert.equal(model.versions.find(v=>v.url.endsWith('720.mp4')).height,720);
 });
 

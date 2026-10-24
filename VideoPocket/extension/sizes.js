@@ -4,4 +4,6 @@ export function formatBytes(bytes){
   while(index<units.length-1&&Math.round(value*10)/10>=1024){value/=1024;index++;}
   return `${value.toFixed(1)} ${units[index]}`;
 }
-export function formatSize(size){const text=formatBytes(size?.bytes);return text?`${size.approximate?'約 ':''}${text}`:'大小未知';}
+// Even a known byte count is rounded for display; keep its provenance in the
+// data while using the same concise approximation marker throughout the UI.
+export function formatSize(size){const text=formatBytes(size?.bytes);return text?`約 ${text}`:'大小未知';}

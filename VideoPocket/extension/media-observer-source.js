@@ -7,10 +7,11 @@ import { createMediaModelStore, extractMediaModels } from "./media-models.js";
 import { selectedMediaHint } from "./media-binding.js";
 import { observeWorkerMetadata } from "./worker-media.js";
 import { observeJsonMetadata, copyMediaMetadata } from "./json-media-observer.js";
-import {hasMediaPayload,isMediaPayloadText} from './media-schema.js';
+import {hasMediaPayload,isMediaPayloadText,isStrongMediaField,isBroadcastIdentityField} from './media-schema.js';
 import { dailymotionContext } from "./dailymotion.js";
 import {titleFor,isGenericMediaTitle} from './media-titles.js';
 import {extractTwitchPlayerMetadata} from './twitch-clips.js';
+import {BUILD_ID} from './build-info.js';
 
 const OBSERVER_SYMBOL = Symbol.for("video-pocket.mediaObserver");
 const MAX_GRAPH = 512,
@@ -56,8 +57,28 @@ const isSegment = (u) => /\.(?:ts|m4s|aac|m4a)(?:[?#]|$)/i.test(u);
 
 // Relay/GraphQL can deliver several JSON records instead of one JSON body.
 // This parser never evaluates script text or guesses URLs from unrelated text.
+function boundedMetadataText(text) {
+  if (typeof text !== 'string') return '';
+  if (text.length <= MAX_TEXT) return text;
+  // A large feed response can contain a small, complete video record before
+  // unrelated deferred records. Keep complete records inside the original
+  // read budget; never parse a truncated record or scan the oversized tail.
+  const prefix = text.slice(0, MAX_TEXT);
+  const newline = prefix.lastIndexOf('\n');
+  return newline < 0 ? '' : prefix.slice(0, newline);
+}
+// Retention priority only: this does not admit or bind a source. Real playback
+// values outrank feed records containing empty delivery fields/player IDs.
+function metadataPriority(text) {
+  for(const match of text.matchAll(/"([^"\\]{1,64})"\s*:\s*"(https?:|<|#EXTM3U)/g))
+    if(isStrongMediaField(match[1])||/^(?:hls|dash)$/.test(match[1]))return 1;
+  for(const match of text.matchAll(/"([^"\\]{1,64})"\s*:\s*"([^"\\]{1,256})"/g))
+    if(isBroadcastIdentityField(match[1]))return 1;
+  return 0;
+}
 export function mediaModelsFromText(text,baseUrl='',parseJson=JSON.parse){
-  if(typeof text!=='string'||text.length>MAX_TEXT)return [];
+  text=boundedMetadataText(text);
+  if(!text)return [];
   const clean=text.replace(/^\s*for\s*\(;;\);\s*/,''),models=[];
   try{return extractMediaModels(parseJson(clean),{baseUrl});}catch{}
   for(const line of clean.split(/\r?\n/).slice(0,256)){
@@ -70,9 +91,15 @@ export function mediaModelsFromText(text,baseUrl='',parseJson=JSON.parse){
 }
 
 export function installMediaObserver(target = globalThis, options = {}) {
-  if (target[OBSERVER_SYMBOL]?.sourcesFor) return target[OBSERVER_SYMBOL];
+  const previous = target[OBSERVER_SYMBOL];
+  if (previous?.sourcesFor && previous.build === BUILD_ID) return previous;
+  // Extension reloads do not remove hooks from existing MAIN-world pages.
+  // Restore the old hooks before installing this build, avoiding stacked
+  // JSON/fetch wrappers and the silent reuse of obsolete parsing rules.
+  if (previous?.sourcesFor) previous.dispose?.();
   if (!shouldInstallMediaObserver(target)) {
     const api = {
+      build: BUILD_ID,
       sourcesFor: () => ({ candidates: [], pending: false, reason: "excluded-context" }),
       manifestFor: () => null,
       modelFor: () => null,
@@ -322,9 +349,24 @@ export function installMediaObserver(target = globalThis, options = {}) {
   const deferMetadata=(value,url,kind='json')=>{
     // Deferred parsing must not let unrelated API/analytics traffic evict
     // the one playback response needed by a later user selection.
+    if(kind==='text'){
+      value=boundedMetadataText(value);
+      if(!value)return;
+      const lines=value.split(/\r?\n/,256);
+      const first=lines.find(line=>line.trim())?.trim().replace(/^for\s*\(;;\);\s*/,'') || '';
+      if(lines.length>1&&/^(?:\{.*\}|\[.*\])$/.test(first)){
+        // Relay repeats records across stream chunks and the final body.
+        // Queue only media-bearing records, with stable per-record hashes;
+        // otherwise unrelated feed text and overlapping copies evict the
+        // selected video's metadata before the popup is opened.
+        for(const line of lines)if(isMediaPayloadText(line))deferMetadata(line,url,'text');
+        return;
+      }
+    }
     let snapshot,serialized;
     if(kind==='text'){
-      if(typeof value!=='string'||value.length>MAX_TEXT||!isMediaPayloadText(value))return;
+      value=boundedMetadataText(value);
+      if(!value||!isMediaPayloadText(value))return;
       snapshot=serialized=value;
     }else{
       snapshot=copyMediaMetadata(value);if(!hasMediaPayload(snapshot))return;
@@ -336,9 +378,15 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const fingerprint=`${bytes}:${hash>>>0}`;
     const at=now();
     if(deferredMetadata.some(item=>item.at>=at-DEFERRED_TTL&&item.url===url&&item.kind===kind&&item.fingerprint===fingerprint&&(kind==='text'?item.value:JSON.stringify(item.value))===serialized))return;
+    const priority=metadataPriority(serialized);
+    while(deferredMetadata.length&&(deferredMetadata.length>=MAX_DEFERRED_METADATA||deferredBytes+bytes>MAX_DEFERRED_BYTES)){
+      const lowest=Math.min(...deferredMetadata.map(item=>item.priority));
+      if(lowest>priority)return;
+      const index=deferredMetadata.findIndex(item=>item.priority===lowest);
+      deferredBytes-=deferredMetadata.splice(index,1)[0].bytes;
+    }
     const generation=++deferredGeneration;
-    while(deferredMetadata.length&&(deferredMetadata.length>=MAX_DEFERRED_METADATA||deferredBytes+bytes>MAX_DEFERRED_BYTES)){deferredBytes-=deferredMetadata.shift().bytes;}
-    deferredMetadata.push({value:snapshot,url,kind,bytes,at,generation,fingerprint});deferredBytes+=bytes;
+    deferredMetadata.push({value:snapshot,url,kind,bytes,at,generation,fingerprint,priority});deferredBytes+=bytes;
   };
   const drainMetadata=(limit=8,budget,selectedVideo)=>{
     let count=0;const cutoff=now();
@@ -348,7 +396,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const matches=selectedMediaHint(selectedVideo,{pageUrl:target.location?.href});
     // Compute hints once per bounded queue entry. Priority is not evidence of
     // ownership: modelFor still checks the selected player's exact identity.
-    const ordered=selectedVideo?deferredMetadata.map(item=>({item,priority:Number(matches(item.url)||matches(item.kind==='text'?item.value:JSON.stringify(item.value)))})).sort((a,b)=>b.priority-a.priority).map(entry=>entry.item):deferredMetadata;
+    const ordered=selectedVideo?deferredMetadata.map(item=>({item,priority:2*Number(matches(item.url)||matches(item.kind==='text'?item.value:JSON.stringify(item.value)))+item.priority})).sort((a,b)=>b.priority-a.priority).map(entry=>entry.item):deferredMetadata;
     while(ordered.length&&count<Math.max(1,Math.min(32,Number(limit)||8))&&(reserved||!budget||budget())){
       reserved=false;
       const item=ordered[0],index=deferredMetadata.indexOf(item);if(index>=0){deferredMetadata.splice(index,1);deferredBytes-=item.bytes;}if(ordered!==deferredMetadata)ordered.shift();
@@ -377,7 +425,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       if(disposed||pendingMetadata>=4||!url||new URL(url).origin!==new URL(target.location.href).origin)return;
       if(!/json|multipart\/mixed/i.test(type)&&!(/\/graphql\/?(?:\?|$)/i.test(url)&&/text\//i.test(type)))return;
       const length=Number(response.headers?.get?.('content-length'));
-      if(length>MAX_TEXT||!response.clone||!response.body)return;
+      if((length>MAX_TEXT&&!/\/graphql\/?(?:\?|$)/i.test(url))||!response.clone||!response.body)return;
       reader=response.clone().body?.getReader?.();if(!reader)return;
       pendingMetadata++;metadataReaders.add(reader);
       let bytes=0,buffer='',whole='',stopped=false;
@@ -385,11 +433,14 @@ export function installMediaObserver(target = globalThis, options = {}) {
       timer=setTimeout(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
       while(!disposed&&!stopped){
         const item=await reader.read();if(item.done)break;
-        bytes+=item.value.byteLength;if(bytes>MAX_TEXT)break;
-        const decoded=decoder.decode(item.value,{stream:true});buffer+=decoded;whole+=decoded;
+        const available=MAX_TEXT-bytes;
+        const chunk=item.value.subarray(0,available);
+        bytes+=chunk.byteLength;
+        const decoded=decoder.decode(chunk,{stream:true});buffer+=decoded;whole+=decoded;
         // Complete lines can be delivered before a long-lived response ends.
         const newline=buffer.lastIndexOf('\n');
         if(newline>=0){deferMetadata(buffer.slice(0,newline),url,'text');buffer=buffer.slice(newline+1);}
+        if(chunk.byteLength<item.value.byteLength||bytes>=MAX_TEXT){stopped=true;break;}
       }
       if(!disposed&&!stopped&&bytes<=MAX_TEXT)deferMetadata(whole+decoder.decode(),url,'text');
     }catch{}finally{
@@ -800,8 +851,9 @@ export function installMediaObserver(target = globalThis, options = {}) {
       }
   };
   const api = {
+    build: BUILD_ID,
     sourcesFor,
-    titleFor: video => titleFor(video),
+    titleFor: (video,options) => titleFor(video,options),
     isGenericTitle: isGenericMediaTitle,
     twitchPlayerFor: (video,videos) => {
       if(!/(^|\.)twitch\.tv$/i.test(target.location?.hostname || ''))return null;
@@ -814,7 +866,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     canonicalVideo: (video) => modelStore.canonicalVideo(video),
     metadataCandidatesFor: (video,videos) => modelStore.metadataCandidatesFor(video,target.location?.href,videos),
     validateMetadataPlan: (token,video,videos) => modelStore.validateMetadataPlan(token,video,target.location?.href,videos),
-    diagnosticsFor: (video) => (prune(),{json:jsonMetadata.stats(),metadataQueue:deferredMetadata.length,metadataQueueBytes:deferredBytes,metadataGeneration:lastDrainGeneration,manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
+    diagnosticsFor: (video) => (prune(),{observerBuild:BUILD_ID,json:jsonMetadata.stats(),metadataQueue:deferredMetadata.length,metadataQueueBytes:deferredBytes,metadataGeneration:lastDrainGeneration,manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
     videosSnapshot: (limit=256) => [...videoRegistry].filter(video=>video?.isConnected!==false).slice(0,Math.max(1,Math.min(256,Number(limit)||256))),
     drainMetadata,
     pageContext: () => dailymotionContext(target.document,target.location?.href),

@@ -56,6 +56,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   const animePage=/(^|\.)ani\.gamer\.com\.tw$/.test(String(location.hostname).toLowerCase());
   const animeMain=v=>animePage&&v?.getAttribute?.('id')==='ani_video_html5_api';
   const dailymotionPage=/(^|\.)dailymotion\.com$/.test(String(location.hostname).toLowerCase());
+  const socialPage=/(^|\.)\b(?:x|twitter|reddit|tiktok|instagram|facebook|threads)\.(?:com|net)$/.test(String(location.hostname).toLowerCase()) || /(^|\.)twitch\.tv$/i.test(location.hostname)&&/\/clips\/?$/i.test(location.pathname);
   const dailymotionMain=v=>dailymotionPage&&v?.getAttribute?.('id')==='video';
   const bilibiliPage=/(^|\.)bilibili\.com$/.test(String(location.hostname).toLowerCase());
   const biliUrl=new URL(location.href),biliBvid=bilibiliPage?(biliUrl.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || biliUrl.searchParams.get('bvid') || ''):'';
@@ -82,6 +83,44 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     try{const r=v.getBoundingClientRect(),style=globalThis.getComputedStyle?.(v);return 1+4*Number(r.width>0&&r.height>0&&r.bottom>0&&r.right>0&&r.top<(globalThis.innerHeight||100000)&&r.left<(globalThis.innerWidth||100000)&&style?.display!=='none'&&style?.visibility!=='hidden')+2*Number(v.paused===false)+Number(v.readyState>1);}catch{return 1;}
   };
   videos.sort((a,b)=>Number(animeMain(b))-Number(animeMain(a)) || Number(dailymotionMain(b))-Number(dailymotionMain(a)) || biliRank(b)-biliRank(a) || Number(!!player?.contains(b))-Number(!!player?.contains(a)));
+  // Keep the inventory order stable: the background and picker use its
+  // indices as identity slots. Compute an independent default preference for
+  // social pages so an in-view player belonging to the current post wins over
+  // an earlier comment/ad player without moving any slot.
+  const preferredMediaIndex=(()=>{
+    if(videos.length<=1)return videos.length?0:-1;
+    const knownMain=videos.findIndex(v=>animeMain(v)||dailymotionMain(v)||biliPlayers.has(v)||player?.contains(v));
+    if(knownMain>=0)return knownMain;
+    let pageUrl;try{pageUrl=new URL(location.href);}catch{return 0;}
+    const host=/^(?:www\.)?(?:x|twitter)\.com$/i.test(pageUrl.hostname)?pageUrl.hostname:'';
+    const route=host?(pageUrl.pathname.match(/^\/[^/]+\/status\/(\d+)/i)?.[1]||pageUrl.pathname.match(/^\/i\/broadcasts\/([A-Za-z0-9_-]+)/i)?.[1]||''):'';
+    const hrefOf=node=>{try{return node?.href||node?.getAttribute?.('href')||'';}catch{return '';}};
+    const belongsToRoute=video=>{
+      if(!route)return 0;
+      for(let node=video,depth=0;node&&depth<24;depth++,node=node.parentElement||node.getRootNode?.()?.host){
+        if(depth>0&&/^(?:BODY|HTML|MAIN)$/i.test(node.tagName||''))break;
+        let links=[];try{links=[...(node.querySelectorAll?.('a[href]')||[])];}catch{}
+        for(const link of links){let url;try{url=new URL(hrefOf(link),location.href);}catch{continue;}
+          if(url.origin!==pageUrl.origin)continue;
+          const id=url.pathname.match(/^\/[^/]+\/status\/(\d+)/i)?.[1]||url.pathname.match(/^\/i\/broadcasts\/([A-Za-z0-9_-]+)/i)?.[1]||'';
+          if(id&&id===route)return 1;
+        }
+        if(depth>0&&(/^(?:ARTICLE)$/i.test(node.tagName||'')||String(node.getAttribute?.('role')||'').toLowerCase()==='article'))break;
+      }
+      return 0;
+    };
+    const viewportScore=video=>{
+      try{const rect=video.getBoundingClientRect?.();if(!rect)return 0;const left=Math.max(0,Math.min(innerWidth,rect.right)-Math.max(0,rect.left)),top=Math.max(0,Math.min(innerHeight,rect.bottom)-Math.max(0,rect.top)),area=Math.max(0,left)*Math.max(0,top);return area>0?Math.min(1,area/Math.max(1,Math.abs(rect.width*rect.height))):0;}catch{return 0;}
+    };
+    const score=(video,index)=>{
+      const source=String(video?.currentSrc||video?.src||video?.getAttribute?.('src')||'');
+      const label=String(video?.title||video?.getAttribute?.('aria-label')||'');
+      const gif=/\.gif(?:[?#]|$)|\bgif\b/i.test(`${source} ${label}`);
+      return belongsToRoute(video)*1000+viewportScore(video)*100+Number(video?.paused===false)*12+Number(Number(video?.readyState)>1)*4-Number(gif)*8-index/1000;
+    };
+    let best=0,bestScore=score(videos[0],0);for(let i=1;i<videos.length;i++){const value=score(videos[i],i);if(value>bestScore){best=i;bestScore=value;}}
+    return best;
+  })();
   mediaIndex=Math.max(0,Math.min(Number(mediaIndex)||0,videos.length-1));const video=videos[mediaIndex];
   let response,activeTrack;
   try{response=player?.getPlayerResponse?.() || window.ytInitialPlayerResponse;activeTrack=player?.getOption?.('captions','track');}catch{}
@@ -95,8 +134,43 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   const sameLanguage=captions.filter(t=>t.languageCode===activeTrack?.languageCode&&(t.kind==='asr')===(activeTrack?.kind==='asr'));
   const tracks=captions.map((t,i)=>({language:t.languageCode,name:label(t) || t.languageCode,url:t.baseUrl,vssId:t.vssId,pageTrackId:t.vssId || `youtube:${i}`,pageTrackIndex:i,captionName:captionParameters(t.baseUrl).get('name') || '',automatic:t.kind==='asr',source:'youtube-page',default:Number.isInteger(defaultIndex)&&i===defaultIndex,active:!!activeTrack&&!activeTrack.translationLanguage&&(activeId?t.vssId===activeId:label(activeTrack)?label(activeTrack)===label(t)&&t.languageCode===activeTrack.languageCode:sameLanguage.length===1&&sameLanguage[0]===t)}));
   let title=mainResponse?.videoDetails?.title || document.querySelector('h1.ytd-watch-metadata')?.textContent?.trim() || document.title;
+  const biliDetail=window.__INITIAL_STATE__?.videoData;
+  const biliTitle=bilibiliPage&&String(biliDetail?.bvid || '')===biliBvid?String(biliDetail?.title || '').trim():'';
+  if(biliTitle)title=biliTitle;
   const animeTitle=animePage?String(document.title || '').replace(/\s*線上看\s*-\s*巴哈姆特動畫瘋\s*$/,'').trim():'';
-  const candidates=videos.map((v,i)=>({title:animeMain(v)?animeTitle:(player?.contains(v)?mainResponse?.videoDetails?.title || title:v.getAttribute('aria-label') || v.title || v.getAttribute('data-mwtitle') || v.closest('figure')?.querySelector('figcaption')?.textContent?.trim() || (videos.length===1?title:`影片 ${i+1}`)),url:v.currentSrc || v.src,referer:location.href}));
+  // Titles are resolved independently from source discovery. A weaker DOM
+  // label must never replace a title already bound by a player/API model.
+  const named=value=>{
+    const text=String(value || '').replace(/\s+/g,' ').trim();if(!text)return '';
+    try{if(sourceObserver?.isGenericTitle?.(text))return '';}catch{}
+    return /^(?:(?:youtube|twitch|facebook|instagram|tiktok|twitter|bilibili|x)\s*[-:：|·]?\s*)?(?:(?:html5|embedded|嵌入式?|嵌入)\s*)?(?:video|media|影片|视频|視頻)\s*(?:player|播放器)?\s*\d*$/i.test(text)||/^(?:youtube|twitch|facebook|instagram|tiktok|twitter|bilibili|播放器|播放影片|播放视频|播放視頻)$/i.test(text)?'':text;
+  };
+  const resolveTitle=(v,i,knownTitle='')=>{
+    const known=named(knownTitle);if(known)return known;
+    let owned='';try{owned=named(sourceObserver?.titleFor?.(v,{includeAria:false}));}catch{}if(owned)return owned;
+    const local=[v.title,v.getAttribute?.('data-video-title'),v.getAttribute?.('data-mwtitle'),v.closest?.('figure')?.querySelector?.('figcaption')?.textContent].map(named).find(Boolean);
+    if(local)return local;
+    if(videos.length===1||player?.contains(v)||biliPlayers.has(v)||animeMain(v)||dailymotionMain(v)){
+      const heading=player?.contains(v)?document.querySelector('h1.ytd-watch-metadata,ytd-watch-metadata h1,#title h1')?.textContent:null;
+      if(named(heading))return named(heading);
+      if(!socialPage){try{for(const node of document.querySelectorAll('meta[property="og:title"],meta[name="twitter:title"],meta[name="title"]')){const value=named(node.content || node.getAttribute?.('content'));if(value)return value;}}catch{}
+      if(named(document.title))return named(document.title);}
+    }
+    let label='';try{label=named(sourceObserver?.titleFor?.(v));}catch{}
+    label ||= named(v.getAttribute?.('aria-label'));if(label)return label;
+    try{
+      const raw=v.currentSrc || v.getAttribute?.('src') || v.src || v.querySelector?.('source')?.src;
+      const sourceUrl=raw?new URL(raw,location.href):null;
+      if(sourceUrl&&/^https?:$/.test(sourceUrl.protocol)){
+        const basename=decodeURIComponent(sourceUrl.pathname.split('/').pop() || '');
+        const filename=basename.replace(/\.(?:mp4|webm|mkv|mov|m4v|ogv|avi)$/i,'').replace(/[_-]+/g,' ').trim();
+        if(filename!==basename&&named(filename)&&!/^\d+$/.test(filename)&&!/[a-f\d]{24}/i.test(filename))return filename;
+      }
+    }catch{}
+    return `影片 ${i+1}`;
+  };
+  const mainTitle=v=>animeMain(v)?animeTitle:player?.contains(v)?mainResponse?.videoDetails?.title:biliPlayers.has(v)?biliTitle:'';
+  const candidates=videos.map((v,i)=>({title:resolveTitle(v,i,mainTitle(v)),url:v.currentSrc || v.src,referer:location.href}));
   // Popup opening needs a cheap inventory only.  Do not parse document JSON,
   // inspect player registries, or bind ambient sources for unselected videos.
   if(!deepDiscovery){
@@ -105,16 +179,13 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
       if(!identities.keys.has(v))identities.keys.set(v,++identities.next);
       const candidate=candidates[i], raw=candidate.url || '';
       candidate.mediaKey=identities.keys.get(v);candidate.url=raw;candidate.downloadUrl=null;
-      try{const identity=window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity;candidate.mediaIdentity=identity?.key || '';candidate.mediaContentId=identity?.id || '';}catch{}
-      try{const ownedTitle=sourceObserver?.titleFor?.(v);if(ownedTitle)candidate.title=ownedTitle;}catch{}
-      if(sourceObserver?.isGenericTitle?.(candidate.title))candidate.title=videos.length===1&&!sourceObserver.isGenericTitle(document.title)?document.title:`影片 ${i+1}`;
-      candidate.title=String(candidate.title || '').trim() || `影片 ${i+1}`;
+      try{const identity=window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity;candidate.selectionIdentity=identity?.key || '';candidate.mediaIdentity=identity?.key || '';candidate.mediaContentId=identity?.id || '';}catch{}
       if(dailymotionMain(v))candidate.dailymotionMain=true;
-      if(biliPlayers.has(v))Object.assign(candidate,{bilibiliMain:true,bilibiliRank:biliRank(v),mediaIdentity:biliIdentity,mediaContentId:biliIdentity,title,downloadUrl:location.href});
+      if(biliPlayers.has(v))Object.assign(candidate,{bilibiliMain:true,bilibiliRank:biliRank(v),selectionIdentity:biliIdentity,mediaIdentity:biliIdentity,mediaContentId:biliIdentity,title,downloadUrl:location.href});
     }
     let dmContext;try{dmContext=sourceObserver?.pageContext?.() || undefined;}catch{}
     const summaryPage=Math.max(1,Number(biliUrl.searchParams.get('p'))||1),detail=window.__INITIAL_STATE__?.videoData || {},part=detail.pages?.[summaryPage-1],summaryBili=biliBvid?{site:'bilibili',bvid:biliBvid,page:summaryPage,cid:Number(part?.cid || (summaryPage===1?detail.cid:0))||0,title:String(detail.title || title || ''),duration:Number(part?.duration || detail.duration || 0)}:undefined;
-    return {url:location.href,title, discoveryMode:'summary', dailymotionContext:dmContext, bilibiliContext:summaryBili, videos:candidates, mediaIndex:Math.max(0,Math.min(Number(mediaIndex)||0,candidates.length-1)), tracks:[], preferredLanguages:[...(navigator.languages||[])], language:document.documentElement?.lang||''};
+    return {url:location.href,title, discoveryMode:'summary', dailymotionContext:dmContext, bilibiliContext:summaryBili, videos:candidates, mediaIndex:Math.max(0,Math.min(Number(mediaIndex)||0,candidates.length-1)), preferredMediaIndex, tracks:[], preferredLanguages:[...(navigator.languages||[])], language:document.documentElement?.lang||''};
   }
   const elementSource=node=>{const raw=node?.getAttribute?.('src');return typeof raw==='string'&&!raw.trim()?'':node?.src || raw || '';};
   const source=v=>v.currentSrc || elementSource(v) || [...v.querySelectorAll('source')].map(elementSource).find(Boolean) || '';
@@ -172,7 +243,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   }
   const twitchSelected=twitchMetadata.get(video);
   if(twitchSelected?.kind==='clip'&&twitchSelected.slug)platform={...twitchSelected,site:'twitch-clip'};
-  else if(twitchSelected?.kind==='vod'&&/^\d+$/.test(twitchSelected.id))platform={site:'twitch',id:twitchSelected.id,title:twitchSelected.title || title,duration:twitchSelected.duration || (Number.isFinite(video?.duration)?video.duration:0)};
+  else if(twitchSelected?.kind==='vod'&&/^\d+$/.test(twitchSelected.id))platform={site:'twitch',id:twitchSelected.id,title:twitchSelected.title || candidates[mediaIndex]?.title || title,duration:twitchSelected.duration || (Number.isFinite(video?.duration)?video.duration:0)};
   const instances=[window.hls,window.player];try{if(typeof hls!=='undefined')instances.push(hls);if(typeof player!=='undefined')instances.push(player);}catch{}
   // Query existing Video.js players only. Calling videojs(id) would initialize
   // or alter a player; the registry and source getters leave playback alone.
@@ -237,17 +308,11 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     // Background can verify these even when this frame has several players.
     let observedSources;try{candidate.sourceCandidates=[];if(i===mediaIndex&&deepTake()){observedSources=sourceObserver?.sourcesFor?.(v);candidate.sourceCandidates=(observedSources?.candidates || []).filter(item=>item.downloadable!==false&&http(item.url)&&['hls','dash','progressive'].includes(item.kind)).slice(0,12).map(item=>({url:http(item.url),kind:item.kind,evidence:(item.evidence || []).filter(value=>typeof value==='string').slice(0,8),...(item.sourceGroup?{sourceGroup:item.sourceGroup}:{})}));}}catch{}
     if(dailymotionMain(v))candidate.dailymotionMain=true;
-    try{const model=observedModel(v);if(model?.title?.trim())candidate.title=model.title.trim();}catch{}
-    try{const ownedTitle=sourceObserver?.titleFor?.(v);if(ownedTitle)candidate.title=ownedTitle;}catch{}
-    if(dailymotionMain(v)&&dailymotionContext?.title)candidate.title=dailymotionContext.title;
-    if(sourceObserver?.isGenericTitle?.(candidate.title))candidate.title=videos.length===1&&!sourceObserver.isGenericTitle(document.title)?document.title:`影片 ${i+1}`;
-    candidate.title=String(candidate.title || '').trim();
-    if(!candidate.title){
-      const raw=source(v);let filename='';try{const u=raw?new URL(raw,location.href):null;if(u&&/^https?:$/.test(u.protocol))filename=decodeURIComponent(u.pathname.split('/').pop() || '').replace(/\.[a-z0-9]{2,5}$/i,'').replace(/[_-]+/g,' ').trim();}catch{}
-      candidate.title=filename || String(document.title || '').trim() || `影片 ${i+1}`;
-    }
+    let modelTitle='';try{modelTitle=named(observedModel(v)?.title);}catch{}
+    candidate.title=resolveTitle(v,i,mainTitle(v)||modelTitle||(dailymotionMain(v)?dailymotionContext?.title:''));
     try{
       const identity=window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity;
+      candidate.selectionIdentity=identity?.key || '';
       candidate.mediaIdentity=observedModel(v)?.id || identity?.key || '';
       candidate.mediaContentId=identity?.id || observedModel(v)?.id || '';
       // A feed may have already discarded its playback JSON. Only the exact
@@ -256,7 +321,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     }catch{}
     if(twitchId&&twitchPlayers.includes(v))candidate.mediaIdentity='twitch-vod:'+twitchId;
     const twitchOwned=twitchMetadata.get(v);if(twitchOwned){const contentId=twitchOwned.kind==='clip'?twitchOwned.slug:twitchOwned.id;candidate.mediaIdentity=`twitch-${twitchOwned.kind}:${contentId}`;candidate.mediaContentId=candidate.mediaIdentity;if(twitchOwned.title)candidate.title=twitchOwned.title;}
-    if(biliPlayers.has(v))Object.assign(candidate,{bilibiliMain:true,bilibiliRank:biliRank(v),mediaIdentity:biliIdentity,mediaContentId:biliIdentity,title,downloadUrl:location.href});
+    if(biliPlayers.has(v))Object.assign(candidate,{bilibiliMain:true,bilibiliRank:biliRank(v),selectionIdentity:biliIdentity,mediaIdentity:biliIdentity,mediaContentId:biliIdentity,title,downloadUrl:location.href});
     if(player?.contains(v)&&response?.videoDetails?.videoId)candidate.downloadUrl=location.href;
     if(i!==mediaIndex){candidate.downloadUrl ||= http(source(v));continue;}
     if(!candidate.downloadUrl){
@@ -375,7 +440,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   }catch{}
   let discoveryDiagnostics;try{if(video&&!embeddedModel)discoveryDiagnostics=sourceObserver?.diagnosticsFor?.(video);}catch{}
   discoveryDiagnostics={...(discoveryDiagnostics||{}),explorationReason:deepReason,count:deepCount,timingMs:Math.round(clock()-deepStarted)};
-  return {url:location.href,title,tracks,platform,dailymotionContext,bilibiliContext,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,discoveryDiagnostics,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
+  return {url:location.href,title,tracks,platform,dailymotionContext,bilibiliContext,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,preferredMediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,discoveryDiagnostics,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
 }
 export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,automatic=false,selector={}){
   try{
@@ -408,6 +473,8 @@ export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,a
   if(!biliPage&&selector.mediaKey&&window[Symbol.for('video-pocket.identities')]?.keys?.get(video)!==selector.mediaKey)throw new Error('影片已變更，請更新影片資訊');
   if(!biliPage&&selector.mediaUrl&&(!video||(video.currentSrc || video.src || video.querySelector('source')?.src || '')!==selector.mediaUrl))throw new Error('影片已變更，請更新影片資訊');
   const registry=window[Symbol.for('video-pocket.selection')];
+  const transcriptKey=Symbol.for('video-pocket.transcript'),transcriptRoute=String(location.href);
+  try{window.addEventListener?.('pagehide',()=>{delete window[transcriptKey]},{once:true});}catch{}
   const known=biliPage
     ? [...(registry?.tracks?.values?.() || [])].flat().find(t=>t.pageTrackId===selector.pageTrackId&&t.source==='bilibili-api'&&(!selector.expectedBvid||t.bvid===selector.expectedBvid)&&(!selector.expectedCid||Number(t.cid)===Number(selector.expectedCid))&&(!selector.expectedPage||Number(t.page)===Number(selector.expectedPage)))
     : registry?.tracks?.get(video)?.find(t=>t.pageTrackId===selector.pageTrackId&&(t.source==='bilibili-api'||t.pageTrackIndex===selector.pageTrackIndex));
@@ -441,8 +508,8 @@ export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,a
     const s=String(label || '').toLowerCase();for(const [re,code] of [[/中文|chinese/,'zh'],[/english|英語|英文/,'en'],[/japanese|日本語|日語|日文/,'ja'],[/korean|한국|韓語|韓文/,'ko'],[/french|français|法語|法文/,'fr'],[/german|deutsch|德語|德文/,'de'],[/spanish|español|西班牙/,'es']])if(re.test(s))return code;return '';
   };
   const readPayload=()=>{
-    const cached=window[Symbol.for('video-pocket.transcript')];
-    if(!selected||original.length!==1||cached?.videoId!==response.videoDetails.videoId)return null;
+    const cached=window[transcriptKey];
+    if(!selected||original.length!==1||cached?.route!==transcriptRoute||cached?.videoId!==response.videoDetails.videoId)return null;
     // hl is the interface language, not a caption-track selector. A panel
     // response is safe only when the video has exactly one original track.
     if(cached.trackId!==(selected.vssId || `youtube:${selector.pageTrackIndex}`))return null;
@@ -466,7 +533,7 @@ export async function pageSubtitles(language,openTranscript=false,mediaIndex=0,a
         // Public get_panel protobuf: field 149 contains video ID and panel mode.
         const params=btoa(String.fromCharCode(0xaa,0x09,0x0f,0x0a,0x0b)+response.videoDetails.videoId+String.fromCharCode(0x18,0x01));
         const res=await fetch('/youtubei/v1/get_panel?prettyPrint=false',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({context,panelId:'PAmodern_transcript_view',params}),signal:AbortSignal.timeout(10000)});
-        if(res.ok){const data=await res.json(),currentId=new URL(location.href).searchParams.get('v') || location.pathname.split('/shorts/')[1]?.split('/')[0];if(currentId!==response.videoDetails.videoId||player.getPlayerResponse?.()?.videoDetails?.videoId!==response.videoDetails.videoId)throw new Error('影片已變更，請更新影片資訊');if(!data.error){window[Symbol.for('video-pocket.transcript')]={videoId:response.videoDetails.videoId,trackId:selected.vssId || `youtube:${selector.pageTrackIndex}`,data};const result=readPayload();if(result)return result;}}
+        if(res.ok){const data=await res.json(),currentId=new URL(location.href).searchParams.get('v') || location.pathname.split('/shorts/')[1]?.split('/')[0];if(currentId!==response.videoDetails.videoId||player.getPlayerResponse?.()?.videoDetails?.videoId!==response.videoDetails.videoId)throw new Error('影片已變更，請更新影片資訊');if(!data.error){window[transcriptKey]={route:transcriptRoute,videoId:response.videoDetails.videoId,trackId:selected.vssId || `youtube:${selector.pageTrackIndex}`,data};const result=readPayload();if(result)return result;}}
       }
     }catch(error){if(error?.code==='SOURCE_CHANGED'||error?.message==='影片已變更，請更新影片資訊')throw error;}
   }

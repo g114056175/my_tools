@@ -77,7 +77,9 @@ function tweetBroadcast(tweet,legacy,owner,ownerTitle){
   }
   if(bids.size!==1)return null;
   const bid=[...bids][0],key=values.broadcast_media_key;if(!/^[A-Za-z0-9_-]{3,128}$/.test(bid))return null;
-  return broadcastDescriptor({broadcast_id:bid,media_key:key,media_id:values.broadcast_media_id,status:values.broadcast_title || ownerTitle,width:values.broadcast_width,height:values.broadcast_height},[bid,key,owner]);
+  // The tweet body is not the broadcast title. Keep a title only when X's
+  // broadcast binding explicitly supplies one.
+  return broadcastDescriptor({broadcast_id:bid,media_key:key,media_id:values.broadcast_media_id,status:values.broadcast_title,width:values.broadcast_width,height:values.broadcast_height},[bid,key,owner]);
 }
 
 // X streams query results as JSON strings inside executable React bootstrap
@@ -120,7 +122,8 @@ function makeDescriptor(media, ownerPostId, base, allowPostAlias, ownerTitle = '
   const width = num(original.width) || Math.max(...versions.map(v => v.width || 0), 0) || undefined;
   const height = num(original.height) || Math.max(...versions.map(v => v.height || 0), 0) || undefined;
   const duration = num(info.duration_millis) ? Number(info.duration_millis) / 1000 : num(info.duration_ms) ? Number(info.duration_ms) / 1000 : num(info.duration);
-  const title = text(ownerTitle || media?.title || media?.alt_text);
+  // ownerTitle is tweet copy and must never become the media name.
+  const title = text(media?.title);
   return { id: aliases[0] || undefined, aliases, provider: 'x', ownerPostId: ownerPostId || undefined, versions: progressive, ...(hls ? { manifestUrl: hls.url, manifestType: 'hls' } : {}), ...(duration ? { duration } : {}), ...(width ? { width } : {}), ...(height ? { height } : {}), ...(title ? { title: title.slice(0, 512) } : {}) };
 }
 
@@ -149,7 +152,7 @@ export function extractXMediaModels(value, { baseUrl = '', budget = 1024 * 1024 
     if(!media.length){const broadcast=tweetBroadcast(tweet,legacy,owner,ownerTitle);if(broadcast)models.push(broadcast);}
     const allowPostAlias = media.length === 1;
     for (const { item, key } of media) {
-      const descriptor = makeDescriptor(item, owner, baseUrl, allowPostAlias, ownerTitle); if (!descriptor) continue;
+      const descriptor = makeDescriptor(item, owner, baseUrl, allowPostAlias); if (!descriptor) continue;
       const dedupe = `${descriptor.ownerPostId || ''}:${key}`; if (seenMedia.has(dedupe)) continue;
       seenMedia.add(dedupe); models.push(descriptor); if (models.length >= MAX_MODELS) return;
     }

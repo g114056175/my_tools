@@ -68,7 +68,7 @@
    conversion=await M.Conversion.init({input,output,...options,showWarnings:false});
    if(!conversion.isValid||conversion.discardedTracks.some(t=>t.reason!=='discarded_by_user'))throw unsupported('H.264 邊界編碼不可用');
    active.add(conversion);conversion.onProgress=p=>{check(signal);progress(p);};await conversion.execute();check(signal);finished=true;return writer.finish();
-  }finally{active.delete(conversion);if(!finished){await conversion?.cancel().catch(()=>{});writer.abort();}}
+  }finally{active.delete(conversion);if(!finished){await conversion?.cancel().catch(()=>{});await Promise.resolve(writer.abort?.()).catch(()=>{});}}
  }
  async function encodePrefix(track,start,end,encode,scope,paths,signal,progress,name='avc-head.mkv'){
   // Conversion's high-level options do not forward fullCodecString. Use the
@@ -85,7 +85,7 @@
     }finally{sample.close();}
    }
    if(!count)throw unsupported('H.264 邊界沒有影格');source.close();await output.finalize();check(signal);finished=true;return writer.finish();
-  }finally{active.delete(output);if(!finished){await output.cancel().catch(()=>{});writer.abort();}}
+  }finally{active.delete(output);if(!finished){await output.cancel().catch(()=>{});await Promise.resolve(writer.abort?.()).catch(()=>{});}}
  }
  async function tryCut({input,start,end,output,scope,kind,expectedAudio,signal,onProgress=()=>{}}){
   if(kind!=='video'||!String(output).toLowerCase().endsWith('.mp4'))return null;
@@ -160,7 +160,7 @@
    writer.access.truncate(moov.position+capped.data.length);
    result=writer.finish();writer=null;completed=true;onProgress(1);
    return {result,stats:{strategy:'smart-h264',encodedSeconds:prefixDuration+tailDuration,copiedSeconds:last.timestamp-key.timestamp,splices:[prefixDuration,last.timestamp-start],prefixPackets,copiedPackets,copiedBytes,presentationDuration:capped.duration,hardwareRequested:encode.hardwareAcceleration==='prefer-hardware'}};
-  }finally{writer?.abort();for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result.path)await disk.removeMediaFile(path).catch(()=>{});}
+  }finally{await Promise.resolve(writer?.abort?.()).catch(()=>{});for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
  root.VideoPocketRangeH264={configuration,units,isIdr,packetData,compatible,plan,tryCut,cancel(){for(const c of active)void c.cancel().catch(()=>{});}};
 })(self);

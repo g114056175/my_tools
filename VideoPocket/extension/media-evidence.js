@@ -1,6 +1,7 @@
 // Generic, evidence-first media discovery.  This module is deliberately
 // side-effect free: callers provide the element/player/network observations.
 // A URL alone is never enough to associate a network request with a video.
+import {xBroadcastIdFromUrl} from './x-media.js';
 
 const MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mkv|ts|m3u8|mpd)(?:[?#]|$)/i;
 const MANIFEST_RE = /\.(?:m3u8|mpd)(?:[?#]|$)/i;
@@ -66,6 +67,8 @@ function identityFromUrl(pageUrl) {
   if(/(^|\.)(?:x|twitter)\.com$/i.test(host)){
     const status=url.pathname.match(/^\/[^/]+\/status\/(\d+)(?:\/|$)/i);
     if(status){id=status[1];kind='post';}
+    const broadcast=xBroadcastIdFromUrl(url.href);
+    if(broadcast){id=broadcast;kind='broadcast';}
   }
   if(!id&&/(^|\.)vimeo\.com$/i.test(host))id=url.pathname.match(/^\/(\d+)(?:\/|$)/)?.[1] || '';
   if (!id && /instagram\.com$/i.test(host)) id = parts.find(p => p && !/^(reel|p|tv)$/i.test(p)) || '';
@@ -92,7 +95,30 @@ function localPlayerIdentity(video){
   return '';
 }
 
+// A broadcast card is an explicit link belonging to one rendered player.
+// Stop before a shared player container or another post: neither a page route
+// nor a link in a neighbouring reply can identify the selected video.
+function ownedXBroadcast(video,pageUrl){
+  let base;try{base=new URL(pageUrl);}catch{return null;}
+  if(!/^(?:www\.)?(?:x|twitter)\.com$/i.test(base.hostname))return null;
+  for(let scope=video?.parentElement,depth=0;scope&&depth<16;scope=scope.parentElement,depth++){
+    if(/^(BODY|HTML|MAIN)$/.test(scope.tagName || '')||nodes(scope,'video').length!==1)break;
+    const links=new Map();
+    for(const anchor of nodes(scope,'a[href]')){
+      const href=absolute(anchor.href || safeAttr(anchor,'href'),pageUrl);
+      let url;try{url=new URL(href);}catch{continue;}
+      const id=xBroadcastIdFromUrl(href);
+      if(id&&url.origin===base.origin)links.set(id,url.href);
+    }
+    if(links.size>1)return null;
+    if(links.size===1){const [id,anchor]=links.entries().next().value;return {id,kind:'broadcast',host:base.hostname,key:`${base.hostname}:${id}`,anchor};}
+    if(scope.tagName==='ARTICLE'||safeAttr(scope,'role')==='article')break;
+  }
+  return null;
+}
+
 export function postIdentity({ pageUrl = '', video, container } = {}) {
+  const broadcast=ownedXBroadcast(video,pageUrl);if(broadcast)return broadcast;
   const page = identityFromUrl(pageUrl);
   let anchor = (() => { try { return video?.closest?.('a[href*="/reel/"],a[href*="/p/"],a[href*="/videos/"],a[href*="/watch"],a[href*="/video/"],a[href*="/status/"]')?.href || ''; } catch { return ''; } })();
   // Feed post links need not wrap the video. Accept a sibling permalink only

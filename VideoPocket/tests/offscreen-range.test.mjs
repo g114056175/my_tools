@@ -1,4 +1,5 @@
 import {parseByteRange as byteRange,rangeCapability,formatRangeCapability} from '../extension/range-capability.js';
+import {fullCutPolicy} from '../extension/full-cut-policy.js';
 import {createMediaTransfer} from '../extension/media-transfer.js';
 import {resolveNetworkCandidates} from '../extension/source-candidates.js';
 import {platformSource} from '../extension/platform-formats.js';
@@ -30,7 +31,7 @@ function diskMock() {
   return { files,cleanups,removeMediaFiles: async scope => {cleanups.push(scope);for(const path of files.keys())if(!scope||path.startsWith(scope+'-'))files.delete(path);}, removeMediaFile: async p => files.delete(p), readMediaFile: async p => new Blob([files.get(p) || new Uint8Array()]),
     createMediaFile: async (scope, name) => { const path = `${scope}-${name}-${++n}`, parts = []; let size = 0; return { path, append: async b => { parts.push(new Uint8Array(b)); size += b.length; }, finish: async () => { const out = new Uint8Array(size); let p = 0; for (const b of parts) { out.set(b, p); p += b.length; } files.set(path, out); return { path, size }; }, abort: async () => {} }; } };
 }
-async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false,saveMode='normal' } = {}) {
+async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false,saveMode='normal',fullCutFixture=false } = {}) {
   let mediaCompleted=0;
   const master = 'https://range.test/master.m3u8', child = 'https://range.test/child.m3u8';
   const urls = [1, 2, 3].map(i => `https://range.test/${i}.ts`), calls = [], mux = [], messages = [],indexLength=32+12*indexCount;
@@ -48,7 +49,7 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
       if(failPrimary&&u.endsWith('/indexed.mp4'))return response(new Uint8Array(),{status:403});
       return response(indexedBytes.subarray(Number(m[1]),Number(m[2])+1),{status:206,range:`bytes ${m[1]}-${m[2]}/${indexedBytes.length}`,type:'video/mp4',...(chunkDelay&&Number(m[1])>=10+indexLength?{chunkDelay,chunkSize:5,onEnd:()=>mediaCompleted++}:{})});
     }
-    if (u === 'https://range.test/file.mp4') return response(new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]), { type: 'video/mp4' });
+    if (u === 'https://range.test/file.mp4') return response(fullCutFixture?enc.encode('0000ftypavc1mp4a'):new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]), { type: 'video/mp4' });
     const i = urls.indexOf(u); if (i < 0) throw new Error(`unexpected ${u}`);
     if (options.headers?.Range && badRange) return response(new Uint8Array([1]), { status: 206, range: 'bytes=99-99/100' });
     return response(new Uint8Array([i + 1]), { type: 'video/mp2t', range: options.headers?.Range ? (badRange ? 'bytes=99-99/100' : 'bytes=0-0/1') : null });
@@ -82,7 +83,7 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
   const source = await fs.readFile(sourcePath || new URL('../extension/offscreen.js', import.meta.url), 'utf8');
   const code = source.replace(/^import[^;]+;\s*/gm, '');
   const chrome = { runtime: { id: 'range-test', getURL: n => n, sendMessage: async message => {messages.push({...message,mediaCompleted});return { ok: true, result: {} };}, onMessage: { addListener: fn => { listener = fn; } } } };
-  const context = { byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,HlsParser, parseDash, mediaChoices, selectedPlan, metadataCodecs, codec, parseMp4Codecs, parseSubtitles, classifyFailure: e => ({ code: e.code || 'INTERNAL_ERROR', message: e.stack || e.message }), TransferControl, assembleSegments, createTransferProgress,
+  const context = { fullCutPolicy,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,HlsParser, parseDash, mediaChoices, selectedPlan, metadataCodecs, codec, parseMp4Codecs, parseSubtitles, classifyFailure: e => ({ code: e.code || 'INTERNAL_ERROR', message: e.stack || e.message }), TransferControl, assembleSegments, createTransferProgress,
 
     normalizeRange, planSegmentRange, parseSidx, planIndexedRange, coalesceIndexedSegments, createIndexedRoutes, directTransfer: async (format,request,signal,onBytes,sink) => {const response=await request(format.url,{signal}),reader=response.body.getReader();for(;;){const {done,value}=await reader.read();if(done)break;await sink.append(value);onBytes(value.length);}return sink.finish();}, downloadYoutube: async () => [], chrome, fetch, VideoPocketDiskMedia: disk, crypto: { randomUUID: () => Math.random().toString() }, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal, Uint8Array, ArrayBuffer, Blob, File: FileCtor, Worker, setInterval: () => {}, setTimeout, clearTimeout, queueMicrotask, console, performance, document: { createElement: () => { const v = { videoHeight: 720, duration: 3, removeAttribute() {}, load() {} }; Object.defineProperty(v, 'src', { set() { queueMicrotask(() => v.onloadedmetadata?.()); } }); return v; } }, readMp4Metadata: async () => ({}), parseTransportStreamCodecs: () => ({}), mediaCredentials: () => undefined, resolveAnime1: async x => x, decryptHlsSample: async x => x, hlsIv: () => new Uint32Array(4), twitchVodManifest: async () => ({}), verifiedSocialSource: () => true, socialPageResponse: async () => {}, resolveDailymotion: async () => ({}), resolveLinkedMedia: async () => ({}) };
   vm.runInNewContext(code, context, { filename: 'offscreen.js' });
@@ -150,6 +151,31 @@ test('unsupported range rejects before fetching a progressive whole file', async
   const before = rt.calls.filter(c => c.url.endsWith('file.mp4')).length;
   await assert.rejects(rt.call('download', { sourceId: inspected.id, id: 'unsupported', kind: 'video', height: 0, filename: 'direct', range: { start: 1, end: 2 } }));
   assert.equal(rt.calls.filter(c => c.url.endsWith('file.mp4')).length, before);
+});
+
+test('a supported progressive source downloads once then cuts with zero-based source clocks without artificial size limits',async()=>{
+ const rt=await runtime({fullCutFixture:true});
+ const source=await rt.call('inspect',{descriptor:{url:'https://range.test/file.mp4',referer:'https://range.test/watch',title:'clip',duration:3}});
+ assert.equal(source.range.planDetails.video[0].mode,'full-cut');assert.equal(source.range.plans.video[0],true);
+ const before=rt.calls.length;
+ const result=await rt.call('download',{sourceId:source.id,id:'full-cut',kind:'video',height:0,filename:'clip',range:{start:1,end:2}});
+ assert.equal(rt.calls.length-before,1,'the complete input is downloaded exactly once');
+ const cut=rt.mux.at(-1);assert.equal(cut.url,'range-cut-worker.js');assert.equal(cut.inputs[0].timelineStart,0);assert.equal(cut.cutLimits,undefined);
+ await rt.call('release',{blobId:result.blobId});assert.equal(rt.disk.files.size,0);
+});
+
+test('full-file fallback cleans downloaded input after precise cutting fails',async()=>{
+ const rt=await runtime({fullCutFixture:true,cutFailure:true});
+ const source=await rt.call('inspect',{descriptor:{url:'https://range.test/file.mp4',duration:3}});
+ await assert.rejects(rt.call('download',{sourceId:source.id,id:'failed-full-cut',kind:'video',height:0,filename:'clip',range:{start:1,end:2}}),{code:'RANGE_ENCODER_UNAVAILABLE'});
+ assert.equal(rt.disk.files.size,0);assert.ok(rt.disk.cleanups.includes('failed-full-cut'));
+});
+
+test('a cancel received before a download starts prevents late source reads and temporary creation',async()=>{
+ const rt=await runtime({fullCutFixture:true}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/file.mp4',duration:3}}),before=rt.calls.length;
+ await rt.call('cancel',{id:'early'});
+ await assert.rejects(rt.call('download',{sourceId:source.id,id:'early',kind:'video',height:0,filename:'clip',range:{start:1,end:2}}),{code:'CANCELLED'});
+ assert.equal(rt.calls.length,before);assert.equal(rt.disk.files.size,0);
 });
 
 test('malformed 206 Content-Range is rejected by range transfer', async () => {

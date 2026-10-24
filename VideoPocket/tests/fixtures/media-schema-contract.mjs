@@ -48,6 +48,15 @@ export const mediaSchemaFixtures = [
     },
   },
   {
+    name: "Instagram Polaris numeric player identity",
+    playerId: "3971730051816042598",
+    value: {
+      id: "POLARIS_3971730051816042598", code: "Dcea3BiPTBm",
+      video_duration: 41.166122, original_width: 720, original_height: 1280,
+      video_versions: [{url:"https://cdn.example.test/polaris-video.mp4",width:720,height:1280}],
+    },
+  },
+  {
     name: "X ordinary video_info",
     value: {
       rest_id: "x-post-1", legacy: { full_text: "X ordinary title", extended_entities: { media: [{

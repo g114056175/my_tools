@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {resolveLinkedMedia} from '../extension/linked-media.js';
 
 const link={url:'https://example.test/reel/abc',id:'abc'},referer='https://example.test/feed';
@@ -12,12 +13,14 @@ test('same-ID JSON and LD+JSON sources merge into one embedded model',async()=>{
 test('different recommendation IDs are ignored',async()=>{const value=await resolve([model(),model('recommendation','https://cdn.example/other.mp4')]);assert.equal(value.id,'abc');});
 test('conflicting models that both claim the permalink are rejected',async()=>{await assert.rejects(resolve([JSON.stringify({videoId:'abc',video:{id:'other-a',contentUrl:'https://cdn/a.mpd'}}),JSON.stringify({videoId:'abc',video:{id:'other-b',contentUrl:'https://cdn/b.mpd'}})]),{code:'SOURCE_UNAVAILABLE'});});
 test('cross-origin links, credentials and invalid IDs are rejected',async()=>{await assert.rejects(resolveLinkedMedia({...link,url:'http://example.test/reel/abc'},referer,async()=>response('<html/>')),{code:'SOURCE_UNAVAILABLE'});await assert.rejects(resolveLinkedMedia({...link,url:'https://evil.test/reel/abc'},referer,async()=>response('<html/>')),{code:'SOURCE_UNAVAILABLE'});await assert.rejects(resolveLinkedMedia({...link,id:''},referer,async()=>response('<html/>')),{code:'SOURCE_UNAVAILABLE'});});
-test('redirects must stay on the exact permalink path',async()=>{await assert.rejects(resolve([], {url:'https://example.test/login'}),{code:'SOURCE_UNAVAILABLE'});});
+test('post redirects use the post redirect diagnostic stage',async()=>{await assert.rejects(resolve([], {url:'https://example.test/login'}),error=>error.code==='SOURCE_UNAVAILABLE'&&error.sourceStage==='linked-post-redirect');});
 test('redirects may normalize only a trailing slash and query',async()=>{const value=await resolve([model()],{url:'https://example.test/reel/abc/?v=2'});assert.equal(value.site,'embedded');});
 test('content and document limits are enforced',async()=>{await assert.rejects(resolve([], {type:'application/json'}),{code:'SOURCE_UNAVAILABLE'});await assert.rejects(resolve([], {body:'x'.repeat(4*1024*1024+1),url:link.url,chunk:1024*1024}),{code:'SOURCE_UNAVAILABLE'});});
 test('HTTP failures and aborts remain unchanged',async()=>{const http=Object.assign(new Error('blocked'),{status:403});await assert.rejects(resolveLinkedMedia(link,referer,async()=>{throw http;}),error=>error===http);const abort=Object.assign(new Error('aborted'),{name:'AbortError'});await assert.rejects(resolveLinkedMedia(link,referer,async()=>{throw abort;}),error=>error===abort);});
 
 const xLink={url:'https://x.com/user/status/1234567890',id:'1234567890'},xBid='broadcast-123',xBroadcast='https://x.com/i/broadcasts/'+xBid;
+const broadcastHtml=await readFile(new URL('../work/x-discovery-16/broadcast.html',import.meta.url),'utf8');
+const sampleBroadcastId='1RKZzBELBbXKB';
 const xCard={rest_id:xLink.id,card:{legacy:{binding_values:Object.entries({broadcast_id:xBid,broadcast_url:xBroadcast,broadcast_media_key:'28_123456789'}).map(([key,string_value])=>({key,value:{string_value}}))}}};
 const streamed=value=>'$_TSR.stream.push({result:{kind:"Result.Ok",value:'+JSON.stringify(JSON.stringify(value))+'}});';
 function xDocument(body,{bid=xBid,key='28_123456789',media='https://video.example/replay.m3u8'}={}){
@@ -34,7 +37,7 @@ test('X broadcast lookup follows only the matched card and verifies replay metad
 });
 
 test('X replay lookup rejects a changed broadcast ID, media key or non-media URL',async()=>{
- for(const override of [{bid:'other-broadcast'},{key:'28_987654321'},{media:'https://video.example/error.html'},{media:'https://user:secret@video.example/replay.m3u8'}]){
+ for(const override of [{bid:'other-broadcast'},{key:''},{key:'28_987654321'},{media:'https://video.example/error.html'},{media:'https://user:secret@video.example/replay.m3u8'}]){
   await assert.rejects(resolveLinkedMedia(xLink,'https://x.com/user',async url=>response(url===xLink.url?'post':'broadcast',{url}),{parseDocument:body=>xDocument(body,body==='post'?{}:override)}),{code:'SOURCE_UNAVAILABLE'});
  }
 });
@@ -43,5 +46,13 @@ test('X cannot use a neighbouring post card or a redirected broadcast document',
  let requests=0;
  await assert.rejects(resolveLinkedMedia({...xLink,id:'neighbour'},'https://x.com/user',async url=>{requests++;return response('post',{url});},{parseDocument:xDocument}),{code:'SOURCE_UNAVAILABLE'});
  assert.equal(requests,1);
- await assert.rejects(resolveLinkedMedia(xLink,'https://x.com/user',async url=>response(url===xLink.url?'post':'broadcast',{url:url===xLink.url?url:'https://x.com/i/broadcasts/different-broadcast'}),{parseDocument:xDocument}),error=>error.code==='SOURCE_UNAVAILABLE'&&error.sourceStage==='linked-redirect');
+ await assert.rejects(resolveLinkedMedia(xLink,'https://x.com/user',async url=>response(url===xLink.url?'post':'broadcast',{url:url===xLink.url?url:'https://x.com/i/broadcasts/different-broadcast'}),{parseDocument:xDocument}),error=>error.code==='SOURCE_UNAVAILABLE'&&error.sourceStage==='linked-broadcast-redirect');
+});
+
+test('X direct broadcast linked media resolves the selected broadcast HTML',async()=>{
+ const link={url:`https://x.com/i/broadcasts/${sampleBroadcastId}`,id:sampleBroadcastId};
+ const document={querySelectorAll:selector=>[...broadcastHtml.matchAll(/<meta\s+[^>]*>/gi)].map(([tag])=>{const name=tag.match(/(?:property|name)="([^"]+)"/i)?.[1]||'',content=tag.match(/content="([^"]*)"/i)?.[1]||'';return {name,content,getAttribute:key=>key==='content'?content:''};}).filter(({name})=>selector.includes('"'+name+'"'))};
+ const result=await resolveLinkedMedia(link,'https://x.com/OpenAIDevs',async()=>response(broadcastHtml,{url:link.url}),{parseDocument:()=>document});
+ assert.equal(result.manifestType,'hls');assert.match(result.manifestUrl,/\.m3u8(?:\?|$)/);assert.equal(result.broadcastId,sampleBroadcastId);
+ await assert.rejects(resolveLinkedMedia({...link,id:'other-broadcast'},'https://x.com/OpenAIDevs',async()=>response(broadcastHtml,{url:link.url}),{parseDocument:()=>document}),error=>error.code==='SOURCE_UNAVAILABLE'&&error.sourceStage==='linked-no-model');
 });

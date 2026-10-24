@@ -4,6 +4,7 @@ import {visibleJobs,jobLabel} from '../extension/jobs.js';
 import {sourceSize,videoSize,audioSize,progressTracker} from '../native/sizes.mjs';
 import {buildCapabilities} from '../native/capabilities.mjs';
 test('KB/MB/GB use one decimal and rounding promotes the next unit',()=>{
+  assert.equal(formatSize({bytes:123.4*1024**2,approximate:false}),'約 123.4 MB');
   assert.equal(formatBytes(1536),'1.5 KB');assert.equal(formatBytes(1.25*1024**2),'1.3 MB');assert.equal(formatBytes(3*1024**3),'3.0 GB');assert.equal(formatBytes(1024**2-1),'1.0 MB');assert.equal(formatBytes(NaN),null);assert.equal(formatSize(null),'大小未知');assert.equal(formatSize({bytes:2048,approximate:true}),'約 2.0 KB');
 });
 test('Exact filesize wins, otherwise use approximate size or duration/bitrate',()=>{

@@ -40,10 +40,10 @@ test('native option widths follow the rendered field and preserve full source ti
  const root=new Node(doc),narrow='i'.repeat(30),wide='長'.repeat(30),source={options:[{value:'0',textContent:narrow,title:narrow},{value:'1',textContent:wide,title:wide}],value:'0',hidden:false,disabled:false};
  const api=createMediaMenu(source,root),select=root.children[0];api.render();
  assert.equal(select.options[1].textContent,narrow,'narrow English glyphs use the available width beyond 24 characters');
- assert.equal(select.options[2].textContent,'長'.repeat(13)+'…');
+ assert.equal(select.options[2].textContent,'長'.repeat(12)+'…');
  assert.equal(select.title,narrow);assert.equal(select.options[2].title,wide);
  select.clientWidth=80;resize();
- assert.equal(select.options[1].textContent,'i'.repeat(19)+'…');
+ assert.equal(select.options[1].textContent,'i'.repeat(13)+'…');
  assert.equal(source.options[0].textContent,narrow);assert.equal(source.options[1].textContent,wide);
  assert.equal(select.value,'__vp_current__');
 });

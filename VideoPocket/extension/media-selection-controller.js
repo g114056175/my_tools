@@ -35,7 +35,13 @@ export function selectedMediaIndex(videos,selection,pageUrl){
     const sameVod=String(video.mediaIdentity||'').startsWith('twitch-vod:')&&selection.modelToken===stableHash(video.mediaIdentity);
     const sameBili=video.bilibiliMain&&String(video.mediaIdentity||'').startsWith('bilibili:')&&selection.modelToken===stableHash(video.mediaIdentity);
     const sameElement=String(video.mediaKey)===String(selection.mediaKey)||sameBili&&video.aliasMediaKeys?.some(key=>String(key)===String(selection.mediaKey));
-    return String(video.documentId ?? '')===String(selection.documentId ?? '') && Number(video.frameId)===Number(selection.frameId) && (sameVod||sameBili||sameElement) && (!selection.modelToken || stableHash(video.mediaIdentity || '')===selection.modelToken) && (sameVod||sameBili||!selection.sourceToken || stableHash(video.url || '')===selection.sourceToken);
+    // Discovery may replace an evidence key with a model ID. The picker and
+    // inventory share a separate DOM ownership identity, independent of that
+    // enrichment. Still reject a recycled element or changed source.
+    const sameIdentity=selection.selectionToken
+      ? stableHash(video.selectionIdentity || '')===selection.selectionToken
+      : !selection.modelToken || stableHash(video.mediaIdentity || '')===selection.modelToken;
+    return String(video.documentId ?? '')===String(selection.documentId ?? '') && Number(video.frameId)===Number(selection.frameId) && (sameVod||sameBili||sameElement) && sameIdentity && (sameVod||sameBili||!selection.sourceToken || stableHash(video.url || '')===selection.sourceToken);
   });
 }
 
@@ -69,7 +75,7 @@ export function createMediaSelectionController(api){
       if(result?.requestId!==requestId || (result?.frameId!=null && Number(result.frameId)!==Number(frame.frameId)) || (result?.documentId!=null && String(result.documentId)!==String(frame.documentId)))result=null;
       if(result?.ok){
         current.complete=true;
-        const selection={mediaKey:result.mediaKey,frameId:frame.frameId,documentId:frame.documentId,pageToken:stableHash(top.result.url),sourceToken:result.url?stableHash(result.url):null,modelToken:result.mediaIdentity?stableHash(result.mediaIdentity):null,time:Date.now()};
+        const selection={mediaKey:result.mediaKey,frameId:frame.frameId,documentId:frame.documentId,pageToken:stableHash(top.result.url),sourceToken:result.url?stableHash(result.url):null,modelToken:result.mediaIdentity?stableHash(result.mediaIdentity):null,selectionToken:typeof result.selectionIdentity==='string'?stableHash(result.selectionIdentity):null,time:Date.now()};
         // Do not let a previous request's awaited storage operation touch a
         // newer request. The request remains the owner until this write ends.
         if(active.get(tabId)?.requestId!==requestId)return;

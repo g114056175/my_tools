@@ -162,3 +162,31 @@ test('deep unsemantic Facebook player uses its local reel link and stops at a sh
  local.querySelectorAll=s=>s==='video'?[video]:[];
  assert.equal(collectMediaEvidence({video,root:feed,pageUrl:'https://www.facebook.com/kfctaiwan/'}).identity.id,undefined);
 });
+
+test('selected X broadcast card keeps its exact link with other players on the page',()=>{
+ const pageUrl='https://x.com/OpenAIDevs/status/2112242739198959913';
+ const video=node({currentSrc:'blob:https://x.com/object'}),ad=node(),card=node(),article=node();
+ card.tagName='DIV';article.tagName='ARTICLE';video.parentElement=card;card.parentElement=article;
+ card.querySelectorAll=s=>s==='video'?[video]:s==='a[href]'?[{href:'/i/broadcasts/1RKZzBELBbXKB'}]:[];
+ article.querySelectorAll=s=>s==='video'?[video,ad]:[];
+ const result=collectMediaEvidence({video,root:article,pageUrl});
+ assert.equal(result.identity.id,'1RKZzBELBbXKB');
+ assert.equal(result.identity.anchor,'https://x.com/i/broadcasts/1RKZzBELBbXKB');
+ assert.equal(result.candidates.length,0,'the card identifies a document, not a downloadable video URL');
+ // DOM reuse must derive the current card again instead of caching its old id.
+ card.querySelectorAll=s=>s==='video'?[video]:s==='a[href]'?[{href:'/i/broadcasts/anotherBroadcast'}]:[];
+ assert.equal(collectMediaEvidence({video,root:article,pageUrl}).identity.id,'anotherBroadcast');
+});
+
+test('X broadcast links in shared players, neighbour posts or competing cards are not borrowed',()=>{
+ const pageUrl='https://x.com/someone/status/111',video=node(),other=node(),card=node(),shared=node();
+ card.tagName='ARTICLE';shared.tagName='DIV';video.parentElement=card;card.parentElement=shared;
+ card.querySelectorAll=s=>s==='video'?[video]:[];
+ shared.querySelectorAll=s=>s==='video'?[video,other]:s==='a[href]'?[{href:'/i/broadcasts/neighbour'}]:[];
+ const read=()=>collectMediaEvidence({video,root:shared,pageUrl}).identity;
+ assert.equal(read().id,undefined);
+ card.querySelectorAll=s=>s==='video'?[video]:s==='a[href]'?[{href:'/i/broadcasts/one'},{href:'/i/broadcasts/two'}]:[];
+ assert.equal(read().id,undefined);
+ card.querySelectorAll=s=>s==='video'?[video]:s==='a[href]'?[{href:'https://twitter.com/i/broadcasts/foreign'}]:[];
+ assert.equal(read().id,undefined);
+});

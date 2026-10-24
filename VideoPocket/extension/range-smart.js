@@ -34,7 +34,7 @@
    conversion=await M.Conversion.init({input,output,...options,showWarnings:false});
    if(!conversion.isValid||conversion.discardedTracks.some(t=>t.reason!=='discarded_by_user'))throw failure('瀏覽器無法處理 Smart Cut 邊界');
    active.add(conversion);conversion.onProgress=p=>{check(signal);onProgress(p);};await conversion.execute();check(signal);finished=true;return writer.finish();
-  }finally{active.delete(conversion);if(!finished){await conversion?.cancel().catch(()=>{});writer.abort();}}
+  }finally{active.delete(conversion);if(!finished){await conversion?.cancel().catch(()=>{});await Promise.resolve(writer.abort?.()).catch(()=>{});}}
  }
  async function tryCut({input,start,end,output,scope,kind,expectedAudio,signal,onProgress=()=>{}}){
   if(kind!=='video'||!['webm','mkv'].includes(output.split('.').pop().toLowerCase()))return null;
@@ -96,7 +96,7 @@
    }catch(error){await destination.cancel().catch(()=>{});throw error;}
    result=writer.finish();writer=null;completed=true;onProgress(1);
    return {result,stats:{strategy:'smart-vp9',encodedSeconds:selection.prefixDuration,copiedSeconds:end-key.timestamp,prefixPackets,copiedPackets,copiedBytes,hardwareRequested:encode.hardwareAcceleration==='prefer-hardware'}};
-  }finally{writer?.abort();for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result.path)await disk.removeMediaFile(path).catch(()=>{});}
+  }finally{await Promise.resolve(writer?.abort?.()).catch(()=>{});for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
  root.VideoPocketRangeSmart={plan,sameConfig,tryCut,cancel(){for(const conversion of active)void conversion.cancel().catch(()=>{});}};
 })(self);

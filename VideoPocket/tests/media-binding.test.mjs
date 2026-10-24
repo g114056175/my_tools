@@ -30,6 +30,27 @@ function storeWith(...ids) {
   return store;
 }
 
+test('Instagram Polaris media IDs bind to the exact decimal player ID without changing other sites',()=>{
+ const id='3971730051816042598',other='3971730051816042599',page='https://www.instagram.com/reel/Dcea3BiPTBm/';
+ const payload=id=>({id:`POLARIS_${id}`,code:id===other?'OtherReel':'Dcea3BiPTBm',video_versions:[{url:`https://cdn.example/${id}.mp4`,width:720,height:1280}],video_dash_manifest:'<MPD></MPD>'});
+ const primary=video({props:{videoID:id}}),neighbor=video({props:{videoID:other}}),doc=documentFor([primary,neighbor]);primary.ownerDocument=neighbor.ownerDocument=doc;
+ const store=createMediaModelStore();store.merge(extractMediaModels([payload(id),payload(other)],{baseUrl:page}));
+ assert.equal(store.modelFor(primary,page)?.id,`POLARIS_${id}`);
+ assert.equal(store.modelFor(neighbor,page)?.id,`POLARIS_${other}`);
+ assert.ok(store.modelFor(primary,page)?.versions[0].url.endsWith(`/${id}.mp4`));
+ for(const baseUrl of ['https://www.facebook.com/feed','https://x.com/post','https://notinstagram.com/']){
+  const [model]=extractMediaModels(payload(id),{baseUrl});assert.ok(!model.aliases.includes(id));
+ }
+});
+
+test('Instagram does not normalize approximate Polaris spellings or borrow an unrelated media ID',()=>{
+ const id='3971730051816042598',page='https://www.instagram.com/reel/Dcea3BiPTBm/',target=video({props:{videoID:id}});target.ownerDocument=documentFor([target]);
+ for(const wrong of [`NOT_POLARIS_${id}`,`POLARIS_${id}_owner`,`POLARIS_3971730051816042599`]){
+  const store=createMediaModelStore();store.merge(extractMediaModels({id:wrong,video_url:'https://cdn.example/other.mp4'},{baseUrl:page}));
+  assert.equal(store.modelFor(target,page),null);
+ }
+});
+
 test('React props videoID selects the exact model and extracts its owned payload', () => {
   const doc = documentFor();
   const target = video({props: {player: {videoID: 'fb-a', videoDeliveryLegacyFields: {id: 'fb-a', browser_native_hd_url: 'https://cdn.example/fb-a.mp4'}}}, document: doc});
@@ -101,7 +122,8 @@ test('TikTok post and media resource IDs are aliases of one model, not conflicti
  target.ownerDocument=documentFor([target]);
  const store=createMediaModelStore(),result=store.modelFor(target,'https://www.tiktok.com/zh-Hant-TW/');
  assert.ok(result);assert.ok(result.aliases.includes('7690095904514297106'));
- assert.ok(result.aliases.includes('v14025g50000resource'));assert.equal(result.title,'Correct post');
+ assert.ok(result.aliases.includes('v14025g50000resource'));assert.equal(result.title,'');
+ assert.ok(result.versions.some(item=>item.url==='https://cdn.example/current.mp4'));
 });
 
 test('owned Facebook response fragments expose sources without borrowing neighbouring players',()=>{

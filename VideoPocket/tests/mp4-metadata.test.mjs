@@ -19,6 +19,12 @@ const typedTrack = (kind, entry) => box('trak', box('mdia', concat(hdlr(kind), b
 const fixture = (...entries) => concat(box('ftyp', ascii('isom')), box('moov', concat(...entries.map(track))));
 const reader = bytes => async (offset, length) => bytes.slice(offset, offset + length);
 
+test('reads both visual sample-entry dimensions for short-edge quality decisions',async()=>{
+ const entry=sample('avc1');entry.set([0x04,0x38,0x07,0x80],32);
+ const bytes=fixture(entry),result=await readMp4Metadata(reader(bytes),bytes,bytes.length);
+ assert.equal(result.videoWidth,1080);assert.equal(result.videoHeight,1920);
+});
+
 test('reads video and audio sample entries through moov/trak/mdia/minf/stbl/stsd', async () => {
   const result = await readMp4Metadata(reader(fixture(sample('avc1'), sample('mp4a'))), new Uint8Array(), fixture(sample('avc1'), sample('mp4a')).length);
   assert.equal(result.videoCodec, 'h264');

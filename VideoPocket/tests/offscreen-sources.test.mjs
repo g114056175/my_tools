@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import {HlsParser,parseDash} from '../extension/vendor/parsers.js';
-import {mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs} from '../extension/browser-media.js';
+import {mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,qualityOfFormat} from '../extension/browser-media.js';
 import {parseSubtitles} from '../extension/subtitles.js';
 import {classifyFailure} from '../extension/diagnostics.js';
 import {resolveAnime1} from '../extension/anime1.js';
@@ -35,7 +35,7 @@ function ts(){
   const packet=(pid,s)=>{const p=new Uint8Array(188);p.fill(255);p.set([0x47,0x40|pid>>8,pid&255,0x30],0);p[4]=183-s.length-1;p.set([0,...s],5+p[4]);return p;};
   return Uint8Array.from([...packet(0,pat),...packet(0x100,pmt)]);
 }
-function fakeVideo(){const v={preload:'',muted:false,videoHeight:720,duration:12,removeAttribute(){},load(){}};Object.defineProperty(v,'src',{set(){queueMicrotask(()=>v.onloadedmetadata?.())}});return v;}
+function fakeVideo(){const v={preload:'',muted:false,videoWidth:1280,videoHeight:720,duration:12,removeAttribute(){},load(){}};Object.defineProperty(v,'src',{set(){queueMicrotask(()=>v.onloadedmetadata?.())}});return v;}
 function mp4Box(type,payload){const out=new Uint8Array(8+payload.length),size=out.length;out.set([size>>>24,(size>>>16)&255,(size>>>8)&255,size&255,...type].map((x,i)=>typeof x==='string'?x.charCodeAt(0):x));out.set(payload,8);return out;}
 function largeMp4(){
   const avc=mp4Box('avc1',new Uint8Array(28)),aac=mp4Box('mp4a',new Uint8Array(20));
@@ -45,10 +45,10 @@ function largeMp4(){
   const total=220000,out=new Uint8Array(total);out.set([0,0,0,8,102,116,121,112]);const freeSize=200000-8;out.set([freeSize>>>24,(freeSize>>>16)&255,(freeSize>>>8)&255,freeSize&255,102,114,101,101],8);out.set(moov,200000);return out;
 }
 
-function timedMp4(duration,height=360){
+function timedMp4(duration,height=360,width=0){
  const join=(...parts)=>Uint8Array.from(parts.flatMap(p=>[...p]));
  const movie=new Uint8Array(32),mv=new DataView(movie.buffer);mv.setUint32(12,1000);mv.setUint32(16,Math.round(duration*1000));
- const avcPayload=new Uint8Array(28);avcPayload[26]=height>>8;avcPayload[27]=height&255;
+ const avcPayload=new Uint8Array(28);avcPayload[24]=width>>8;avcPayload[25]=width&255;avcPayload[26]=height>>8;avcPayload[27]=height&255;
  const avc=mp4Box('avc1',avcPayload),aac=mp4Box('mp4a',new Uint8Array(20));
  const stsd=join(new Uint8Array([0,0,0,0,0,0,0,2]),avc,aac);
  const trak=mp4Box('trak',mp4Box('mdia',mp4Box('minf',mp4Box('stbl',mp4Box('stsd',stsd)))));
@@ -62,7 +62,7 @@ function silentMp4(){
  return join(mp4Box('ftyp',new Uint8Array(8)),mp4Box('moov',mp4Box('trak',mp4Box('mdia',join(mp4Box('hdlr',handler),mp4Box('minf',mp4Box('stbl',mp4Box('stsd',table))))))));
 }
 
-async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20000,pageReply,parseDocument,manifestReply}={}){
+async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20000,pageReply,parseDocument,manifestReply,mediabunny}={}){
   const messages=[];let listener;
   const chrome={runtime:{id:'test-extension',sendMessage:async message=>{messages.push({kind:'rpc',message});return {ok:true,result:message.action==='observedManifest'&&manifestReply?await manifestReply(message):message.action==='socialPageFetch'&&pageReply?await pageReply(message):{}}},onMessage:{addListener:fn=>{listener=fn}}}};
   const fetchLog=[];
@@ -70,7 +70,13 @@ async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20
   const source=await fs.readFile(new URL('../extension/offscreen.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const runtimeSetTimeout=(fn,ms,...args)=>setTimeout(fn,ms===20000?requestTimeoutMs:ms,...args);
-  const context={byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,prioritizeMediaVersions,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,DOMException,AbortController,AbortSignal:{any:signals=>AbortSignal.any(signals),timeout:ms=>AbortSignal.timeout(ms===25000?inspectionTimeoutMs:ms===20000?requestTimeoutMs:ms)},Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout:runtimeSetTimeout,clearTimeout,queueMicrotask,console};
+  const context={qualityOfFormat,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,prioritizeMediaVersions,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,DOMException,AbortController,AbortSignal:{any:signals=>AbortSignal.any(signals),timeout:ms=>AbortSignal.timeout(ms===25000?inspectionTimeoutMs:ms===20000?requestTimeoutMs:ms)},Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout:runtimeSetTimeout,clearTimeout,queueMicrotask,console};
+  if(mediabunny){
+    class BlobSource{constructor(blob){this.blob=blob;}}
+    class Input{constructor({source}){this.source=source;}async getPrimaryVideoTrack(){return {}; }async dispose(){}}
+    class EncodedPacketSink{constructor(){}async getFirstPacket(){return mediabunny.firstPacket?{close(){}}:null;}}
+    context.VideoPocketMediabunny={MP4:{},BlobSource,Input,EncodedPacketSink};
+  }
     vm.runInNewContext(code,{...context,Response,twitchVodManifest,twitchClipManifest,tokenizedTwitchClipUrl,verifiedSocialSource,socialPageResponse,resolveDailymotion,resolveLinkedMedia:(link,referer,request,options)=>resolveLinkedMedia(link,referer,request,{...options,...(parseDocument?{parseDocument}:{})})},{filename:'offscreen.js'});
   assert.equal(typeof listener,'function');
   async function inspect(descriptor,inspectionId){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor,inspectionId},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
@@ -169,6 +175,15 @@ test('a complete DASH manifest explicitly declaring video-only adaptations allow
  const rt=await makeRuntime([{match:u=>u===init,reply:response(silentMp4(),{type:'video/mp4'})}]);
  const result=await rt.inspect({referer:'https://video.xx.fbcdn.net/master.mpd',title:'Silent',platform:{site:'embedded',id:'silent',manifestXml:xml}});
  assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,false);
+});
+
+test('platform sources preserve Bilibili DASH and durl dimensions',()=>{
+ const source=platformSource({site:'bilibili',title:'bili',duration:12,width:640,height:360,data:{dash:{video:[{baseUrl:'https://cdn.example/dash.mp4',width:1280,height:720,codecs:'avc1'}],audio:[{baseUrl:'https://cdn.example/audio.mp4',codecs:'mp4a'}]},durl:[{url:'https://cdn.example/durl.mp4'}]}});
+ assert.deepEqual(source.formats.filter(f=>f.kind==='video').map(({url,width,height})=>({url,width,height})),[
+  {url:'https://cdn.example/dash.mp4',width:1280,height:720},
+  {url:'https://cdn.example/durl.mp4',width:640,height:360},
+ ]);
+ assert.equal(source.formats.find(f=>f.kind==='audio').width,0);
 });
 
 test('Twitch playback lookup runs in offscreen and renews the manifest for the selected VOD',async()=>{
@@ -306,6 +321,23 @@ test('FB unbound fallback verifies actual movie duration and rejects an advertis
  assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.duration,26.25);
  const ambiguous=await makeRuntime([{match:()=>true,reply:(url,o)=>{const bytes=timedMp4(26.25);return o.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'});}}]);
  await assert.rejects(ambiguous.inspect({referer:'https://www.facebook.com/reel/123',platform:{site:'social-network',expectedDuration:26.25,versions:[{url:'https://cdn.example/a.mp4'},{url:'https://cdn.example/b.mp4'}]}}),{code:'SOURCE_UNAVAILABLE'});
+});
+
+test('FB init-only MP4 fixture is rejected when MediaBunny finds no first video packet',async()=>{
+ const url='https://video.xx.fbcdn.net/init-only.mp4';
+ const fixturePath=new URL('./fixtures/fb-init-only-895.mp4',import.meta.url);
+ const bytes=new Uint8Array(await fs.readFile(fixturePath));
+ assert.equal(bytes.byteLength,895);
+ const rt=await makeRuntime([{match:u=>u===url,reply:(u,o)=>o.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}],{mediabunny:{firstPacket:false}});
+ await assert.rejects(rt.inspect({referer:'https://www.facebook.com/kfctaiwan/',platform:{site:'social-network',expectedDuration:14.066667,versions:[{url,kind:'progressive'}]}}));
+});
+
+test('direct MP4 without Content-Length remains inspectable without network-candidate packet probing',async()=>{
+ const url='https://cdn.example/direct-unknown-size.mp4',bytes=timedMp4(12),base=response(bytes,{type:'video/mp4'});
+ base.headers={get:key=>String(key).toLowerCase()==='content-type'?'video/mp4':null};
+ const rt=await makeRuntime([{match:u=>u===url,reply:base}],{mediabunny:{firstPacket:false}});
+ const result=await rt.inspect({url,referer:'https://example.test/watch',title:'direct'});
+ assert.equal(result.choices.video.auto.enabled,true);
 });
 
 test('unknown single-player network candidates verify real duration without a platform adapter',async()=>{
@@ -456,6 +488,51 @@ test('MP4 sample-entry height overrides both understated and overstated quality 
   const result=await rt.inspect({referer:'https://player.test/watch',platform:{site:'embedded',versions:[{url,height:declared}]}});
   assert.deepEqual([...result.choices.video.auto.heights],[actual]);
  }
+});
+
+test('portrait MP4 dimensions and DASH resolution both expose the short-edge quality',async()=>{
+ const url='https://cdn.test/portrait.mp4',bytes=timedMp4(12,1920,1080);
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const mp4=await rt.inspect({referer:'https://player.test/watch',platform:{site:'embedded',versions:[{url,width:720,height:1280}]}}).catch(error=>{error.message='portrait MP4: '+error.message;throw error;});
+ assert.deepEqual([...mp4.choices.video.auto.heights],[1080]);
+ const xml='<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT12S"><Period><AdaptationSet contentType="video" mimeType="video/mp4" codecs="avc1.42E01E"><Representation id="v" bandwidth="100000" width="720" height="1280"><SegmentTemplate timescale="1" duration="12" initialization="init.mp4" media="$Number$.m4s" startNumber="1"/></Representation></AdaptationSet></Period></MPD>';
+ const dash=await makeRuntime([{match:u=>u.endsWith('/init.mp4'),reply:response(silentMp4(),{type:'video/mp4'})}]),result=await dash.inspect({referer:'https://player.test/watch',platform:{site:'embedded',manifestXml:xml}}).catch(error=>{error.message='portrait DASH: '+error.message;throw error;});
+ assert.deepEqual([...result.choices.video.auto.heights],[720]);
+});
+
+test('HLS single audio rendition permits a whole-variant size without double-counting audio',async()=>{
+ const base='https://cdn.test/bound/',master=base+'master.m3u8';
+ const rt=await makeRuntime([
+  {match:u=>u===master,reply:response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="English",DEFAULT=YES,URI="a.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,AVERAGE-BANDWIDTH=900000,CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1280x720,AUDIO="audio"\nv.m3u8\n')},
+  {match:u=>u.endsWith('.m3u8'),reply:response('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,\n1.m4s\n#EXT-X-ENDLIST\n')},
+  {match:u=>u.endsWith('init.mp4'),reply:response(silentMp4())},
+ ]);
+ const result=await rt.inspect({url:master,referer:'https://example.test/watch'});
+ assert.equal(result.choices.video.auto.enabled,true);
+ assert.equal(result.choices.video.auto.sizes[720].bytes,1_125_000);
+ assert.equal(result.choices.audio.original.sizes.best,null);
+});
+
+test('HLS 2ch/6ch group average stays unknown for the selected audio combination',async()=>{
+ const base='https://cdn.test/angel/',master=base+'master.m3u8';
+ const rt=await makeRuntime([
+  {match:u=>u===master,reply:response('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="English",DEFAULT=YES,CHANNELS="2",URI="a2.m3u8"\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Surround",CHANNELS="6",URI="a6.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=827972,AVERAGE-BANDWIDTH=482170,CODECS="avc1.42c01e,mp4a.40.2",RESOLUTION=192x144,AUDIO="audio"\nv.m3u8\n')},
+  {match:u=>u.endsWith('.m3u8'),reply:response('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:60,\n1.m4s\n#EXT-X-ENDLIST\n')},
+  {match:u=>u.endsWith('init.mp4'),reply:response(silentMp4())},
+ ]);
+ const result=await rt.inspect({url:master,referer:'https://example.test/watch'});
+ assert.equal(result.choices.video.auto.enabled,true);
+ assert.equal(result.choices.video.auto.sizes[144],null);
+});
+
+test('YouTube explicit per-format averages can be summed for the selected full tracks',()=>{
+ const source=platformSource({site:'youtube',duration:60,streamingData:{adaptiveFormats:[
+  {itag:1,url:'https://cdn.test/v',height:720,mimeType:'video/mp4; codecs="avc1.64001f"',averageBitrate:800000},
+  {itag:2,url:'https://cdn.test/a',mimeType:'audio/mp4; codecs="mp4a.40.2"',averageBitrate:100000},
+ ]}});
+ const result=mediaChoices(source);
+ assert.equal(result.choices.video.auto.sizes[720].bytes,6_750_000);
+ assert.equal(result.choices.audio.original.sizes.best.bytes,750_000);
 });
 
 test('MMOV master without CODECS sniffs child TS PMT for video and audio',async()=>{

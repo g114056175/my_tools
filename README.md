@@ -6,7 +6,7 @@
 <thead><tr><th width="140">工具</th><th width="470">用途</th><th width="104">下載</th><th width="120">原始更新</th></tr></thead>
 <tbody>
 <tr><td><a href="VideoPocket/">V⁠i⁠d⁠e⁠o⁠P⁠o⁠c⁠k⁠e⁠t</a></td><td>C⁠h⁠r⁠o⁠m⁠e⁠ ⁠擴⁠充⁠功⁠能⁠，⁠用⁠於⁠下⁠載⁠影⁠片⁠、⁠音⁠檔⁠、⁠字⁠幕</td><td><a href="https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=380326ff2a15">下⁠載⁠Z⁠I⁠P</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠1⁠7</td></tr>
-<tr><td><a href="region_recorder/">RegionRecorder</a></td><td>類⁠似⁠螢⁠幕⁠截⁠圖⁠，⁠可⁠選⁠取⁠範⁠圍⁠錄⁠製⁠ ⁠M⁠P⁠4⁠/⁠G⁠I⁠F</td><td><a href="https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe">下⁠載⁠E⁠X⁠E</a></td><td>2026-10-24</td></tr>
+<tr><td><a href="region_recorder/">RegionRecorder</a></td><td>類⁠似⁠螢⁠幕⁠截⁠圖⁠，⁠可⁠選⁠取⁠範⁠圍⁠錄⁠製⁠ ⁠M⁠P⁠4⁠/⁠G⁠I⁠F</td><td><a href="https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠0⁠5</td></tr>
 <tr><td><a href="cursor-effects-native/">游⁠標⁠光⁠效</a></td><td>按⁠住⁠左⁠鍵⁠的⁠光⁠跡⁠、⁠點⁠擊⁠波⁠紋⁠與⁠碎⁠片</td><td><a href="https://github.com/g114056175/my_tools/releases/download/cursor-effects/BlueArchiveCursor.exe">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠1⁠2</td></tr>
 <tr><td><a href="monitor/">視⁠窗⁠監⁠視⁠器</a></td><td>多⁠視⁠窗⁠網⁠格⁠預⁠覽⁠，⁠提⁠供⁠ ⁠W⁠G⁠C⁠/⁠D⁠W⁠M⁠ ⁠兩⁠版</td><td><a href="monitor/#下載">下⁠載⁠版⁠本</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠0⁠4</td></tr>
 <tr><td><a href="VoiceCapture/">V⁠o⁠i⁠c⁠e⁠C⁠a⁠p⁠t⁠u⁠r⁠e</a></td><td>系⁠統⁠聲⁠音⁠錄⁠製⁠、⁠波⁠形⁠編⁠輯⁠與⁠匯⁠出</td><td><a href="https://github.com/g114056175/my_tools/releases/download/VoiceCapture-v3.0.2/VoiceCaptureLiteNative-edit-session.exe">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠0⁠9⁠-⁠1⁠5</td></tr>
@@ -15,4 +15,4 @@
 </tbody>
 </table>
 
-詳細操作、適用環境與限制請見各工具的 README。
+詳細操作、適用環境與限制請見各工具的 README。「原始更新」僅記錄專案開始的時間，後續仍可能持續更新，不代表最後更新日期；維護時請保留此日期。

@@ -10,13 +10,14 @@
 
 ## 操作示範
 
-<img src="docs/demo.png" width="360" alt="VideoPocket 操作介面：選擇影片、音檔或字幕，以及來源格式與品質">
+<table>
+<tr>
+<td valign="top"><img src="docs/quality-selection.png" width="335" alt="VideoPocket 畫質選單：最佳解析度與可用畫質"></td>
+<td valign="top"><img src="docs/range-download.png" width="323" alt="VideoPocket 片段下載：綠色起點、紅色終點與起迄時間"></td>
+</tr>
+</table>
 
-<img src="docs/quality.png" width="360" alt="VideoPocket 品質選單與格式選擇">
-
-<img src="docs/demo.gif" width="556" alt="VideoPocket 操作示範：切換影片、音檔與字幕，選擇品質並開始下載">
-
-GIF 是較早版的操作流程；目前功能與介面以以上截圖及本 README 說明為準。
+<img src="docs/demo.gif" width="960" alt="VideoPocket 操作示範：開啟工具、調整片段時間並下載影片">
 
 <details>
 <summary><strong>使用說明：第一次安裝 Chrome 擴充功能</strong></summary>

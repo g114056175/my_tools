@@ -1,4 +1,4 @@
-# Helper (v4)
+# LLM Caller
 
 Lightweight Win32 desktop helper for quick LLM queries from selected text or a screenshot region.
 

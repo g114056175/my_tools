@@ -3,7 +3,7 @@
 個人工具集合，包含 Windows 桌面程式與 Chrome 擴充功能；安裝方式見各工具的說明。
 
 <table width="100%">
-<thead><tr><th width="140">工具</th><th width="470">用途</th><th width="104">下載</th><th width="120">專案建立</th></tr></thead>
+<thead><tr><th width="140">工具</th><th width="470">用途</th><th width="104">下載</th><th width="120">首次發布</th></tr></thead>
 <tbody>
 <tr><td><a href="VideoPocket/">V⁠i⁠d⁠e⁠o⁠P⁠o⁠c⁠k⁠e⁠t</a></td><td>C⁠h⁠r⁠o⁠m⁠e⁠ ⁠擴⁠充⁠功⁠能⁠，⁠用⁠於⁠下⁠載⁠影⁠片⁠、⁠音⁠檔⁠、⁠字⁠幕</td><td><a href="https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=380326ff2a15">下⁠載⁠Z⁠I⁠P</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠1⁠7</td></tr>
 <tr><td><a href="region_recorder/">RegionRecorder</a></td><td>類⁠似⁠螢⁠幕⁠截⁠圖⁠，⁠可⁠選⁠取⁠範⁠圍⁠錄⁠製⁠ ⁠M⁠P⁠4⁠/⁠G⁠I⁠F</td><td><a href="https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠0⁠5</td></tr>
@@ -15,4 +15,5 @@
 </tbody>
 </table>
 
-詳細操作、適用環境與限制請見各工具的 README。「專案建立」僅記錄專案開始的時間，後續仍可能持續更新，不代表最後更新日期；維護時請保留此日期。
+「首次發布」記錄第一個可用版本的發布日期，後續仍可能持續更新。<br>
+詳細操作、適用環境與限制請見各工具的 README。

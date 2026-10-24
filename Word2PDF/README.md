@@ -1,4 +1,4 @@
-# Word2PDF Batch
+# Word2PDF
 
 Windows Word 批次轉 PDF 小工具。
 

@@ -7,7 +7,7 @@
     {
       "source": "https://github.com/g114056175/word2pdf",
       "branch": "main",
-      "path": "word2pdf",
+      "path": "Word2PDF",
       "sourceCommit": "11edf834c0838d6606f25169d1e04390c70ef9cb",
       "sourceTree": "9d6517852d8f0643315812d6aeaafbe22aec0b8a",
       "importCommit": "8266ef4cdcb39653e592032cf80a3d1ff417b6df",
@@ -28,7 +28,7 @@
     {
       "source": "https://github.com/g114056175/test_examAssistant",
       "branch": "main",
-      "path": "test_examAssistant",
+      "path": "LLM_Caller",
       "sourceCommit": "b98aa921ccab5ca11c58ce050068f7a050a8795d",
       "sourceTree": "bc96bd8c896ac9f9ae3fb8b92c275b0af0b100fa",
       "importCommit": "d63c2e397f5c71d97281e6cec3ac0e56e26a7c56",
@@ -87,7 +87,7 @@
     "Word2PDF packaging explicitly includes tkinterdnd2 resources"
   ],
   "localSource": {
-    "path": "cursor-effects-native",
+    "path": "CursorEffects",
     "source": "VTuberLLM/cursor-effects-native",
     "filesVerifiedBeforeReadmeUpdate": 29,
     "history": "Local source had no commits; imported as a source snapshot",

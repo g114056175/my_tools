@@ -47,7 +47,7 @@
 
 ## 原始碼與建置
 
-`WGC/src/`、`DWM/src/` 各自包含必要原始碼與建置腳本，可獨立編譯。安裝 LLVM-MinGW，將其 `bin` 加入 PATH；在 `monitor/` 執行：
+`WGC/src/`、`DWM/src/` 各自包含必要原始碼與建置腳本，可獨立編譯。安裝 LLVM-MinGW，將其 `bin` 加入 PATH；在 `WindowMonitor/` 執行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\WGC\src\build.ps1

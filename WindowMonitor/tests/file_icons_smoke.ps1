@@ -22,7 +22,7 @@ public static class FileIconNative {
     public static extern bool DestroyIcon(IntPtr icon);
 }
 '@
-$entries = @('region_recorder/region_recorder.exe', 'monitor/WGC/window_monitor.exe', 'monitor/DWM/dwm_window_monitor.exe')
+$entries = @('RegionRecorder/region_recorder.exe', 'WindowMonitor/WGC/window_monitor.exe', 'WindowMonitor/DWM/dwm_window_monitor.exe')
 foreach ($entry in $entries) {
     $file = (Resolve-Path -LiteralPath (Join-Path $BundleRoot $entry)).Path
     # Inspect file resources without starting the executable. Runtime WM_SETICON is insufficient.

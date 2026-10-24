@@ -44,13 +44,13 @@ GIF 仍有色數限制，照片或漸層畫面建議使用 MP4。**目前只錄�
 跨螢幕範圍以桌面實體像素拼接；螢幕排列間的空隙填黑。錄製中重新框選時，成品尺寸維持開始錄製時的大小。
 剪貼簿以檔案方式複製，適用檔案總管及支援檔案貼上的程式。
 
-需要自行編譯時，安裝 LLVM-MinGW 並將其 `bin` 加入 PATH；在 `region_recorder/` 執行：
+需要自行編譯時，安裝 LLVM-MinGW 並將其 `bin` 加入 PATH；在 `RegionRecorder/` 執行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\src\build.ps1
 ```
 
-EXE 產生在 `region_recorder/`。
+EXE 產生在 `RegionRecorder/`。
 
 開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。包含 DXGI 游標、旋轉像素、GIF 色彩、跨螢幕拼接、框線排除、MP4／GIF 上限及檔名編號測試；跨螢幕實測需要兩個相鄰螢幕。
 

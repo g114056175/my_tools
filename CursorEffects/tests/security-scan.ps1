@@ -1,6 +1,6 @@
 param([string]$File)
 $ErrorActionPreference = 'Stop'
-if (!$File) { $File = Join-Path $PSScriptRoot '../dist/BlueArchiveCursor.exe' }
+if (!$File) { $File = Join-Path $PSScriptRoot '../dist/CursorEffects.exe' }
 $taskFile = [IO.Path]::GetFullPath($File)
 if (!(Test-Path -LiteralPath $taskFile -PathType Leaf)) { throw 'Security scan blocked: release file is missing or quarantined.' }
 $taskStatus = Get-MpComputerStatus -ErrorAction Stop

@@ -244,7 +244,7 @@ sealed class ControlsWindow : Form {
     public void UpdateColorMode(){RippleColor.Enabled=FragmentColor.Enabled=!LinkedColors.Checked;primaryCaption.Text="軌跡／圓環";TrailColor.AccessibleName=primaryCaption.Text;}
     public void SyncPalette(){int selected=0;for(int i=0;i<ColorPalette.All.Length;i++){var p=ColorPalette.All[i];if(p.Base.ToArgb()==BaseColor.Value.ToArgb()&&p.Ripple.ToArgb()==RippleColor.Value.ToArgb()&&p.Fragment.ToArgb()==FragmentColor.Value.ToArgb()){selected=i+1;break;}}synchronizingPalette=true;try{Palette.SelectedIndex=selected;}finally{synchronizingPalette=false;}}
     public ControlsWindow(CursorHost value){
-        host=value;Updating=true;Text="滑鼠光跡";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.Sizable;ClientSize=new Size(334,392);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
+        host=value;Updating=true;Text="CursorEffects";Icon=AppTheme.Icon;StartPosition=FormStartPosition.CenterScreen;FormBorderStyle=FormBorderStyle.Sizable;ClientSize=new Size(334,392);MaximizeBox=false;AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;
         Font=new Font("Microsoft JhengHei UI",10);BackColor=AppTheme.Back;ForeColor=AppTheme.Text;
         body=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Padding=new Padding(12),Margin=Padding.Empty};body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));Controls.Add(body);
         foreach(int height in new[]{52,34,236,46})body.RowStyles.Add(new RowStyle(SizeType.Absolute,height));

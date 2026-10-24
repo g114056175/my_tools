@@ -1,13 +1,13 @@
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
-$exe=[IO.Path]::GetFullPath((Join-Path $root 'dist/BlueArchiveCursor.exe'))
+$exe=[IO.Path]::GetFullPath((Join-Path $root 'dist/CursorEffects.exe'))
 & (Join-Path $PSScriptRoot 'security-scan.ps1') -File $exe
 $testPrefix=[IO.Path]::GetFullPath((Join-Path $root '.build/single-exe-smoke'))+[IO.Path]::DirectorySeparatorChar
-if(@(Get-CimInstance Win32_Process -Filter "Name='BlueArchiveCursor.exe'" | Where-Object {$_.ExecutablePath -and ![IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($testPrefix)}).Count){throw 'A native cursor release is already running; close it manually before this isolated smoke test.'}
+if(@(Get-CimInstance Win32_Process -Filter "Name='CursorEffects.exe'" | Where-Object {$_.ExecutablePath -and ![IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($testPrefix)}).Count){throw 'A native cursor release is already running; close it manually before this isolated smoke test.'}
 $singleRoot=Join-Path $root ('.build/single-exe-smoke/'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $singleRoot | Out-Null
 Copy-Item -LiteralPath $exe -Destination $singleRoot
-$exe=Join-Path $singleRoot 'BlueArchiveCursor.exe'
+$exe=Join-Path $singleRoot 'CursorEffects.exe'
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -19,12 +19,12 @@ public static class CursorSmoke {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd,int message,IntPtr w,IntPtr l);
- public static IntPtr FindPanel(uint target){IntPtr result=IntPtr.Zero;EnumProc callback=(hwnd,data)=>{uint owner;GetWindowThreadProcessId(hwnd,out owner);if(owner==target){var text=new System.Text.StringBuilder(128);GetWindowText(hwnd,text,128);if(text.ToString()=="\u6ed1\u9f20\u5149\u8de1"){result=hwnd;return false;}}return true;};EnumWindows(callback,IntPtr.Zero);return result;}
+ public static IntPtr FindPanel(uint target){IntPtr result=IntPtr.Zero;EnumProc callback=(hwnd,data)=>{uint owner;GetWindowThreadProcessId(hwnd,out owner);if(owner==target){var text=new System.Text.StringBuilder(128);GetWindowText(hwnd,text,128);if(text.ToString()=="CursorEffects"){result=hwnd;return false;}}return true;};EnumWindows(callback,IntPtr.Zero);return result;}
 }
 '@
 function Find-Panel($processId) {return [CursorSmoke]::FindPanel($processId)}
 $testPrefix=[IO.Path]::GetFullPath((Join-Path $root '.build/single-exe-smoke'))+[IO.Path]::DirectorySeparatorChar
-foreach($owned in @(Get-CimInstance Win32_Process -Filter "Name='BlueArchiveCursor.exe'" | Where-Object {$_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($testPrefix)})){
+foreach($owned in @(Get-CimInstance Win32_Process -Filter "Name='CursorEffects.exe'" | Where-Object {$_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($testPrefix)})){
  $previous=Get-Process -Id $owned.ProcessId;$previousPanel=Find-Panel $owned.ProcessId
  if($previousPanel -eq [IntPtr]::Zero){throw 'Previous owned smoke-test panel missing.'}
  $null=[CursorSmoke]::PostMessage($previousPanel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)

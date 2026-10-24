@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot
 & (Join-Path $root 'build.ps1') -Test
 $null=Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue
-$exe=Join-Path $root '.build/test/BlueArchiveCursor.Native.exe'
+$exe=Join-Path $root '.build/test/CursorEffects.Test.exe'
 & (Join-Path $PSScriptRoot 'security-scan.ps1') -File $exe
 $arguments=@('--performance-test',"--poll-ms=$PollMilliseconds","--phase-ms=$PhaseMilliseconds");if($IdleOnly){$arguments+='--idle-only'};if($ActiveOnly){$arguments+='--active-only'}
 $process=Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru

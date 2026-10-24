@@ -13,7 +13,7 @@ parser.add_argument('--review-root',type=Path,required=True)
 args=parser.parse_args();review=args.review_root.resolve()
 target=project/'docs/comparison';target.mkdir(parents=True,exist_ok=True)
 build=json.loads((project/'dist/build-info.json').read_text(encoding='utf-8-sig'))
-assert hashlib.sha256((project/'dist/BlueArchiveCursor.exe').read_bytes()).hexdigest()==build['exeSha256']
+assert hashlib.sha256((project/'dist/CursorEffects.exe').read_bytes()).hexdigest()==build['exeSha256']
 verification=json.loads((review/'analysis/04_verification/verification.json').read_text(encoding='utf-8-sig'))
 assert verification['build']['sha256']==build['exeSha256'], 'Review was captured from another release'
 link=re.compile(r'(!?\[[^\]]*\])\(([^)]+)\)')

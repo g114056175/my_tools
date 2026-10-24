@@ -21,7 +21,7 @@ def prepare_docs(project: Path, build: dict) -> None:
     readme.write_text(text, encoding='utf8')
     for name in ['performance-before-optimization.json', 'optimization-comparison.json']:
         (target / 'analysis/04_verification' / name).unlink(missing_ok=True)
-    comparison = '''# 官方與游標光效對比
+    comparison = '''# 官方與CursorEffects對比
 
 左側為《蔚藍檔案》官方錄影，右側為正式版的實際GPU畫面合成至參考背景。顏色、圓弧消散與隨機碎片仍有差異；0ms是官方首個可見效果幀，不是輸入時間。
 
@@ -85,7 +85,7 @@ def prepare_docs(project: Path, build: dict) -> None:
 ''', encoding='utf8')
     (project / 'CHANGELOG.md').write_text(f'''# 發布紀錄
 
-## 首次正式發布：游標光效
+## 首次正式發布：CursorEffects
 
 - 按住左鍵拖曳顯示光跡，點擊產生出生白光、波紋、重疊圓弧與碎片；碎片角度獨立隨機，保留同側群聚與部分重疊，近乎同位時才做有限候選比較。
 - 七種配色及自訂色，支援統一配色或分別設定軌跡／圓環、波紋與碎片。
@@ -99,7 +99,7 @@ def prepare_docs(project: Path, build: dict) -> None:
 通過{len(tests['checks'])}項功能、{len(gpu['checks'])}組GPU檢查、獨立啟動及Defender掃描。[操作展示](README.md) · [正式版與官方效果對比](docs/comparison/README.md)
 ''', encoding='utf8')
     preview = project / 'Preview.md'
-    preview.write_text('''# 游標光效預覽
+    preview.write_text('''# CursorEffects預覽
 
 [操作與配色展示](README.md) · [首次正式發布](CHANGELOG.md)
 

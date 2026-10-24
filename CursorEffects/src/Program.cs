@@ -11,7 +11,7 @@ using System.Threading;
 
 sealed class Overlay : Form {
     readonly CursorHost host;
-    public Overlay(CursorHost value){host=value;Text="Native cursor decoration";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;AutoScaleMode=AutoScaleMode.None;Enabled=false;Bounds=SystemInformation.VirtualScreen;}
+    public Overlay(CursorHost value){host=value;Text="CursorEffects overlay";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;AutoScaleMode=AutoScaleMode.None;Enabled=false;Bounds=SystemInformation.VirtualScreen;}
     protected override bool ShowWithoutActivation{get{return true;}}
     // DirectComposition owns the pixels. There is no full-screen GDI bitmap or
     // browser HWND, and the disabled non-activating overlay cannot consume input.
@@ -69,7 +69,7 @@ sealed partial class CursorHost : ApplicationContext {
         ready=true;
         trayMenu=new ContextMenuStrip{BackColor=Color.White,ForeColor=Color.Black,Renderer=new SimpleTrayRenderer(),ShowImageMargin=false,ShowCheckMargin=false,Font=controls.Font};trayMenu.Items.Add("開啟面板",null,(s,e)=>ShowControls());
         visibilityItem=new ToolStripMenuItem();visibilityItem.Click+=(s,e)=>controls.VisibleValue.Checked=!controls.VisibleValue.Checked;trayMenu.Items.Add(visibilityItem);trayMenu.Items.Add(new ToolStripSeparator());trayMenu.Items.Add("退出",null,(s,e)=>Quit(0));trayMenu.Opening+=(s,e)=>UpdateVisibilityMenu();
-        tray=new NotifyIcon{Icon=AppTheme.Icon,Text="滑鼠光跡",Visible=!Test,ContextMenuStrip=trayMenu};tray.DoubleClick+=(s,e)=>ShowControls();UpdateVisibilityMenu();
+        tray=new NotifyIcon{Icon=AppTheme.Icon,Text="CursorEffects",Visible=!Test,ContextMenuStrip=trayMenu};tray.DoubleClick+=(s,e)=>ShowControls();UpdateVisibilityMenu();
         orderObserver=new Native.ZOrderObserver(source=>{if(source!=overlay.Handle&&Native.GetAncestor(source,3)!=controls.Handle)RepairLayer(source);});healthTimer.Start();Configure();
         if(!renderer.Hardware){controls.Status.Text="目前使用軟體繪圖";controls.Status.Visible=true;}
 #if SELF_TEST

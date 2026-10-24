@@ -12,7 +12,7 @@ if($LASTEXITCODE -ne 0 -or $cppVersion -notmatch ('clang version '+[regex]::Esca
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 if(!(Test-Path -LiteralPath $compiler)){throw 'System .NET Framework C# compiler is missing.'}
 $out=if($OutputDirectory){[IO.Path]::GetFullPath($(if([IO.Path]::IsPathRooted($OutputDirectory)){$OutputDirectory}else{Join-Path $root $OutputDirectory}))}else{Join-Path $root $(if($Test){'.build/test'}else{'dist'})}
-$exeName=if($Test){'BlueArchiveCursor.Native.exe'}else{'BlueArchiveCursor.exe'}
+$exeName=if($Test){'CursorEffects.Test.exe'}else{'CursorEffects.exe'}
 New-Item -ItemType Directory -Force -Path $out,(Join-Path $root '.build/native'),(Join-Path $root 'test-results') | Out-Null
 $module=Join-Path $root '.build/native/CursorRenderer.dll'
 & $cpp '-std=c++17' '-Os' '-flto' '-shared' '-static' '-nostdlib++' '-fno-exceptions' '-fno-rtti' '-ffunction-sections' '-fdata-sections' '-Wl,--gc-sections,--no-insert-timestamp' '-s' (Join-Path $root 'src/Renderer.cpp') '-o' $module '-ld2d1' '-ld3d11' '-ldxgi' '-ldcomp' '-lole32' '-luuid'

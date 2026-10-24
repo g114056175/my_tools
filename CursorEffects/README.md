@@ -1,6 +1,6 @@
-# 游標光效
+# CursorEffects
 
-**[下載 EXE（122.5KB）](https://github.com/g114056175/my_tools/releases/download/cursor-effects/BlueArchiveCursor.exe)**
+**[下載 EXE（122.5KB）](https://github.com/g114056175/my_tools/releases/download/cursor-effects/CursorEffects.exe)**
 
 > **防毒偵測提醒：** 部分建置可能被 Microsoft Defender 判為木馬並阻擋執行；相同原始碼重編譯後，偵測結果也可能不同。目前尚未確認是否為誤報，重新編譯後可執行不代表問題已解決。詳見[防毒偵測說明](#user-content-防毒偵測)。
 
@@ -103,7 +103,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File release.ps1
 
 工具鏈下載約 179 MiB，僅供建置；版本、網址與 SHA-256 在 `toolchain.json`。可用 `build.ps1 -Compiler "完整路徑\clang++.exe"` 指定同版編譯器。無須 Visual Studio、Node 或 Python。
 
-- `dist/BlueArchiveCursor.exe`：單檔 EXE。
+- `dist/CursorEffects.exe`：單檔 EXE。
 - `dist/`：程式、說明與效果圖。
 - `.build/build-info.json`：編譯器版本及來源／產物雜湊。
 

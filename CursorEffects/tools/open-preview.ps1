@@ -2,7 +2,7 @@ param([switch]$LocateExe)
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if($LocateExe){
-    $artifact=@('dist\BlueArchiveCursor.exe','.build\current\BlueArchiveCursor.exe') | ForEach-Object {Join-Path $project $_} | Where-Object {Test-Path -LiteralPath $_ -PathType Leaf} | ForEach-Object {Get-Item -LiteralPath $_} | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
+    $artifact=@('dist\CursorEffects.exe','.build\current\CursorEffects.exe') | ForEach-Object {Join-Path $project $_} | Where-Object {Test-Path -LiteralPath $_ -PathType Leaf} | ForEach-Object {Get-Item -LiteralPath $_} | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
     if(!(Test-Path -LiteralPath $artifact -PathType Leaf)){throw "Missing file: $artifact"}
     Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('/select,"'+$artifact+'"')
     exit

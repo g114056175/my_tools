@@ -1,4 +1,4 @@
-# 游標光效預覽
+# CursorEffects預覽
 
 [操作與配色展示](README.md) · [首次正式發布](CHANGELOG.md)
 

@@ -354,7 +354,7 @@ void LoadSettings() {
     g_app.autoSave = get(L"AutoSave", L"0") == L"1";
     g_app.copyToClipboard = get(L"CopyOnFinish", L"1") == L"1";
     g_app.captureCursor = get(L"CaptureCursor", L"1") == L"1";
-    g_app.selectKey = static_cast<WORD>(_wtoi(get(L"SelectKey", L"850").c_str()));
+    g_app.selectKey = static_cast<WORD>(_wtoi(get(L"SelectKey", L"1362").c_str()));
     SendMessageW(g_app.selectHotkey, HKM_SETHOTKEY, g_app.selectKey, 0);
     SendMessageW(g_app.autoSaveCheck, BM_SETCHECK, g_app.autoSave ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(g_app.clipboardCheck, BM_SETCHECK,
@@ -1046,6 +1046,8 @@ void CloseCapture() {
         return;
     }
     if (g_app.view != View::Recording || g_app.dialogActive || g_app.stopRequested) return;
+    g_app.paused = true;
+    UpdateToolbar();
     g_app.dialogActive = true;
     const int choice =
         MessageBoxW(g_app.toolbar, L"要結束並捨棄這次錄影嗎？\n這段錄影不會保存。", L"關閉錄影",

@@ -223,7 +223,7 @@ try {
     [CaptureUiNative]::Snapshot($main,(Join-Path $screenshots 'recorder-setup.png'),$false)
     Set-ControlText $main 111 $outputDirectory
     $before = Get-Region
-    Write-Output ('Initial shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
+    Write-Output ('Initial shortcut available='+[CaptureUiNative]::HotkeyAvailable(5,82)+' status='+(Get-ControlText $main 118))
     foreach ($entry in @(@(114,54,309),@(131,360,309),@(135,230,108))) {
         $switch=[CaptureUiNative]::GetDlgItem($main,$entry[0])
         $state=[CaptureUiNative]::SendMessage($switch,0x00F0,[IntPtr]::Zero,[IntPtr]::Zero)
@@ -239,12 +239,12 @@ try {
     if (![CaptureUiNative]::IsWindowVisible($main) -or ![CaptureUiNative]::IsIconic($main)) { throw 'Minimize should retain the taskbar window' }
     Send-Command $main 201
     [void](Wait-Control $main 133)
-    Write-Output ('Before hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
+    Write-Output ('Before hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(5,82)+' status='+(Get-ControlText $main 118))
     [void][CaptureUiNative]::SendMessage([CaptureUiNative]::GetDlgItem($main,133),0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)
     Start-Sleep -Milliseconds 100
     if ([CaptureUiNative]::IsWindowVisible($main)) { throw 'Explicit collapse did not hide the settings window' }
-    Write-Output ('After hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' status='+(Get-ControlText $main 118))
-    [CaptureUiNative]::Hotkey(82,[byte[]]@(17,16))
+    Write-Output ('After hide shortcut available='+[CaptureUiNative]::HotkeyAvailable(5,82)+' status='+(Get-ControlText $main 118))
+    [CaptureUiNative]::Hotkey(82,[byte[]]@(18,16))
     $selector = Wait-TestWindow 'LightCaptureRegionSelector' $app.Id
     [void][CaptureUiNative]::PostMessage($selector,0x0100,[IntPtr]27,[IntPtr]::Zero)
     Start-Sleep -Milliseconds 200
@@ -259,7 +259,7 @@ try {
     [void][CaptureUiNative]::SendMessage($selectKey,0x0201,[IntPtr]1,[CaptureUiNative]::Point(20,18))
     [void][CaptureUiNative]::SendMessage($selectKey,0x0202,[IntPtr]::Zero,[CaptureUiNative]::Point(20,18))
     Assert-Equal ([CaptureUiNative]::FocusedWindow($main)) $selectKey 'Hotkey edit did not receive focus'
-    if (![CaptureUiNative]::HotkeyAvailable(6,82)) { throw 'Global shortcuts remained registered during editing' }
+    if (![CaptureUiNative]::HotkeyAvailable(5,82)) { throw 'Global shortcuts remained registered during editing' }
     [void][CaptureUiNative]::PostMessage($main,0x0312,[IntPtr]1,[IntPtr]::Zero)
     [void][CaptureUiNative]::SendMessage($selectKey,0x0401,[IntPtr]::Zero,[IntPtr]::Zero)
     Start-Sleep -Milliseconds 700
@@ -515,7 +515,7 @@ catch {
     Write-Output $_.ScriptStackTrace
     if($main -ne [IntPtr]::Zero -and !$app.HasExited) {
         Write-Output ('Failure status='+(Get-ControlText $main 118)+' focus='+[CaptureUiNative]::FocusedWindow($main))
-        Write-Output ('CtrlShiftR available='+[CaptureUiNative]::HotkeyAvailable(6,82)+' CtrlAltF5 available='+[CaptureUiNative]::HotkeyAvailable(3,116))
+        Write-Output ('AltShiftR available='+[CaptureUiNative]::HotkeyAvailable(5,82)+' CtrlAltF5 available='+[CaptureUiNative]::HotkeyAvailable(3,116))
     }
     throw
 }

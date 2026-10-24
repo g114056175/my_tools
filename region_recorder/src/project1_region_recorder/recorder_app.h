@@ -36,7 +36,7 @@ struct AppState {
     bool donePending = false;
     DoneReason pendingReason = DoneStopped;
     std::wstring pendingDetail;
-    WORD selectKey = 0x0352;  // HOTKEYF_CONTROL | HOTKEYF_SHIFT
+    WORD selectKey = 0x0552;  // HOTKEYF_ALT | HOTKEYF_SHIFT
     bool selectRegistered = false, escapeRegistered = false, discardWhenStopped = false;
     bool defaultGif = true, autoSave = false, copyToClipboard = true;
     bool hotkeysSuspended = false;

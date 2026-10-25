@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VideoPocket</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <div class="source-row"><span id="sourceLabel" class="source-label" role="button" tabindex="-1">影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" aria-hidden="true" tabindex="-1" hidden></select><div id="mediaChooser" hidden aria-label="目前影片"></div><button id="pickMedia" class="icon-button" title="在網頁選取影片" aria-label="在網頁選取影片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button></div>
+  <div class="source-row"><span id="sourceLabel" class="source-label" role="status" tabindex="-1">影片：</span><span id="pageTitle" class="source-title">讀取中…</span><select id="mediaSelect" aria-label="目前影片" aria-hidden="true" tabindex="-1" hidden></select><div id="mediaChooser" hidden aria-label="目前影片"></div><button id="pickMedia" class="icon-button" title="在網頁選取影片" aria-label="在網頁選取影片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button><button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button></div>
   <main>
     <section id="downloadSection" aria-label="下載" hidden>
       <div class="section-heading"><h2>下載</h2><div class="switch" role="tablist" aria-label="下載類型"><button id="videoTab" role="tab" aria-selected="true" class="active">影片</button><button id="audioTab" role="tab" aria-selected="false">音檔</button><button id="subtitleTab" role="tab" aria-selected="false" disabled title="無字幕">字幕</button></div></div>
@@ -35,7 +35,7 @@
     </section>
     <ul id="job" class="job-list" aria-label="下載工作" hidden></ul>
     <div id="notice" role="status" aria-live="polite" hidden></div>
-    <div id="diagnosticRow" class="diagnostic-row" role="status" aria-live="polite" hidden><span id="diagnosticText"></span><button id="dismissError" class="icon-button" title="關閉診斷" aria-label="關閉診斷">×</button></div>
+    <div id="diagnosticRow" class="diagnostic-row" role="status" aria-live="polite" hidden><span id="diagnosticText"></span><button id="dismissError" class="icon-button" title="關閉錯誤" aria-label="關閉錯誤">×</button></div>
   </main><script type="module" src="popup.js"></script>
 </body></html>
 

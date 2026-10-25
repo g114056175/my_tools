@@ -63,3 +63,8 @@ test('unseen failures survive popup closure and preserve safe Bilibili playback 
  const result=classifyFailure({code:'HTTP_AUTH',status:403,sourceStage:'bilibili-playurl',requestMethod:'GET',requestHost:'api.bilibili.com'});
  assert.equal(classifyFailure(result).sourceStage,'bilibili-playurl');
 });
+
+test('empty YouTube captions give an actionable language and subtitle hint',()=>{
+ const value=briefFailure({code:'YT_FILE_EMPTY',message:'private response'});
+ assert.equal(value.code,'YT03');assert.match(value.message,/開啟 YouTube 字幕/);assert.match(value.message,/所選語言/);assert.match(value.message,/重試/);assert.doesNotMatch(value.message,/private response/);
+});

@@ -52,6 +52,7 @@ globalThis.chrome = {
     if (message.action === 'waitMediaSource'){state.lastReadiness=message;return {ok:true,result:state.readinessHandler?await state.readinessHandler(message):{ready:false}};}
     if (message.action === 'inspect'&&state.inspectHandler){state.inspectCalls++;return state.inspectHandler(message);}
     if (message.action === 'inspect') { state.inspectCalls++; if(state.inspectEmpty)return {ok:true,result:{title:'player detected',downloadKey:'k',choices:{video:{auto:{enabled:false,heights:[],extensions:{},sizes:{}}},audio:{original:{enabled:false,qualities:[],extensions:{},sizes:{}}}},tracks:[]}}; if (state.phase < 3) return {ok:false,error:'inspect failed',failure:state.inspectFailure==='HTTP_AUTH'?{code:'HTTP_AUTH',httpStatus:403,requestMethod:'GET RANGE',requestHost:'v16m.tiktokcdn.com'}:{code:state.inspectFailure}}; return {ok:true,result:{title:'usable',downloadKey:'k',choices:{video:{auto:{enabled:true,heights:[360],extensions:{360:'mp4'},sizes:{360:{bytes:1}}}},audio:{original:{enabled:false}}},tracks:[]}}; }
+    if(message.action==='captureSubtitle'&&state.captureHandler)return state.captureHandler(message);
     if(message.action==='mediaTime'){state.lastMediaTime=message;return {ok:true,result:{time:message.time??12.5,duration:60}};}
     if(message.action==='download'){state.lastDownload=message;return {ok:true,result:{id:'range-job'}};}
     if(message.action==='highlightMedia')state.lastHighlight=message;
@@ -82,17 +83,17 @@ test('popup integration hides unusable media UI, preserves subtitle-only UI, and
 
   state.inspectFailure='SOURCE_UNAVAILABLE';await documentMock.getElementById('refresh').click();
   await wait(() => state.snapshotCalls >= 3 && documentMock.getElementById('sourceLabel').textContent === '找到影片，但無下載來源');
-  assert.match(documentMock.getElementById('sourceLabel').title,/SOURCE_UNAVAILABLE/);
-  assert.match(documentMock.getElementById('sourceLabel').title,/尚未找到與播放器配對/);
-  assert.match(documentMock.getElementById('sourceLabel').title,/JSON 3 · 模型 2 · 配對 0 · identity-unmatched/);
+  assert.equal(documentMock.getElementById('sourceLabel').title,'');
+  assert.equal(documentMock.getElementById('sourceLabel').tabIndex,-1);
+  assert.equal(documentMock.getElementById('sourceLabel').role,'status');
 
   state.inspectEmpty=true;await documentMock.getElementById('refresh').click();
   await wait(() => state.snapshotCalls >= 4 && documentMock.getElementById('sourceLabel').textContent === '找到影片，但無下載來源');
   assert.equal(documentMock.getElementById('downloadSection').hidden,true);
-  assert.match(documentMock.getElementById('sourceLabel').title,/^來源未提供可用影音格式/);
+  assert.equal(documentMock.getElementById('sourceLabel').title,'');
   state.inspectEmpty=false;state.inspectFailure='HTTP_AUTH';await documentMock.getElementById('refresh').click();
   await wait(() => state.snapshotCalls >= 5 && documentMock.getElementById('sourceLabel').textContent === '來源拒絕下載');
-  assert.match(documentMock.getElementById('sourceLabel').title,/HTTP 403 · GET RANGE · v16m\.tiktokcdn\.com/);
+  assert.equal(documentMock.getElementById('sourceLabel').title,'');
   assert.doesNotMatch(documentMock.getElementById('sourceLabel').title,/尚未找到與播放器配對/);
 
   state.phase = 2;state.inspectFailure='NETWORK_FAILURE'; await documentMock.getElementById('refresh').click();
@@ -189,10 +190,10 @@ test('a player permalink can be inspected without pretending it is a direct vide
  finally{state.snapshotHandler=null;state.inspectHandler=null;}
 });
 
-test('an unavailable permalink keeps the short error and exposes its precise stage only in the tooltip',async()=>{
+test('an unavailable permalink keeps the short error without exposing diagnostic details',async()=>{
  state.snapshotHandler=()=>({url:'https://www.facebook.com/feed',title:'Feed',videos:[{title:'post',mediaKey:1,linkedMedia:{url:'https://www.facebook.com/reel/123/',id:'123'}}],tracks:[]});
  state.inspectHandler=async()=>({ok:false,error:'source unavailable',failure:{code:'SOURCE_UNAVAILABLE',sourceStage:'linked-no-model'}});
- try{await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').classList.contains('error'));assert.equal(documentMock.getElementById('sourceLabel').textContent,'找到影片，但無下載來源');assert.ok(documentMock.getElementById('sourceLabel').title.includes('獨立影片頁未回傳相符的播放資料'));assert.equal(documentMock.getElementById('downloadSection').hidden,true);}
+ try{await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').classList.contains('error'));assert.equal(documentMock.getElementById('sourceLabel').textContent,'找到影片，但無下載來源');assert.equal(documentMock.getElementById('sourceLabel').title,'');assert.equal(documentMock.getElementById('downloadSection').hidden,true);}
  finally{state.snapshotHandler=null;state.inspectHandler=null;}
 });
 
@@ -252,10 +253,10 @@ test('a delayed feed player is rescanned by identity before permalink fallback i
  }finally{state.snapshotHandler=null;state.readinessHandler=null;state.inspectHandler=null;}
 });
 
-test('clicking the red source label copies bounded diagnostics without media titles',async()=>{
+test('error labels do not expose or copy diagnostics',async()=>{
  state.snapshotHandler=()=>({url:'https://www.facebook.com/feed',title:'PRIVATE',videos:[{title:'PRIVATE',linkedMedia:{url:'https://www.facebook.com/reel/123/',id:'123'}}],media:{discoveryDiagnostics:{models:2,matches:0}},tracks:[]});
  state.inspectHandler=async()=>({ok:false,error:'source unavailable',failure:{code:'SOURCE_UNAVAILABLE',sourceStage:'linked-no-model'}});
- try{await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').classList.contains('error'));await documentMock.getElementById('sourceLabel').click();const copied=JSON.parse(state.clipboard);assert.equal(copied.failure.stage,'linked-no-model');assert.equal(copied.discovery.models,2);assert.ok(!state.clipboard.includes('PRIVATE'));assert.ok(!state.clipboard.includes('facebook.com'));}
+ try{state.clipboard='keep existing clipboard';await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').classList.contains('error'));await documentMock.getElementById('sourceLabel').click();assert.equal(state.clipboard,'keep existing clipboard');assert.equal(documentMock.getElementById('sourceLabel').title,'');assert.equal(documentMock.getElementById('sourceLabel').tabIndex,-1);assert.equal((documentMock.getElementById('sourceLabel').listeners.keydown||[]).length,0);}
  finally{state.snapshotHandler=null;state.inspectHandler=null;}
 });
 
@@ -306,7 +307,7 @@ test('a transient Dailymotion refusal performs only one delayed snapshot retry',
  let calls=0;const selected={title:'Episode',documentId:'dm-doc',frameId:0,mediaKey:1,mediaContentId:'episode',dailymotionMain:true};
  state.snapshotHandler=()=>({url:'https://www.dailymotion.com/video/episode',title:'Episode',documentId:'dm-doc',videos:[selected],platform:{site:'dailymotion',id:'episode'},tracks:[]});
  state.readinessHandler=async()=>({ready:true});state.inspectHandler=async()=>{calls++;return {ok:false,error:'refused',failure:{code:'HTTP_AUTH',httpStatus:403,sourceStage:'stream-manifest',requestMethod:'GET',requestHost:'vod.dmcdn.net'}};};
- try{await documentMock.getElementById('refresh').click();await wait(()=>calls===2&&documentMock.getElementById('sourceLabel').textContent==='來源拒絕下載');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,2);await documentMock.getElementById('sourceLabel').click();const diagnostic=JSON.parse(state.clipboard);assert.equal(diagnostic.failure.stage,'stream-manifest');assert.equal(diagnostic.failure.host,'vod.dmcdn.net');}
+ try{await documentMock.getElementById('refresh').click();await wait(()=>calls===2&&documentMock.getElementById('sourceLabel').textContent==='來源拒絕下載');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,2);state.clipboard='keep existing clipboard';await documentMock.getElementById('sourceLabel').click();assert.equal(state.clipboard,'keep existing clipboard');assert.equal(documentMock.getElementById('sourceLabel').title,'');}
  finally{state.snapshotHandler=null;state.inspectHandler=null;state.readinessHandler=null;}
 });
 
@@ -384,15 +385,32 @@ test('processing jobs show their own percentage while keeping the same compact j
  }finally{Object.assign(jobs[0],saved);storageChanged({jobs:{newValue:jobs}},'session');await new Promise(resolve=>setImmediate(resolve));}
 });
 
-test('a download failure remains visible while media inspection refreshes and can be copied',async()=>{
+test('a download failure remains visible and dismissible without diagnostic copying',async()=>{
  state.phase=3;state.lastError={id:'failed-job',time:Date.now()-15000,code:'HTTP_AUTH',stage:'download',httpStatus:403,requestMethod:'GET RANGE',requestHost:'cdn.example'};
  try{
   storageChanged({lastError:{newValue:state.lastError}},'session');await wait(()=>!documentMock.getElementById('diagnosticRow').hidden);
   await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);
   assert.equal(documentMock.getElementById('diagnosticRow').hidden,false);
-  await documentMock.getElementById('diagnosticText').click();const copied=JSON.parse(state.clipboard);assert.equal(copied.operation,'download');assert.equal(copied.failure.code,'HTTP_AUTH');assert.equal(copied.failure.httpStatus,403);
+  state.clipboard='keep existing clipboard';await documentMock.getElementById('diagnosticText').click();assert.equal(state.clipboard,'keep existing clipboard');assert.equal(documentMock.getElementById('diagnosticText').title,'');assert.doesNotMatch(documentMock.getElementById('diagnosticText').textContent,/診斷|複製/);assert.match(documentMock.getElementById('diagnosticText').textContent,/來源拒絕存取/);
   await documentMock.getElementById('dismissError').click();assert.equal(state.dismissedError,'failed-job');assert.equal(documentMock.getElementById('diagnosticRow').hidden,true);
  }finally{state.lastError=null;await documentMock.getElementById('dismissError').click();}
+});
+
+test('YT03 offers subtitle and language guidance without a diagnostic copy entry',async()=>{
+ state.phase=3;state.lastError={id:'yt-empty',time:Date.now(),code:'YT_FILE_EMPTY',stage:'subtitle'};
+ try{
+  storageChanged({lastError:{newValue:state.lastError}},'session');await wait(()=>!documentMock.getElementById('diagnosticRow').hidden);
+  const text=documentMock.getElementById('diagnosticText');assert.match(text.textContent,/開啟 YouTube 字幕/);assert.match(text.textContent,/所選語言/);assert.match(text.textContent,/YT03/);assert.doesNotMatch(text.textContent,/診斷/);
+  state.clipboard='keep existing clipboard';await text.click();assert.equal(state.clipboard,'keep existing clipboard');assert.equal(text.title,'');
+ }finally{state.lastError=null;await documentMock.getElementById('dismissError').click();}
+});
+
+test('disabling diagnostic copies preserves the normal subtitle copy action',async()=>{
+ state.phase=3;state.snapshotHandler=()=>({url:'https://example.test/caption-copy',title:'Caption copy',documentId:'copy-doc',mediaIndex:0,videos:[{title:'Caption copy',documentId:'copy-doc',mediaKey:1,downloadUrl:'https://cdn.test/copy.mp4'}],tracks:[{language:'en',name:'English',source:'native'}]});
+ state.captureHandler=async()=>({ok:true,result:{language:'en',cues:[{start:0,end:1,text:'字幕內容測試'}]}});
+ try{
+  await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('subtitleTab').disabled);await documentMock.getElementById('subtitleTab').click();await documentMock.getElementById('loadSubtitle').click();await wait(()=>!documentMock.getElementById('copy').disabled);await documentMock.getElementById('copy').click();assert.match(state.clipboard,/字幕內容測試/);
+ }finally{state.snapshotHandler=null;state.captureHandler=null;}
 });
 
 test('sub-second range duration remains visible on the download button without a middle duration field',async()=>{

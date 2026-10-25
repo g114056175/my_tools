@@ -13,6 +13,7 @@ import {stableHash} from './download-identity.js';
 import {genericFallbackEligible} from './generic-fallback.js';
 import './destinations.js';
 const $=id=>document.getElementById(id);
+const COPY_DIAGNOSTICS=false;
 let rangeSelection,rangeDraft=null,rangeRestoredTarget='',restoringRange=false,rangeDraftSerialized='';
 const rangeController=createRangeController({details:$('rangeSettings'),start:$('rangeStart'),end:$('rangeEnd'),length:$('rangeDuration'),startSlider:$('rangeStartSlider'),endSlider:$('rangeEndSlider'),timeline:$('rangeSliders'),message:$('rangeMessage')},{onChange:value=>{rangeSelection=value;updateDownloadLabel();rememberRangeDraft();}});
 let mediaMenu={render(){}};
@@ -36,7 +37,7 @@ function sourceState(error='',detail=''){
   if(arguments.length){sourceError=error || '';sourceErrorDetail=detail || '';}
   const hasVideo=!!page?.videos?.length,multiple=hasVideo&&page.videos.length>1,visibility=sourceVisibility({info,tracks,kind});
   const header=sourceHeader({hasVideo,info,tracks,phase:sourcePhase,error:sourceError,detail:sourceErrorDetail});
-  $('sourceLabel').textContent=header.label;$('sourceLabel').classList.toggle('error',header.error);$('sourceLabel').title=header.detail+(header.error?' · 點擊複製診斷':'');$('sourceLabel').tabIndex=header.error?0:-1;
+  $('sourceLabel').textContent=header.label;$('sourceLabel').classList.toggle('error',header.error);$('sourceLabel').title=COPY_DIAGNOSTICS?header.detail+(header.error?' · 點擊複製診斷':''):'';$('sourceLabel').tabIndex=COPY_DIAGNOSTICS&&header.error?0:-1;$('sourceLabel').setAttribute('role',COPY_DIAGNOSTICS?'button':'status');
   $('pageTitle').hidden=header.error||!hasVideo||multiple;$('mediaSelect').hidden=!multiple;
   const title=hasVideo?(page.videos[mediaIndex]?.title || page.title):'無影片';$('pageTitle').textContent=mediaTitleLabel(title);$('pageTitle').title=hasVideo?title:'';
   $('downloadSection').hidden=!visibility.showDownloadSection;$('subtitleSection').hidden=!visibility.showSubtitleSection;mediaMenu.render();
@@ -282,9 +283,9 @@ bind('loadSubtitle',async()=>{
 bind('copy',async()=>{await navigator.clipboard.writeText(exportSubtitle(subtitle,$('subtitleFormat').value).content);notice('已複製');});
 bind('saveSubtitle',async()=>{const {format,content}=exportSubtitle(subtitle,$('subtitleFormat').value);const url=URL.createObjectURL(new Blob([content],{type:'text/plain;charset=utf-8'}));setTimeout(()=>URL.revokeObjectURL(url),60000);await chrome.downloads.download({url,filename:suggestedFilename(page.videos?.[mediaIndex]?.title || page.title,format),saveAs:true,conflictAction:'uniquify'});notice();});
 function hideFailure(){clearTimeout(errorTimer);$('diagnosticRow').hidden=true;currentErrorId=null;currentFailure=null;}
-function showFailure(error,id=null,remaining=ERROR_VISIBILITY_MS){const value=briefFailure(error);if(!value||(currentErrorId&&id===null))return;clearTimeout(errorTimer);currentErrorId=id;currentFailure=error;$('diagnosticText').textContent=`診斷：${value.message}（${value.code}）`;$('diagnosticText').title='點擊複製診斷';$('diagnosticRow').hidden=false;errorTimer=setTimeout(()=>{if(currentErrorId!==id)return;hideFailure();if(id)void send('dismissError',{id}).catch(()=>{});},remaining);}
+function showFailure(error,id=null,remaining=ERROR_VISIBILITY_MS){const value=briefFailure(error);if(!value||(currentErrorId&&id===null))return;clearTimeout(errorTimer);currentErrorId=id;currentFailure=error;$('diagnosticText').textContent=`${COPY_DIAGNOSTICS?'診斷：':''}${value.message}（${value.code}）`;$('diagnosticText').title=COPY_DIAGNOSTICS?'點擊複製診斷':'';$('diagnosticRow').hidden=false;errorTimer=setTimeout(()=>{if(currentErrorId!==id)return;hideFailure();if(id)void send('dismissError',{id}).catch(()=>{});},remaining);}
 async function renderDiagnostics(){const value=await send('lastError');if(!visibleFailure(value)){if(captureRecord?.state!=='failed')hideFailure();return;}showFailure(value,value.id);}
-$('diagnosticText').addEventListener('click',async()=>{if(!currentFailure)return;const diagnostic=sourceInspectionDiagnostic({page,mediaIndex,phase:'failed',failure:currentFailure});diagnostic.operation=['download','merge','save','inspect','subtitle'].includes(currentFailure.stage)?currentFailure.stage:'download';await navigator.clipboard.writeText(JSON.stringify(diagnostic,null,2));$('diagnosticText').title='已複製診斷';});
+if(COPY_DIAGNOSTICS)$('diagnosticText').addEventListener('click',async()=>{if(!currentFailure)return;const diagnostic=sourceInspectionDiagnostic({page,mediaIndex,phase:'failed',failure:currentFailure});diagnostic.operation=['download','merge','save','inspect','subtitle'].includes(currentFailure.stage)?currentFailure.stage:'download';await navigator.clipboard.writeText(JSON.stringify(diagnostic,null,2));$('diagnosticText').title='已複製診斷';});
 $('dismissError').addEventListener('click',()=>{const id=currentErrorId;hideFailure();void send('dismissError',{id}).catch(()=>{});});
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&changes.jobs){void renderJob();syncButtons();}if(area==='session'&&changes.lastError)void renderDiagnostics();for(const [key,change] of Object.entries(changes))if(area==='session'&&key.startsWith(CAPTURE_PREFIX+tab?.id+':'))updateCaptureRecord(key,change.newValue);});
 
@@ -295,5 +296,7 @@ init().catch(e=>{notice();sourceState('未取得影片資訊',e.message);});
 
 
 async function copySourceDiagnostic(){if(!sourceError)return;await navigator.clipboard.writeText(JSON.stringify(sourceInspectionDiagnostic({page,mediaIndex,phase:sourcePhase,failure:inspectionFailure}),null,2));$('sourceLabel').title='已複製診斷';}
-$('sourceLabel').addEventListener('click',()=>void copySourceDiagnostic().catch(()=>{}));
-$('sourceLabel').addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();void copySourceDiagnostic().catch(()=>{});}});
+if(COPY_DIAGNOSTICS){
+ $('sourceLabel').addEventListener('click',()=>void copySourceDiagnostic().catch(()=>{}));
+ $('sourceLabel').addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();void copySourceDiagnostic().catch(()=>{});}});
+}

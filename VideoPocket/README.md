@@ -1,6 +1,6 @@
 # VideoPocket - 網頁媒體下載與擷取 <img src="extension/icons/48.png" width="32" height="32" alt="VideoPocket icon">
 
-**[下載 ZIP（約 2.2 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=380326ff2a15)** · 解壓約 6.9 MB · Chrome 120 以上
+**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=cbc81d683b78)** · 解壓約 6.9 MB · Chrome 120 以上
 
 在網頁中選擇影片，下載影片、音檔或字幕；所有處理都在本機瀏覽器完成。
 

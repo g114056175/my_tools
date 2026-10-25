@@ -98,12 +98,12 @@ export function startMediaPicker(options = {}) {
   const promise = new Promise(resolve => { resolveResult = resolve; });
   const overlay = document.createElement('div');
   overlay.setAttribute('data-video-pocket-media-picker', requestId);
-  Object.assign(overlay.style, {position: 'fixed', zIndex: '2147483646', pointerEvents: 'none', border: '3px solid #1a73e8', background: 'rgba(26,115,232,.12)', boxSizing: 'border-box', display: 'none', borderRadius: '2px'});
+  Object.assign(overlay.style, {position: 'fixed', zIndex: '2147483646', pointerEvents: 'none', border: '3px solid #2b85bf', background: 'rgba(26,115,232,.12)', boxSizing: 'border-box', display: 'none', borderRadius: '2px'});
   const label = document.createElement('div');
-  Object.assign(label.style, {position: 'fixed', zIndex: '2147483647', pointerEvents: 'none', background: '#1a73e8', color: '#fff', font: '12px/1.4 sans-serif', padding: '3px 6px', borderRadius: '3px', display: 'none', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'});
+  Object.assign(label.style, {position: 'fixed', zIndex: '2147483647', pointerEvents: 'none', background: '#2b85bf', color: '#fff', font: '12px/1.4 sans-serif', padding: '3px 6px', borderRadius: '3px', display: 'none', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'});
   label.textContent = '選取影片';
   const guide=document.createElement('div');
-  Object.assign(guide.style,{position:'fixed',top:'12px',left:'50%',transform:'translateX(-50%)',zIndex:'2147483647',pointerEvents:'none',background:'#214e3e',color:'#fff',font:'13px/1.5 sans-serif',padding:'8px 14px',borderRadius:'7px',boxShadow:'0 2px 10px #0003',whiteSpace:'nowrap',display:frameId===0?'block':'none'});
+  Object.assign(guide.style,{position:'fixed',top:'12px',left:'50%',transform:'translateX(-50%)',zIndex:'2147483647',pointerEvents:'none',background:'#216b9f',color:'#fff',font:'13px/1.5 sans-serif',padding:'8px 14px',borderRadius:'7px',boxShadow:'0 2px 10px #0003',whiteSpace:'nowrap',display:frameId===0?'block':'none'});
   guide.textContent='點選影片後重開 VideoPocket · Esc 取消';
   (document.body || root).append(overlay, label, guide);
 

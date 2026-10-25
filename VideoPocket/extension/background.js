@@ -21,6 +21,8 @@ import {socialPageFetch} from './social-page-fetch.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute} from './media-selection-controller.js';
 import {createPopupMarkerController} from './popup-marker.js';
 import {validateDocumentMediaPlan} from './document-media.js';
+import {createGenericFallback,genericFallbackEligible,earlyPlayerPlatform,genericPageUrl} from './generic-fallback.js';
+import {genericPlayerSnapshot} from './generic-player.js';
 import './destinations.js';
 const mediaPicker=createMediaSelectionController(chrome);
 const popupMarkers=createPopupMarkerController(chrome);
@@ -117,7 +119,24 @@ async function pump(){
   finally{if(result?.blobId)await engine('release',{blobId:result.blobId}).catch(()=>{});runningJob=null;}
  }
 }
-async function script(tabId,func,args=[],documentId,world='MAIN'){const results=await chrome.scripting.executeScript({target:{tabId,...(documentId?{documentIds:[documentId]}:{})},world,func,args});const result=results[0]?.result;if(!result)throw new Error('無法讀取目前影片，請更新影片資訊');if(result.error)throw Object.assign(new Error(result.error),{code:result.errorCode,status:result.errorStatus,apiCode:result.errorApiCode,subtitleStage:result.subtitleStage,retryable:result.retryable});return result;}
+async function script(tabId,func,args=[],documentId,world='MAIN'){const results=await chrome.scripting.executeScript({target:{tabId,...(documentId?{documentIds:[documentId]}:{})},world,func,args,...(documentId?{injectImmediately:true}:{})});const result=results[0]?.result;if(!result)throw new Error('無法讀取目前影片，請更新影片資訊');if(result.error)throw Object.assign(new Error(result.error),{code:result.errorCode,status:result.errorStatus,apiCode:result.errorApiCode,subtitleStage:result.subtitleStage,retryable:result.retryable});return result;}
+async function genericSnapshot(descriptor,binding,signal,mode){
+ signal?.throwIfAborted();
+ const result=await script(descriptor.tabId,genericPlayerSnapshot,[{mediaKey:descriptor.mediaKey,pageUrl:descriptor.referer,...(binding?{binding}:{}),...(mode?{mode}:{})}],descriptor.documentId);
+ signal?.throwIfAborted();return result;
+}
+async function verifyGenericPlan(plan){
+ if(!plan)return;
+ let valid=false;try{valid=(await genericSnapshot(plan.descriptor,plan.binding,undefined,plan.mode)).valid===true;}catch{}
+ if(!valid)throw Object.assign(new Error('影片已變更，請重新選取'),{code:'SOURCE_CHANGED'});
+}
+const genericRecovery=createGenericFallback({
+ primary:(descriptor,inspectionId)=>engine('inspect',{descriptor,inspectionId}),
+ collect:(descriptor,signal)=>genericSnapshot(descriptor,undefined,signal),
+ validate:async(descriptor,binding,signal,mode)=>(await genericSnapshot(descriptor,binding,signal,mode)).valid===true,
+ forget:sourceId=>engine('forget',{sourceId}),cancelPrimary:inspectionId=>engine('cancelInspect',{inspectionId}),
+ classify:error=>classifyFailure(error,'inspect'),hash:stableHash,
+});
 async function verifyMetadataPlan(descriptor){
  const p=descriptor.platform,owned=p?.site==='network-media'&&p.binding==='player-owned';
  if(p?.site!=='metadata-media'&&!owned)return;
@@ -176,10 +195,15 @@ const captureRecoveryReady=chrome.storage.session.get(null).then(async all=>{
  if(remove.length)await chrome.storage.session.remove(remove);
  if(Object.keys(updates).length)await chrome.storage.session.set(updates);
 }).catch(()=>{});
-async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
+async function snapshot(tabId,index=0,preferPicked=true,expectedTarget,skipEarly=false){
   if(!preferPicked)await mediaPicker.clear(tabId);
-  await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',files:['media-observer.js']}).catch(()=>{});
-  const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0,'summary']});
+  // A visible player can be ready while advertising frames keep the page's
+  // load event pending. Read unknown pages now; retain original scheduling
+  // for known platforms and for an inventory that is still empty.
+  let immediate=false;try{immediate=genericPageUrl((await chrome.tabs.get?.(tabId))?.url);}catch{}
+  await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',files:['media-observer.js'],...(immediate?{injectImmediately:true}:{})}).catch(()=>{});
+  let frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0,'summary'],...(immediate?{injectImmediately:true}:{})});
+  if(immediate&&!frames.some(frame=>frame.result?.videos?.length))frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:pageSnapshot,args:[0,'summary']});
   frames.sort((a,b)=>a.frameId-b.frameId);
   const top=frames.find(f=>f.frameId===0)?.result;if(!top)throw new Error('無法讀取目前網頁');
   const collectVideos=()=>{const items=recoverBilibiliRoute(collapseBilibiliPlayers(frames.flatMap(f=>(f.result?.videos || []).map((v,i)=>({...v,frameId:f.frameId,documentId:f.documentId,localMediaIndex:i})))),top,frames.find(f=>f.frameId===0));const mains=items.filter(v=>v.dailymotionMain);if(mains.length===1&&top.dailymotionContext?.id)mains[0].mediaContentId=top.dailymotionContext.id;return items;};
@@ -235,7 +259,12 @@ async function snapshot(tabId,index=0,preferPicked=true,expectedTarget){
   const selectedFrame=selected&&frames.find(f=>f.frameId===selected.frameId&&String(f.documentId||'')===String(selected.documentId||''));
   if(selected?.localMediaIndex != null && (selectedFrame?.result?.discoveryMode==='summary' || selected.localMediaIndex!==0)){
    const previous=selected,frame=frames.find(f=>f.frameId===selected.frameId&&String(f.documentId||'')===String(selected.documentId||''));
-   page=migratedPage || await script(tabId,pageSnapshot,[selected.localMediaIndex,'deep',{maxItems:24,maxMs:1800}],selected.documentId);
+   let earlyPlatform;
+   const owner={tabId,frameId:selected.frameId,documentId:selected.documentId,mediaKey:selected.mediaKey,referer:selected.referer || page.url,platform:page.platform,linkedMedia:selected.linkedMedia};
+   if(!skipEarly&&!migratedPage&&!selectionExpired&&!expectedDeepIdentity&&/^blob:/i.test(selected.url||'')&&genericFallbackEligible(owner)){
+    try{earlyPlatform=earlyPlayerPlatform(owner,await genericSnapshot(owner,undefined,undefined,'early'),stableHash);}catch{}
+   }
+   page=migratedPage || await script(tabId,pageSnapshot,[selected.localMediaIndex,earlyPlatform?'focused':'deep',{maxItems:24,maxMs:1800,...(earlyPlatform?{earlyPlatform}:{})}],selected.documentId);
    // A player can replace/reorder its <video> between the all-frame scan and
    // this selected-frame read. Keep the page metadata, media list, and marker
    // key from one DOM generation; never combine the second scan's player data
@@ -342,16 +371,30 @@ async function handle(message,sender){
    return script(message.tabId,mediaTime,[{mediaKey:message.mediaKey,contentId:message.contentId,sourceUrl:message.sourceUrl,...(message.time!==undefined?{time:message.time}:{})}],message.documentId);
   }
   case 'bilibiliCaptions':return discoverBilibili(message.tabId,{bvid:message.expectedBvid,page:Number(message.expectedPage)||1,expectedCid:Number(message.expectedCid)||0},message.documentId).promise;
-  case 'cancelInspect':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');return engine('cancelInspect',{inspectionId:message.inspectionId});
+  case 'cancelInspect':if(sender.url!==chrome.runtime.getURL('popup.html'))throw new Error('來源未授權');genericRecovery.cancel(message.inspectionId);return engine('cancelInspect',{inspectionId:message.inspectionId});
+  case 'genericInspect':
   case 'inspect':{
-   const descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)},key=descriptor.downloadKey;
+   if(message.action==='genericInspect'&&(sender.url!==chrome.runtime.getURL('popup.html')||!genericFallbackEligible(message.descriptor)))throw Object.assign(new Error('尚未取得此影片來源'),{code:'SOURCE_UNAVAILABLE'});
+   let descriptor={...message.descriptor,downloadKey:downloadKey(message.descriptor)};const key=descriptor.downloadKey;
    await verifyMetadataPlan(descriptor);
    const active=[...work.values()].find(job=>!job.cancelled&&ACTIVE_STATES.has(job.state || (job===runningJob?'running':'queued'))&&job.data?.downloadKey===key);
    const cached=active&&sourceMeta.get(active.data.sourceId)?.result;
    if(cached){const result={...cached,downloadKey:key};sourceMeta.get(active.data.sourceId).lastUsed=Date.now();return result;}
-   const result=await engine('inspect',{descriptor,inspectionId:message.inspectionId});
+   let inspected;
+   try{inspected=await genericRecovery.inspect(descriptor,message.inspectionId);}
+   catch(error){
+    if(descriptor.platform?.binding!=='generic-early'||classifyFailure(error,'inspect').code!=='SOURCE_UNAVAILABLE')throw error;
+    const plan=descriptor.platform.earlyPlan;await verifyGenericPlan(plan);
+    const refreshed=await snapshot(descriptor.tabId,descriptor.mediaIndex||0,true,{frameId:descriptor.frameId,documentId:descriptor.documentId,mediaKey:descriptor.mediaKey,url:plan.binding.source},true);
+    const selected=refreshed.videos[refreshed.mediaIndex];
+    descriptor={...descriptor,url:selected.downloadUrl,sourceType:selected.sourceType,referer:selected.referer || refreshed.url,title:selected.title || refreshed.title,duration:refreshed.media?.duration,drm:refreshed.media?.drm,platform:refreshed.platform,linkedMedia:selected.linkedMedia,mediaKey:selected.mediaKey,frameId:selected.frameId,documentId:selected.documentId,localMediaIndex:selected.localMediaIndex,mediaIndex:refreshed.mediaIndex};
+    await verifyMetadataPlan(descriptor);
+    inspected=await genericRecovery.inspect(descriptor,message.inspectionId,{skipFallback:true});
+   }
+   const {result,genericPlan}=inspected;
    try{await verifyMetadataPlan(descriptor);}catch(error){await engine('forget',{sourceId:result.id}).catch(()=>{});throw error;}
-   result.downloadKey=key;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:key,result,lastUsed:Date.now()});trimSourceMeta();return result;}
+   const resolvedKey=genericPlan?stableHash(['generic-player',key,genericPlan.binding.fingerprint]):key;
+   result.downloadKey=resolvedKey;sourceMeta.set(result.id,{platform:result.platform || descriptor.platform?.site || 'unknown',downloadKey:resolvedKey,result,lastUsed:Date.now(),...(genericPlan?{genericPlan}:{})});trimSourceMeta();return result;}
   case 'browserSubtitle':return engine('subtitle',{sourceId:message.sourceId,index:message.index});
   case 'pageSubtitle':return readPageSubtitle(message);
   case 'captureSubtitle':{
@@ -363,6 +406,7 @@ async function handle(message,sender){
    if(sender.url!==chrome.runtime.getURL('popup.html'))throw Object.assign(new Error('來源未授權'),{code:'UNAUTHORIZED'});
    if(work.size>=20)throw new Error('等待中的下載過多，請等候完成');if(!message.sourceId)throw new Error('請重新整理來源');
    const meta=sourceMeta.get(message.sourceId),range=normalizeRange(message.range,meta?.result?.duration);
+   if(meta?.genericPlan)await verifyGenericPlan(meta.genericPlan);
    if(range&&!meta?.result?.range?.supported)throw Object.assign(new Error('此來源暫不支援區間下載'),{code:'RANGE_UNSUPPORTED'});
    const id=crypto.randomUUID(),key=sourceMeta.get(message.sourceId)?.downloadKey || message.downloadKey || `source:${message.sourceId}`;
    const claim=downloadClaims.claim(key,id);if(!claim.claimed)return {duplicate:true,id:claim.id};

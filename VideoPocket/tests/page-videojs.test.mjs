@@ -28,7 +28,7 @@ function documentFor(videos,wrappers=[],title='MMOV'){
   };
 }
 
-async function snapshot({videos,players=[],wrappers=[],resources=[],observer,evidence,mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV'}){
+async function snapshot({videos,players=[],wrappers=[],resources=[],observer,evidence,mediaIndex=0,pageUrl='https://hk.mmov.io/vodplay/416398/6-1.html',pageTitle='MMOV',mode='deep',budget={}}){
   const saved=new Map();
   const values={document:documentFor(videos,wrappers,pageTitle),window:{videojs:players.length?{getAllPlayers:()=>players}:undefined},location:{href:'https://hk.mmov.io/vodplay/416398/6-1.html',hostname:'hk.mmov.io',origin:'https://hk.mmov.io',pathname:'/vodplay/416398/6-1.html',search:''},performance:{getEntriesByType:kind=>kind==='resource'?resources.map(name=>({name})):[]}};
   const url=new URL(pageUrl);values.location={href:url.href,hostname:url.hostname,origin:url.origin,pathname:url.pathname,search:url.search};
@@ -38,10 +38,18 @@ async function snapshot({videos,players=[],wrappers=[],resources=[],observer,evi
     saved.set(key,Object.prototype.hasOwnProperty.call(globalThis,key)?globalThis[key]:absent);
     globalThis[key]=value;
   }
-  try{return await pageSnapshot(mediaIndex);}finally{
+  try{return await pageSnapshot(mediaIndex,mode,budget);}finally{
     for(const [key,value] of saved){if(value===absent)delete globalThis[key];else globalThis[key]=value;}
   }
 }
+
+test('focused discovery retains the media inventory and skips broad model scans and metadata queues',{concurrency:false},async()=>{
+ const a=video({title:'Actual title'}),b=video(),fail=()=>assert.fail('focused source must not run broad exploration');
+ const earlyPlatform={site:'network-media',binding:'generic-early',title:'Current playlist title',versions:[{url:'https://cdn.test/main.mp4'}]};
+ const p=await snapshot({videos:[a,b],mode:'focused',budget:{earlyPlatform},observer:{scanDocument:fail,drainMetadata:fail,modelFor:fail,sourcesFor:fail,diagnosticsFor:fail}});
+ assert.equal(p.platform,earlyPlatform);assert.equal(p.videos.length,2);assert.equal(p.media.discoveryDiagnostics.explorationReason,'player-first');assert.equal(p.media.discoveryDiagnostics.count,0);
+ assert.equal(p.videos[0].title,'Current playlist title');assert.notEqual(p.videos[1].title,'Current playlist title');
+});
 
 test('a missing feed source carries only its exact same-origin player permalink',{concurrency:false},async()=>{
  const a=video({src:''}),b=video({src:''}),observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]})};

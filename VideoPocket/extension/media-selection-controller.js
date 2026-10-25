@@ -51,7 +51,9 @@ export function createMediaSelectionController(api){
     if(!requestId)latestRequests.delete(tabId);
     const current=active.get(tabId);
     if(current && (!requestId || current.requestId===requestId))active.delete(tabId);
-    try{await api.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:cancelMediaPicker,args:[{requestId}]});}catch{}
+    // Cleanup only touches an existing picker. Waiting for unrelated frames
+    // to finish loading can otherwise stall a refresh before discovery starts.
+    try{await api.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:cancelMediaPicker,args:[{requestId}],injectImmediately:true});}catch{}
   };
   const begin=async tabId=>{
     const requestId=crypto.randomUUID();

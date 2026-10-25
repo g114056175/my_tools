@@ -5,6 +5,14 @@ import { attachNetworkSources, networkFallbackReason, verifiedNetworkSource, sco
 
 const record = (url, extra = {}) => ({ url, originalUrl: url, kind: 'progressive', time: 10, service: 'generic', tabId: 1, frameId: 0, documentId: 'doc', method: 'GET', ...extra });
 
+test('an active Video.js transport cannot be replaced by stale currentSources',()=>{
+ const video={url:'blob:main',downloadUrl:'https://cdn.test/current.m3u8',activePlayerSource:'https://cdn.test/current.m3u8',mediaKey:4,frameId:0,documentId:'doc',sourceCandidates:[{url:'https://cdn.test/advert.m3u8',kind:'hls',evidence:['player-owned-source'],sourceGroup:'player-current-sources'}]};
+ const page={tabId:1,frameId:0,documentId:'doc',mediaIndex:0,videos:[video],media:{url:'blob:main',mediaKey:4,duration:20}};
+ assert.equal(attachNetworkSources(page,[]),page);
+ const early={...page,platform:{site:'network-media',binding:'generic-early',versions:[{url:'https://cdn.test/current.m3u8'}]}};
+ assert.equal(attachNetworkSources(early,[record('https://cdn.test/advert.m3u8',{kind:'hls'})]),early);
+});
+
 test('serialized owned-source verification detects reused players and changed alternatives',()=>{
  const video={currentSrc:'blob:current',duration:20,isConnected:true},other={currentSrc:'blob:ad',duration:20};
  const keys=new WeakMap([[video,4],[other,5]]),url='https://cdn.test/selected.mp4';

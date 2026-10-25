@@ -49,6 +49,7 @@ export function createMediaMenu(source, root, onActivate = () => {}) {
     for (const item of options) {
       const option = doc.createElement('option');
       option.value = item.value;option.textContent = label(item);
+      option.setAttribute('data-current', String(item.value === source.value));
       option.dataset && (option.dataset.fullTitle = item.textContent);
       option.title = item.title || item.textContent;option.disabled = !!item.disabled;
       select.append(option);

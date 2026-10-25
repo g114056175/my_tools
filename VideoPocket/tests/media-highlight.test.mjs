@@ -89,7 +89,7 @@ test('name badge lasts eight seconds and hides while a different modal covers th
  globalThis.setInterval=fn=>{tick=fn;return 2;};globalThis.clearInterval=()=>{};
  try{
   identities([[video,5]]);highlightMedia({mediaKey:5,title:'flower'});const frame=state.body.children[0];
-  assert.equal(frame.children[0].textContent,'flower');assert.equal(frame.style.border,'3px solid #16856b');assert.equal(frame.style.position,'absolute');assert.equal(frame.style.zIndex,'2');assert.equal(duration,8000);
+  assert.equal(frame.children[0].textContent,'flower');assert.equal(frame.style.border,'3px solid #2b85bf');assert.equal(frame.style.position,'absolute');assert.equal(frame.style.zIndex,'2');assert.equal(duration,8000);
   const modal=new NodeMock('div');state.body.nodes=[modal];tick();assert.equal(frame.style.display,'none');
   modal.rect.width=0;tick();assert.equal(frame.style.display,'block');expire();assert.equal(state.body.children.length,0);
  }finally{highlightMedia({clear:true});Object.assign(globalThis,old);state.restore();}

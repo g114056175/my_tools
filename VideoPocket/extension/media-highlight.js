@@ -52,7 +52,7 @@ export function highlightMedia(options = {}) {
   frame.setAttribute?.('data-video-pocket-media-highlight', '1');
   Object.assign(frame.style, {
     position: 'absolute', zIndex: '2', pointerEvents: 'none',
-    border: '3px solid #16856b', outline:'1px solid #ffffffb3', boxSizing: 'border-box', display: 'block', visibility:'hidden',
+    border: '3px solid #2b85bf', outline:'1px solid #ffffffb3', boxSizing: 'border-box', display: 'block', visibility:'hidden',
     margin:'0',padding:'0',transition:'none',animation:'none',transform:'none',
   });
   const label=globalThis.document.createElement('div');
@@ -60,7 +60,7 @@ export function highlightMedia(options = {}) {
   // generic aria/title/document strings frequently describe the page rather
   // than this media element.
   label.textContent=String(options.title ?? '').trim() || '影片';
-  Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'min(calc(100% - 6px), calc(100vw - 12px))',boxSizing:'border-box',padding:'3px 6px',borderRadius:'3px',background:'#16856b',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
+  Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'min(calc(100% - 6px), calc(100vw - 12px))',boxSizing:'border-box',padding:'3px 6px',borderRadius:'3px',background:'#2b85bf',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
   frame.append(label);
   const blockedByDialog=()=>{
     try{return [...globalThis.document.querySelectorAll('dialog[open],[role="dialog"],[aria-modal="true"]')].some(dialog=>{

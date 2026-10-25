@@ -91,7 +91,7 @@ test('explicit clear cancels the picker and waits for a pending selection write 
  const order=[];let selected,release;
  const api={action:{setBadgeText:async()=>{}},storage:{session:{set:async()=>{order.push('write-start');await new Promise(r=>release=r);order.push('write-end');},remove:async()=>order.push('remove')}},scripting:{executeScript:async request=>{
   if(!request.args)return [frames[0]];
-  if(request.func.name==='cancelMediaPicker')return [];
+  if(request.func.name==='cancelMediaPicker'){assert.equal(request.injectImmediately,true,'picker cleanup must not wait for an unrelated frame to finish loading');return [];}
   return new Promise(resolve=>{selected=()=>resolve([{result:{ok:true,requestId:request.args[0].requestId,mediaKey:1}}]);});
  }}};
  const controller=createMediaSelectionController(api);await controller.begin(3);selected();await new Promise(r=>setImmediate(r));

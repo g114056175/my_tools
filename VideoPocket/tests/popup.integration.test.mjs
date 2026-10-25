@@ -47,6 +47,7 @@ const pageFor = () => {
 globalThis.chrome = {
   runtime:{connect:()=>({postMessage:message=>{if(message.action==='highlightMedia'){state.lastHighlight=message;(state.highlightMessages ||= []).push(message);}},onDisconnect:{addListener:fn=>{disconnectPopup=fn;}}}),sendMessage:async message => {
     if (message.action === 'snapshot') { state.snapshotCalls++;state.lastSnapshot=message; return {ok:true,result:state.snapshotHandler?await state.snapshotHandler(message):pageFor()}; }
+    if (message.action === 'genericInspect'){state.genericInspectCalls=(state.genericInspectCalls || 0)+1;state.lastGenericInspect=message;return state.genericInspectHandler?state.genericInspectHandler(message):{ok:false,error:'no source',failure:{code:'SOURCE_UNAVAILABLE'}};}
     if (message.action === 'cancelInspect'){state.cancelled.push(message.inspectionId);return {ok:true,result:{}};}
     if (message.action === 'waitMediaSource'){state.lastReadiness=message;return {ok:true,result:state.readinessHandler?await state.readinessHandler(message):{ready:false}};}
     if (message.action === 'inspect'&&state.inspectHandler){state.inspectCalls++;return state.inspectHandler(message);}
@@ -284,6 +285,21 @@ test('named options move above placeholders while switching retains the original
   select.value='2';await select.dispatch('change');await wait(()=>state.lastReadiness?.mediaKey===3&&!documentMock.getElementById('download').disabled);
   assert.equal(state.lastSnapshot.expectedTarget.mediaKey,3);assert.equal(select.value,'2');
  }finally{state.snapshotHandler=null;state.inspectHandler=null;}
+});
+
+test('a source-less unknown selected player can request the separate generic route without new UI',async()=>{
+ state.phase=3;const before=state.inspectCalls;
+ state.snapshotHandler=()=>({url:'https://unknown.test/watch',title:'Page',documentId:'generic-doc',frameId:0,mediaIndex:0,videos:[{title:'影片 1',mediaKey:7,documentId:'generic-doc',frameId:0}],media:{mediaKey:7,duration:60},tracks:[]});
+ state.genericInspectHandler=async()=>({ok:true,result:readyInfo});
+ try{
+  await documentMock.getElementById('refresh').click();await wait(()=>!documentMock.getElementById('download').disabled);
+  assert.equal(state.lastGenericInspect.descriptor.mediaKey,7);assert.equal(state.lastGenericInspect.descriptor.title,'影片 1');
+  assert.equal(state.lastGenericInspect.descriptor.documentId,'generic-doc');assert.equal(state.inspectCalls,before);
+  const genericCalls=state.genericInspectCalls;
+  state.snapshotHandler=()=>({url:'https://x.com/a/status/1',title:'X',documentId:'x-doc',frameId:0,videos:[{title:'影片 1',mediaKey:7,documentId:'x-doc',frameId:0}],media:{mediaKey:7,duration:60},tracks:[]});
+  await documentMock.getElementById('refresh').click();await wait(()=>documentMock.getElementById('sourceLabel').textContent==='找到影片，但無下載來源');
+  assert.equal(state.genericInspectCalls,genericCalls);
+ }finally{state.snapshotHandler=null;state.genericInspectHandler=null;}
 });
 
 test('a transient Dailymotion refusal performs only one delayed snapshot retry',async()=>{

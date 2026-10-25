@@ -20,7 +20,9 @@ test('native media menu activates the current item repeatedly without changing b
  assert.equal(s.select.options[0].hidden,true);assert.equal(s.select.title,'影片一完整標題');
 });
 test('native menu follows current title and options after feed refresh',()=>{
- const s=setup();s.source.value='1';s.api.render();assert.equal(s.select.options[0].textContent,'影片 2');
+ const s=setup();assert.equal(s.select.options[1].attributes['data-current'],'true');assert.equal(s.select.options[2].attributes['data-current'],'false');
+ s.source.value='1';s.api.render();assert.equal(s.select.options[0].textContent,'影片 2');
+ assert.equal(s.select.options[1].attributes['data-current'],'false');assert.equal(s.select.options[2].attributes['data-current'],'true');
  s.select.value='1';s.select.listeners.change();assert.deepEqual(s.calls,['1']);
  const before=s.select.options;s.api.render();assert.equal(s.select.options,before);
 });

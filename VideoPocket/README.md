@@ -1,6 +1,6 @@
 # VideoPocket - 網頁媒體下載與擷取 <img src="extension/icons/48.png" width="32" height="32" alt="VideoPocket icon">
 
-**[下載 ZIP（約 2.2 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=380326ff2a15)** · 解壓約 6.9 MB · Chrome 120 以上
+**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=cbc81d683b78)** · 解壓約 6.9 MB · Chrome 120 以上
 
 在網頁中選擇影片，下載影片、音檔或字幕；所有處理都在本機瀏覽器完成。
 
@@ -29,7 +29,7 @@
 
 ## 介面與功能
 
-頂部選單切換影片，「⌖」可直接在網頁中選取播放器，「↻」重新偵測來源。綠框標示目前選中的影片。
+頂部選單切換影片，「⌖」可直接在網頁中選取播放器，「↻」重新偵測來源。藍框標示目前選中的影片。
 
 ### 影片
 
@@ -62,6 +62,7 @@
 
 - **Chrome Manifest V3**：popup 提供介面，service worker 管理工作，offscreen document 與 worker 執行下載及影音處理。
 - **選片與解析**：讀取影片元素、Shadow DOM、播放器設定及播放中繼資料；以文件、播放器與媒體識別配對來源，避免混用廣告或其他影片。
+- **通用探索**：借鑑 [yt-dlp Generic](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/generic.py) 的分層探索方式，辨識 JW Player、Video.js 與 JSON-LD，並核對來源是否屬於所選影片。
 - **探索預算**：載入網頁時保留有限的來源觀察資料，開啟工具或選片後才深入解析。候選數量、容量及探索時間有上限，不保存影片播放緩衝或建立網域學習紀錄。
 - **共同流程**：平台來源正規化後，共用畫質選擇、HLS／DASH 解析、傳輸、合併及儲存流程；YouTube／Bilibili 等特殊協定由各自模組處理。
 

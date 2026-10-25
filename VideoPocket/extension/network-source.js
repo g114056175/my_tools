@@ -16,8 +16,12 @@ function ownedSourcePlan(page,selected){
   if(!captured||current&&current!==captured)return null;
   const expectedDuration=Number(page.media?.duration||selected.duration);
   if(!Number.isFinite(expectedDuration)||expectedDuration<=0)return null;
+  // The selected Video.js tech's active transport is stronger evidence than
+  // stale welcome/ad URLs retained by its public currentSources cache.
+  const active=http(selected.activePlayerSource);
   const versions=[];
   for(const item of (selected.sourceCandidates || []).slice(0,12)){
+    if(active&&active===http(selected.downloadUrl)&&http(item?.url)!==active)continue;
     if(!http(item?.url)||!KINDS.has(item.kind)||!Array.isArray(item.evidence)||!item.evidence.some(value=>OWNED_EVIDENCE.test(value)))continue;
     const grouped=item.sourceGroup==='player-current-sources'&&item.evidence.includes('player-owned-source') || item.sourceGroup==='source-elements'&&item.evidence.includes('source-element');
     const candidateGroup=grouped?{kind:'player',id:JSON.stringify([selected.mediaKey,captured,item.sourceGroup]),scope:{tabId,frameId,documentId}}:undefined;
@@ -162,6 +166,7 @@ export function attachNetworkSources(page, records = []) {
   if (!page || page.selectionExpired) return page;
   const selected = page.videos?.[Number(page.mediaIndex) || 0];
   if (!selected) return page;
+  if(page.platform?.binding==='generic-early')return page;
   if (page.media?.drm || selected.drm) return page;
   // Core resolvers and already scoped social candidates retain their own
   // verification route instead of being replaced by a second ambient plan.

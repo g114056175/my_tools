@@ -18,6 +18,7 @@ export function resolveBilibiliIdentity(rawUrl,state={},pageNumber){
 }
 
 export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetConfig={}){
+  const earlyPlatform=discoveryMode==='focused'&&budgetConfig.earlyPlatform?.binding==='generic-early'?budgetConfig.earlyPlatform:null;
   // executeScript serializes this function into MAIN; keep injected helpers
   // inside it instead of relying on module scope.
   const resolveIdentity=(rawUrl,state={},pageNumber)=>{
@@ -64,7 +65,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   const sourceObserver=window[Symbol.for('video-pocket.mediaObserver')];
   const deepDiscovery=discoveryMode!=='summary';
   const clock=()=>typeof performance?.now==='function'?performance.now():Date.now();
-  const deepStarted=clock(),deepMaxMs=Math.max(50,Math.min(30000,Number(budgetConfig.maxMs)||1800)),deepMaxItems=Math.max(1,Math.min(64,Number(budgetConfig.maxItems)||24));let deepCount=0,deepReason='complete';
+  const deepStarted=clock(),deepMaxMs=Math.max(50,Math.min(30000,Number(budgetConfig.maxMs)||1800)),deepMaxItems=Math.max(1,Math.min(64,Number(budgetConfig.maxItems)||24));let deepCount=0,deepReason=earlyPlatform?'player-first':'complete';
   const deepTake=()=>{if(deepCount>=deepMaxItems||clock()-deepStarted>=deepMaxMs){deepReason=deepCount>=deepMaxItems?'item-budget':'time-budget';return false;}deepCount++;return true;};
   const registered=sourceObserver?.videosSnapshot?.(256) || [];
   const rawVideos=[...new Set([...registered,...roots.flatMap(root=>[...root.querySelectorAll('video')].slice(0,256))])].slice(0,256),availableVideos=new Set(rawVideos);
@@ -191,11 +192,11 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
   const source=v=>v.currentSrc || elementSource(v) || [...v.querySelectorAll('source')].map(elementSource).find(Boolean) || '';
   const http=raw=>{try{const u=new URL(raw,location.href);return /^https?:$/.test(u.protocol)&&raw?u.href:null;}catch{return null;}};
   const resources=performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/\.(mpd|m3u8)(?:\?|$)/i.test(u));
-  let platform,captionStatus,dailymotionContext,bilibiliContext;
+  let platform=earlyPlatform || undefined,captionStatus,dailymotionContext,bilibiliContext;
   const snapshotModels=new WeakMap();let embeddedModel;
-  const observedModel=v=>{if(!v||v!==video)return null;if(!snapshotModels.has(v)){let model=null;try{model=sourceObserver?.modelFor?.(v,{drain:false}) || null;}catch{}snapshotModels.set(v,model);}return snapshotModels.get(v);};
+  const observedModel=v=>{if(earlyPlatform||!v||v!==video)return null;if(!snapshotModels.has(v)){let model=null;try{model=sourceObserver?.modelFor?.(v,{drain:false}) || null;}catch{}snapshotModels.set(v,model);}return snapshotModels.get(v);};
   try{
-    if(deepTake()){const pending=sourceObserver?.drainMetadata?.(16,deepTake,video);if(pending?.queued&&deepReason==='complete')deepReason='metadata-budget';}else deepReason='metadata-budget';
+    if(!earlyPlatform){if(deepTake()){const pending=sourceObserver?.drainMetadata?.(16,deepTake,video);if(pending?.queued&&deepReason==='complete')deepReason='metadata-budget';}else deepReason='metadata-budget';
     let scripts=0;
     if(deepTake())sourceObserver?.scanDocument?.(videos,()=>scripts++<8&&deepTake(),video);else deepReason='document-budget';
     embeddedModel=observedModel(video);
@@ -213,7 +214,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
           else{platform.manifestUrl=current.url;platform.manifestType=current.kind;}
         }
       }
-    }
+    }}
   }catch{}
   try{
     dailymotionContext=sourceObserver?.pageContext?.() || undefined;
@@ -294,10 +295,10 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
       ()=>instance?.playlistController_?.mainPlaylistLoader_?.main.uri,
       ()=>instance?.vhs?.playlist?.uri,
     ];
-    for(const getter of direct){const value=readHttp(getter);if(value)return value;}
+    for(const [i,getter] of direct.entries()){const value=readHttp(getter);if(value)return {url:value,active:i<7};}
     // These are normal Video.js runtime APIs and are deliberately read-only;
     // they are fallback signals after the active VHS source fields above.
-    for(const getter of [()=>instance?.currentSource?.()?.src,()=>instance?.currentSrc?.(),()=>instance?.currentSources?.()?.map(s=>s?.src).find(src=>http(src))]){const value=readHttp(getter);if(value)return value;}
+    for(const getter of [()=>instance?.currentSource?.()?.src,()=>instance?.currentSrc?.(),()=>instance?.currentSources?.()?.map(s=>s?.src).find(src=>http(src))]){const value=readHttp(getter);if(value)return {url:value,active:false};}
     return null;
   };
   const identities=window[Symbol.for('video-pocket.identities')] ||= {keys:new WeakMap(),next:0};
@@ -306,10 +307,10 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     const candidate=candidates[i];candidate.mediaKey=identities.keys.get(v);candidate.url=source(v);candidate.downloadUrl=candidate.adapterDownloadUrl || null;delete candidate.adapterDownloadUrl;
     // Keep element-owned alternatives separate from ambient network records.
     // Background can verify these even when this frame has several players.
-    let observedSources;try{candidate.sourceCandidates=[];if(i===mediaIndex&&deepTake()){observedSources=sourceObserver?.sourcesFor?.(v);candidate.sourceCandidates=(observedSources?.candidates || []).filter(item=>item.downloadable!==false&&http(item.url)&&['hls','dash','progressive'].includes(item.kind)).slice(0,12).map(item=>({url:http(item.url),kind:item.kind,evidence:(item.evidence || []).filter(value=>typeof value==='string').slice(0,8),...(item.sourceGroup?{sourceGroup:item.sourceGroup}:{})}));}}catch{}
+    let observedSources;try{candidate.sourceCandidates=[];if(!earlyPlatform&&i===mediaIndex&&deepTake()){observedSources=sourceObserver?.sourcesFor?.(v);candidate.sourceCandidates=(observedSources?.candidates || []).filter(item=>item.downloadable!==false&&http(item.url)&&['hls','dash','progressive'].includes(item.kind)).slice(0,12).map(item=>({url:http(item.url),kind:item.kind,evidence:(item.evidence || []).filter(value=>typeof value==='string').slice(0,8),...(item.sourceGroup?{sourceGroup:item.sourceGroup}:{})}));}}catch{}
     if(dailymotionMain(v))candidate.dailymotionMain=true;
     let modelTitle='';try{modelTitle=named(observedModel(v)?.title);}catch{}
-    candidate.title=resolveTitle(v,i,mainTitle(v)||modelTitle||(dailymotionMain(v)?dailymotionContext?.title:''));
+    candidate.title=resolveTitle(v,i,mainTitle(v)||modelTitle||(i===mediaIndex?earlyPlatform?.title:'')||(dailymotionMain(v)?dailymotionContext?.title:''));
     try{
       const identity=window[Symbol.for('video-pocket.sourceEvidence')]?.collectMediaEvidence?.({video:v,root:document,pageUrl:location.href})?.identity;
       candidate.selectionIdentity=identity?.key || '';
@@ -327,7 +328,8 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     if(!candidate.downloadUrl){
       for(const instance of videojsPlayers)try{
         if(!playerOwnership(instance,v))continue;
-        candidate.downloadUrl=http(readVideoJsSource(instance));
+        const current=readVideoJsSource(instance);candidate.downloadUrl=http(current?.url);
+        if(current?.active&&candidate.downloadUrl)candidate.activePlayerSource=candidate.downloadUrl;
         if(candidate.downloadUrl)break;
       }catch{}
       if(!candidate.downloadUrl)for(const instance of [...instances,v.hls])try{if(instance&&(instance.media===v || instance.getVideoElement?.()===v)){candidate.downloadUrl=http(instance.url || instance.getSource?.());if(candidate.downloadUrl)break;}}catch{}
@@ -438,7 +440,7 @@ export async function pageSnapshot(mediaIndex=0, discoveryMode='deep', budgetCon
     const plan=deepTake()?sourceObserver?.metadataCandidatesFor?.(video,videos):null;
     if(plan?.versions?.length)platform={site:'metadata-media',binding:'metadata-unbound',expectedDuration:plan.expectedDuration,versions:plan.versions,validationToken:plan.token,bindingKey:plan.bindingKey};
   }catch{}
-  let discoveryDiagnostics;try{if(video&&!embeddedModel)discoveryDiagnostics=sourceObserver?.diagnosticsFor?.(video);}catch{}
+  let discoveryDiagnostics;try{if(video&&!earlyPlatform&&!embeddedModel)discoveryDiagnostics=sourceObserver?.diagnosticsFor?.(video);}catch{}
   discoveryDiagnostics={...(discoveryDiagnostics||{}),explorationReason:deepReason,count:deepCount,timingMs:Math.round(clock()-deepStarted)};
   return {url:location.href,title,tracks,platform,dailymotionContext,bilibiliContext,captionStatus,captionInventory:Array.isArray(renderer?.captionTracks),videos:candidates,mediaIndex,preferredMediaIndex,language:document.documentElement.lang,preferredLanguages:navigator.languages,media:video?{url:source(video),mediaKey:identities.keys.get(video),discoveryReason:candidates[mediaIndex]?.discoveryReason,discoveryDiagnostics,drm:!!video.mediaKeys,time:video.currentTime,duration:Number.isFinite(video.duration)?video.duration:null}:null};
 }

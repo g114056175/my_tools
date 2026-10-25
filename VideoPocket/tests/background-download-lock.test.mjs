@@ -14,12 +14,14 @@ import {normalizeRange} from '../extension/media-range.js';
 import {mediaTime} from '../extension/media-time.js';
 import {isGenericMediaTitle} from '../extension/media-titles.js';
 import {validateDocumentMediaPlan} from '../extension/document-media.js';
+import {createGenericFallback,genericFallbackEligible,earlyPlayerPlatform,genericPageUrl} from '../extension/generic-fallback.js';
+import {genericPlayerSnapshot} from '../extension/generic-player.js';
 
-async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserSaveError}={}) {
+async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserSaveError,inspectHandler,genericSnapshots=[],tabUrl}={}) {
   const source=await fs.readFile(new URL('../extension/background.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const stored={};let listener,tabUpdateListener,connectListener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,retainRelease;
-  const sources=new Map(),engineMessages=[],browserDownloads=[];let downloadChanged;
+  const sources=new Map(),engineMessages=[],browserDownloads=[],genericCalls=[];let downloadChanged;
   const browserItem={id:71,state:browserDownloadState};
   const pageSnapshotMock=()=>({});
   const session={
@@ -30,6 +32,7 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   const chrome={
     runtime:{id:'ext',getURL:path=>`chrome-extension://ext/${path}`,getContexts:async()=>[],sendMessage:async message=>{
       engineMessages.push(message);
+      if(message.action==='inspect'&&inspectHandler){const value=await inspectHandler(message);if(value)return value;}
       if(message.action==='inspect'){const id=`source-${++inspectNo}`,d=message.descriptor;sources.set(id,{title:d.title||'',platform:d.platform?.site||'unknown'});return {ok:true,result:{id,title:d.title||'',platform:d.platform?.site||'unknown',...inspectionInfo}};}
       if(message.action==='download'&&downloadFailure)return {ok:false,error:'private CDN response',failure:downloadFailure};
       if(message.action==='download'&&downloadResult)return {ok:true,result:downloadResult};
@@ -42,16 +45,19 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
     declarativeNetRequest:{getSessionRules:async()=>[],updateSessionRules:async()=>{}},
     downloads:{onChanged:{addListener:fn=>{downloadChanged=fn;}},search:async()=>browserItem.state?[browserItem]:[],cancel:async()=>{},pause:async()=>{},resume:async()=>{},...(browserDownloadState||browserSaveError?{download:async options=>{browserDownloads.push(options);const error=typeof browserSaveError==='function'?browserSaveError(options,browserDownloads.length):browserSaveError;if(error)throw error;return browserItem.id;}}:{})},
     scripting:{executeScript:async request=>{
+      scriptRequests.push(request);
       if(request.files)return [];
+      if(request.func===genericPlayerSnapshot){genericCalls.push(request);return [{documentId:request.target.documentIds[0],result:genericSnapshots.shift() || {valid:false}}];}
       if(request.func===validateDocumentMediaPlan||request.func===validateOwnedSourcePlan)return [{documentId:request.target.documentIds[0],result:{valid:metadataValidations.shift()===true}}];
       if(request.func===pageSnapshotMock&&request.target?.documentIds){const value=frameSnapshots.shift();return value?[{frameId:request.target.documentIds[0]==='child'?2:0,documentId:request.target.documentIds[0],result:value}]:[];}
       return frames;
     }},
-    tabs:{onRemoved:{addListener:()=>{}},onUpdated:{addListener:fn=>{tabUpdateListener=fn;}}},
+    tabs:{get:async()=>({url:tabUrl}),onRemoved:{addListener:()=>{}},onUpdated:{addListener:fn=>{tabUpdateListener=fn;}}},
     windows:{onRemoved:{addListener:()=>{}},getAll:async()=>[{}]},
     action:{setBadgeText:async()=>{}}
   };
-  const context={chrome,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,setInterval:()=>0,
+  const scriptRequests=[];
+  const context={chrome,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,setInterval:()=>0,createGenericFallback,genericFallbackEligible,earlyPlayerPlatform,genericPageUrl,genericPlayerSnapshot,
     pageSnapshot:pageSnapshotMock,pageSubtitles:()=>({}),createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
     ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,mediaRequestHeaders:()=>[],
@@ -61,8 +67,58 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(typeof listener,'function');
   const call=(message,sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:'popup-doc'})=>new Promise((resolve,reject)=>listener(message,sender,response=>response?.ok?resolve(response.result):reject(Object.assign(new Error(response?.error||'failed'),response?.failure||{}))));
-  return {connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,browserDownloads,async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
+  return {scriptRequests,connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,browserDownloads,genericCalls,async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
 }
+
+test('existing successful background inspections never run the new collector',async()=>{
+ const rt=await loadBackground();
+ for(const referer of ['https://www.youtube.com/watch?v=one','https://x.com/a/status/1','https://unknown.test/watch']){
+  const result=await rt.call({action:'inspect',inspectionId:referer,descriptor:{referer,url:'https://cdn.test/old.mp4',title:'real title',tabId:1,frameId:0,documentId:'doc',mediaKey:7}});
+  assert.equal(result.title,'real title');
+ }
+ assert.equal(rt.genericCalls.length,0);assert.equal(rt.engineMessages.filter(m=>m.action==='inspect').length,3);
+});
+
+test('ready unknown-page inventory is injected immediately while known platforms keep their original scheduling',async()=>{
+ for(const url of ['https://unknown.test/watch','https://www.youtube.com/watch?v=one']){
+  const video={url:'blob:one',mediaKey:1,title:'Real title'},summary={url,title:'Real title',discoveryMode:'summary',videos:[video]},deep={url,title:'Real title',videos:[video],media:{url:'blob:one',mediaKey:1,duration:60}};
+  const rt=await loadBackground({tabUrl:url,frames:[{frameId:0,documentId:'doc',result:summary}],frameSnapshots:[deep]});
+  await rt.call({action:'snapshot',tabId:1,preferPicked:false});
+  const inventory=rt.scriptRequests.find(r=>r.func&&r.target?.allFrames&&r.args?.[1]==='summary'),file=rt.scriptRequests.find(r=>r.files);
+  assert.equal(inventory.injectImmediately,url.includes('unknown')?true:undefined);assert.equal(file.injectImmediately,inventory.injectImmediately);
+  const selected=rt.scriptRequests.find(r=>r.func&&r.target?.documentIds&&r.args?.[1]==='deep');assert.equal(selected.injectImmediately,true);
+ }
+});
+
+test('an empty early inventory falls back to the original document-load scheduling',async()=>{
+ const page={url:'https://unknown.test/loading',title:'Loading',discoveryMode:'summary',videos:[]};
+ const rt=await loadBackground({tabUrl:page.url,frames:[{frameId:0,documentId:'doc',result:page}]});
+ const result=await rt.call({action:'snapshot',tabId:1});assert.equal(result.videos.length,0);
+ const scans=rt.scriptRequests.filter(r=>r.func&&r.target?.allFrames);
+ assert.equal(scans.length,2);assert.equal(scans[0].injectImmediately,true);assert.equal(scans[1].injectImmediately,undefined);
+});
+
+test('background unknown-player recovery stays scoped and revalidates before download',async()=>{
+ const descriptor={referer:'https://unknown.test/watch',tabId:1,frameId:0,documentId:'doc',mediaKey:7,title:'影片 1'};
+ const binding={mediaKey:7,source:'blob:one',pageUrl:descriptor.referer,fingerprint:'selected-runtime'};
+ const rt=await loadBackground({genericSnapshots:[{binding,duration:60,candidates:[{url:'https://cdn.test/owned.mp4',kind:'progressive'}]},{valid:true},{valid:true},{valid:false}],inspectHandler:async message=>message.descriptor.platform?.site==='network-media'?{ok:true,result:{id:'recovered',duration:60,title:'影片 1'}}:{ok:false,error:'no source',failure:{code:'SOURCE_UNAVAILABLE'}}});
+ const result=await rt.call({action:'genericInspect',inspectionId:'generic',descriptor});
+ assert.equal(result.id,'recovered');assert.equal(rt.genericCalls.length,3);
+ assert.ok(rt.genericCalls.every(r=>r.target.documentIds[0]==='doc'&&r.target.tabId===1));
+ assert.equal(rt.engineMessages.filter(m=>m.action==='inspect').length,2);
+ await assert.rejects(rt.call({action:'prepareDownload',sourceId:result.id,kind:'video'}),{code:'SOURCE_CHANGED'});
+ assert.equal(rt.jobs().length,0);assert.equal(rt.engineMessages.some(m=>m.action==='retain'),false);
+});
+
+test('new generic entry cannot be used to route known platforms around their old failures',async()=>{
+ const rt=await loadBackground({inspectHandler:async()=>({ok:false,error:'old failure',failure:{code:'SOURCE_UNAVAILABLE'}})});
+ for(const referer of ['https://www.youtube.com/watch?v=one','https://x.com/a/status/1','https://www.instagram.com/reel/one/']){
+  const descriptor={referer,tabId:1,frameId:0,documentId:'doc',mediaKey:1};
+  await assert.rejects(rt.call({action:'inspect',descriptor}),{code:'SOURCE_UNAVAILABLE'});
+  await assert.rejects(rt.call({action:'genericInspect',descriptor}),{code:'SOURCE_UNAVAILABLE'});
+ }
+ assert.equal(rt.genericCalls.length,0);
+});
 
 test('opening an idle popup cleans orphaned media without requiring a video inspection',async()=>{
  const rt=await loadBackground(),before=rt.engineMessages.filter(m=>m.action==='recoverMedia').length;

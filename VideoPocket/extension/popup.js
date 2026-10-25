@@ -10,6 +10,7 @@ import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,source
 import {createMediaMenu} from './media-menu.js';
 import {createRangeController} from './range-controls.js';
 import {stableHash} from './download-identity.js';
+import {genericFallbackEligible} from './generic-fallback.js';
 import './destinations.js';
 const $=id=>document.getElementById(id);
 let rangeSelection,rangeDraft=null,rangeRestoredTarget='',restoringRange=false,rangeDraftSerialized='';
@@ -123,9 +124,10 @@ async function inspect(token,force=false,allowSourceRetry=true){
   const currentPage=page,index=mediaIndex,selected=currentPage.videos?.[index] || {},id=crypto.randomUUID();
   inspectionId=id;sourcePhase='inspecting';sourceState('','');
   try{
-    if(!selected.downloadUrl&&!currentPage.platform&&!selected.linkedMedia)throw Object.assign(new Error(mediaDiscoveryHint() || '尚未取得此影片來源'),{code:'SOURCE_UNAVAILABLE'});
     const descriptor={tabId:tab.id,documentId:currentPage.documentId,url:selected.downloadUrl,sourceType:selected.sourceType,referer:selected.referer || currentPage.url,title:selected.title || currentPage.title,duration:currentPage.media?.duration,drm:currentPage.media?.drm,platform:currentPage.platform,linkedMedia:selected.linkedMedia,mediaKey:selected.mediaKey ?? currentPage.media?.mediaKey,frameId:selected.frameId ?? currentPage.frameId,localMediaIndex:selected.localMediaIndex ?? currentPage.localMediaIndex,mediaIndex:index};
-    const value=await sourceDeadline(()=>send('inspect',{descriptor,inspectionId:id,force}));
+    const missing=!selected.downloadUrl&&!currentPage.platform&&!selected.linkedMedia;
+    if(missing&&!genericFallbackEligible(descriptor))throw Object.assign(new Error(mediaDiscoveryHint() || '尚未取得此影片來源'),{code:'SOURCE_UNAVAILABLE'});
+    const value=await sourceDeadline(()=>send(missing?'genericInspect':'inspect',{descriptor,inspectionId:id,force}));
     if(token!==revision)return;
     info=value;inspectionFailure=null;sourcePhase='ready';
     const pendingMetadata=Number(currentPage.media?.discoveryDiagnostics?.metadataQueue)>0;

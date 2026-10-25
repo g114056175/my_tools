@@ -66,5 +66,5 @@ test('unseen failures survive popup closure and preserve safe Bilibili playback 
 
 test('empty YouTube captions give an actionable language and subtitle hint',()=>{
  const value=briefFailure({code:'YT_FILE_EMPTY',message:'private response'});
- assert.equal(value.code,'YT03');assert.match(value.message,/開啟 YouTube 字幕/);assert.match(value.message,/所選語言/);assert.match(value.message,/重試/);assert.doesNotMatch(value.message,/private response/);
+ assert.equal(value.code,'YT03');assert.equal(value.message,'未取得字幕，請開啟字幕並切換為所選語言');
 });

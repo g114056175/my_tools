@@ -400,7 +400,7 @@ test('YT03 offers subtitle and language guidance without a diagnostic copy entry
  state.phase=3;state.lastError={id:'yt-empty',time:Date.now(),code:'YT_FILE_EMPTY',stage:'subtitle'};
  try{
   storageChanged({lastError:{newValue:state.lastError}},'session');await wait(()=>!documentMock.getElementById('diagnosticRow').hidden);
-  const text=documentMock.getElementById('diagnosticText');assert.match(text.textContent,/開啟 YouTube 字幕/);assert.match(text.textContent,/所選語言/);assert.match(text.textContent,/YT03/);assert.doesNotMatch(text.textContent,/診斷/);
+  const text=documentMock.getElementById('diagnosticText');assert.match(text.textContent,/未取得字幕，請開啟字幕並切換為所選語言/);assert.match(text.textContent,/所選語言/);assert.match(text.textContent,/YT03/);assert.doesNotMatch(text.textContent,/診斷/);
   state.clipboard='keep existing clipboard';await text.click();assert.equal(state.clipboard,'keep existing clipboard');assert.equal(text.title,'');
  }finally{state.lastError=null;await documentMock.getElementById('dismissError').click();}
 });

@@ -49,6 +49,14 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
                              bool& limitReached, std::wstring& error) {
     limitReached = false;
     if (!encoder_ || bgra.size() < static_cast<size_t>(width_) * height_ * 4) return false;
+    const size_t frameBytes = static_cast<size_t>(width_) * height_ * 4;
+    const int delay = std::clamp(delayCentiseconds, 1, 65535);
+    if (!pendingPixels_.empty() && pendingDelay_ <= 65535 - delay &&
+        previousRaw_.size() == frameBytes &&
+        std::equal(previousRaw_.begin(), previousRaw_.end(), bgra.begin())) {
+        pendingDelay_ += delay;
+        return true;
+    }
 
     // A fixed RGB332 palette maps neutral dark gray to yellow/green because blue
     // has only four levels. Optimize all 256 colors for this frame instead. Each
@@ -101,6 +109,10 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
         }
     }
 
+    if (FAILED(hr)) {
+        error = L"Preparing the GIF frame failed: " + HrText(hr);
+        return false;
+    }
     // Compare displayed RGB values, not palette indices: a local palette can change
     // its ordering between frames even when the visible colors remain identical.
     RECT dirty{0, 0, width_, height_};
@@ -116,12 +128,20 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
                 dirty.bottom = std::max(dirty.bottom, static_cast<LONG>(y + 1));
             }
         }
-        // A one-pixel hold preserves the exact frame timing without repeating the canvas.
-        if (dirty.right <= dirty.left) dirty = {0, 0, 1, 1};
+        if (dirty.right <= dirty.left) {
+            if (!pendingPixels_.empty() && pendingDelay_ <= 65535 - delay) {
+                pendingDelay_ += delay;
+                previousRaw_.assign(bgra.begin(), bgra.begin() + frameBytes);
+                return true;
+            }
+            // Split very long holds before the GIF delay field overflows.
+            dirty = {0, 0, 1, 1};
+        }
     }
     const int frameWidth = dirty.right - dirty.left;
     const int frameHeight = dirty.bottom - dirty.top;
-    if (SUCCEEDED(hr) && !HasRoomForAnotherFrame(frameWidth, frameHeight)) {
+    if (!FlushPending(error)) return false;
+    if (!HasRoomForAnotherFrame(frameWidth, frameHeight)) {
         limitReached = true;
         return false;
     }
@@ -130,10 +150,40 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
     remap.fill(-1);
     std::array<WICColor, 256> localColors{};
     UINT localCount = 0;
-    if (SUCCEEDED(hr)) {
+    size_t unchanged = 0;
+    const bool haveCanvas = canvas_.size() == indexed.size();
+    const auto isUnchanged = [&](size_t i) {
+        return haveCanvas && canvas_[i] == (colors[indexed[i]] & 0xffffff);
+    };
+    for (int y = 0; y < frameHeight; ++y) {
+        for (int x = 0; x < frameWidth; ++x) {
+            const size_t i = static_cast<size_t>(y + dirty.top) * width_ + x + dirty.left;
+            if (isUnchanged(i)) { ++unchanged; continue; }
+            const BYTE original = indexed[i];
+            if (remap[original] < 0) {
+                remap[original] = static_cast<int>(localCount);
+                localColors[localCount++] = colors[original];
+            }
+        }
+    }
+    // A transparent entry is optional. If changed pixels need all 256 colors,
+    // keep them all and emit an opaque rectangle instead of reducing color quality.
+    const bool transparent = unchanged != 0 && localCount < 256;
+    if (!transparent) {
+        remap.fill(-1);
+        localCount = 0;
+    }
+    const int transparentIndex = transparent ? static_cast<int>(localCount) : -1;
+    if (transparent) localColors[localCount++] = 0;
+    {
         for (int y = 0; y < frameHeight; ++y) {
             for (int x = 0; x < frameWidth; ++x) {
-                const BYTE original = indexed[static_cast<size_t>(y + dirty.top) * width_ + x + dirty.left];
+                const size_t i = static_cast<size_t>(y + dirty.top) * width_ + x + dirty.left;
+                if (transparent && isUnchanged(i)) {
+                    cropped[static_cast<size_t>(y) * frameWidth + x] = static_cast<BYTE>(transparentIndex);
+                    continue;
+                }
+                const BYTE original = indexed[i];
                 if (remap[original] < 0) {
                     remap[original] = static_cast<int>(localCount);
                     localColors[localCount++] = colors[original];
@@ -141,15 +191,28 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
                 cropped[static_cast<size_t>(y) * frameWidth + x] = static_cast<BYTE>(remap[original]);
             }
         }
-        if (localCount == 1) localColors[localCount++] = localColors[0];
-        hr = palette_->InitializeCustom(localColors.data(), localCount);
+        if (localCount == 1) localColors[localCount++] = 0xff000000;
     }
 
+    pendingLeft_ = dirty.left; pendingTop_ = dirty.top;
+    pendingWidth_ = frameWidth; pendingHeight_ = frameHeight;
+    pendingDelay_ = delay; pendingTransparent_ = transparentIndex;
+    pendingPixels_ = std::move(cropped);
+    pendingColors_.assign(localColors.begin(), localColors.begin() + localCount);
+    canvas_.resize(indexed.size());
+    for (size_t i = 0; i < indexed.size(); ++i) canvas_[i] = colors[indexed[i]] & 0xffffff;
+    previousRaw_.assign(bgra.begin(), bgra.begin() + frameBytes);
+    return true;
+}
+
+bool GifWriter::FlushPending(std::wstring& error) {
+    if (pendingPixels_.empty()) return true;
+    HRESULT hr = palette_->InitializeCustom(pendingColors_.data(), static_cast<UINT>(pendingColors_.size()));
     ComPtr<IWICBitmapFrameEncode> frame;
     ComPtr<IPropertyBag2> options;
     if (SUCCEEDED(hr)) hr = encoder_->CreateNewFrame(&frame, &options);
     if (SUCCEEDED(hr)) hr = frame->Initialize(options.Get());
-    if (SUCCEEDED(hr)) hr = frame->SetSize(frameWidth, frameHeight);
+    if (SUCCEEDED(hr)) hr = frame->SetSize(pendingWidth_, pendingHeight_);
     if (SUCCEEDED(hr)) hr = frame->SetResolution(96.0, 96.0);
     WICPixelFormatGUID format = GUID_WICPixelFormat8bppIndexed;
     if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&format);
@@ -163,20 +226,32 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
         PROPVARIANT position{};
         PropVariantInit(&position);
         position.vt = VT_UI2;
-        position.uiVal = static_cast<USHORT>(dirty.left);
+        position.uiVal = static_cast<USHORT>(pendingLeft_);
         hr = metadata->SetMetadataByName(L"/imgdesc/Left", &position);
-        position.uiVal = static_cast<USHORT>(dirty.top);
+        position.uiVal = static_cast<USHORT>(pendingTop_);
         if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/imgdesc/Top", &position);
         PROPVARIANT delay{};
         PropVariantInit(&delay);
         delay.vt = VT_UI2;
-        delay.uiVal = static_cast<USHORT>(std::clamp(delayCentiseconds, 1, 65535));
+        delay.uiVal = static_cast<USHORT>(pendingDelay_);
         if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/Delay", &delay);
         PROPVARIANT disposal{};
         PropVariantInit(&disposal);
         disposal.vt = VT_UI1;
         disposal.bVal = 1;
         if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/Disposal", &disposal);
+        PROPVARIANT transparency{};
+        PropVariantInit(&transparency);
+        transparency.vt = VT_BOOL;
+        transparency.boolVal = pendingTransparent_ >= 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/TransparencyFlag", &transparency);
+        if (pendingTransparent_ >= 0) {
+            PROPVARIANT index{};
+            PropVariantInit(&index);
+            index.vt = VT_UI1;
+            index.bVal = static_cast<BYTE>(pendingTransparent_);
+            if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/TransparentColorIndex", &index);
+        }
 
         // Netscape loop extension: repeat indefinitely. Failure is non-fatal on older codecs.
         if (frames_ == 0) {
@@ -197,23 +272,25 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
     }
 
     if (SUCCEEDED(hr)) {
-        hr = frame->WritePixels(frameHeight, frameWidth, static_cast<UINT>(cropped.size()), cropped.data());
+        hr = frame->WritePixels(pendingHeight_, pendingWidth_, static_cast<UINT>(pendingPixels_.size()), pendingPixels_.data());
     }
     if (SUCCEEDED(hr)) hr = frame->Commit();
+    pendingPixels_.clear();
+    pendingColors_.clear();
+    pendingDelay_ = 0;
     if (FAILED(hr)) {
         error = L"Writing the GIF frame failed: " + HrText(hr);
         return false;
     }
-    canvas_.resize(indexed.size());
-    for (size_t i = 0; i < indexed.size(); ++i) canvas_[i] = colors[indexed[i]] & 0xffffff;
     ++frames_;
-    if (CurrentSize() >= limitBytes_) limitReached = true;
     return true;
 }
 
 bool GifWriter::Close(std::wstring* error) {
+    std::wstring ignored;
+    const bool pendingOk = FlushPending(error ? *error : ignored);
     const HRESULT result = encoder_ ? encoder_->Commit() : S_OK;
-    if (FAILED(result) && error) *error = L"Completing the GIF file failed: " + HrText(result);
+    if (FAILED(result) && error && pendingOk) *error = L"Completing the GIF file failed: " + HrText(result);
     encoder_.Reset();
     palette_.Reset();
     stream_.Reset();
@@ -221,7 +298,12 @@ bool GifWriter::Close(std::wstring* error) {
     width_ = height_ = 0;
     limitBytes_ = frames_ = 0;
     canvas_.clear();
-    return SUCCEEDED(result);
+    previousRaw_.clear();
+    pendingPixels_.clear();
+    pendingColors_.clear();
+    pendingLeft_ = pendingTop_ = pendingWidth_ = pendingHeight_ = pendingDelay_ = 0;
+    pendingTransparent_ = -1;
+    return pendingOk && SUCCEEDED(result);
 }
 
 }  // namespace lc

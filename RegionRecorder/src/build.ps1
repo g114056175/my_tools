@@ -1,4 +1,4 @@
-param([string]$OutputPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'region_recorder.exe'))
+param([string]$OutputPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'RegionRecorder.exe'))
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $out=Join-Path $root '.build'

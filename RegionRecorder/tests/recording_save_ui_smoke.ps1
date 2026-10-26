@@ -1,10 +1,10 @@
-param([string]$Executable = '')
+﻿param([string]$Executable = '')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'ui_native.ps1')
 $root=Split-Path -Parent $PSScriptRoot
 if(!$Executable) {
- $Executable=Join-Path $root 'build/region_recorder.exe'
- if(!(Test-Path -LiteralPath $Executable)){$Executable=Join-Path $root 'region_recorder.exe'}
+ $Executable=Join-Path $root 'build/RegionRecorder.exe'
+ if(!(Test-Path -LiteralPath $Executable)){$Executable=Join-Path $root 'RegionRecorder.exe'}
 }
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Join-Path $env:TEMP ('LC-save-test-'+[guid]::NewGuid().ToString('N'))

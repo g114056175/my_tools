@@ -37,10 +37,10 @@ uint64_t GifWriter::CurrentSize() const {
     return static_cast<uint64_t>(status.cbSize.QuadPart);
 }
 
-bool GifWriter::HasRoomForAnotherFrame() const {
+bool GifWriter::HasRoomForAnotherFrame(int width, int height) const {
     // GIF LZW can occasionally be larger than its indexed input. Reserving two bytes per pixel
     // plus 64 KiB keeps the configured limit hard at the cost of stopping conservatively.
-    const uint64_t worstFrame = static_cast<uint64_t>(width_) * height_ * 2 + 4'096;
+    const uint64_t worstFrame = static_cast<uint64_t>(width) * height * 2 + 4'096;
     const uint64_t current = CurrentSize();
     return current < limitBytes_ && worstFrame + 65'536 < limitBytes_ - current;
 }
@@ -49,10 +49,6 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
                              bool& limitReached, std::wstring& error) {
     limitReached = false;
     if (!encoder_ || bgra.size() < static_cast<size_t>(width_) * height_ * 4) return false;
-    if (!HasRoomForAnotherFrame()) {
-        limitReached = true;
-        return false;
-    }
 
     // A fixed RGB332 palette maps neutral dark gray to yellow/green because blue
     // has only four levels. Optimize all 256 colors for this frame instead. Each
@@ -105,11 +101,55 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
         }
     }
 
+    // Compare displayed RGB values, not palette indices: a local palette can change
+    // its ordering between frames even when the visible colors remain identical.
+    RECT dirty{0, 0, width_, height_};
+    if (SUCCEEDED(hr) && canvas_.size() == indexed.size()) {
+        dirty = {width_, height_, 0, 0};
+        for (int y = 0; y < height_; ++y) {
+            for (int x = 0; x < width_; ++x) {
+                const size_t i = static_cast<size_t>(y) * width_ + x;
+                if (canvas_[i] == (colors[indexed[i]] & 0xffffff)) continue;
+                dirty.left = std::min(dirty.left, static_cast<LONG>(x));
+                dirty.top = std::min(dirty.top, static_cast<LONG>(y));
+                dirty.right = std::max(dirty.right, static_cast<LONG>(x + 1));
+                dirty.bottom = std::max(dirty.bottom, static_cast<LONG>(y + 1));
+            }
+        }
+        // A one-pixel hold preserves the exact frame timing without repeating the canvas.
+        if (dirty.right <= dirty.left) dirty = {0, 0, 1, 1};
+    }
+    const int frameWidth = dirty.right - dirty.left;
+    const int frameHeight = dirty.bottom - dirty.top;
+    if (SUCCEEDED(hr) && !HasRoomForAnotherFrame(frameWidth, frameHeight)) {
+        limitReached = true;
+        return false;
+    }
+    std::vector<BYTE> cropped(static_cast<size_t>(frameWidth) * frameHeight);
+    std::array<int, 256> remap;
+    remap.fill(-1);
+    std::array<WICColor, 256> localColors{};
+    UINT localCount = 0;
+    if (SUCCEEDED(hr)) {
+        for (int y = 0; y < frameHeight; ++y) {
+            for (int x = 0; x < frameWidth; ++x) {
+                const BYTE original = indexed[static_cast<size_t>(y + dirty.top) * width_ + x + dirty.left];
+                if (remap[original] < 0) {
+                    remap[original] = static_cast<int>(localCount);
+                    localColors[localCount++] = colors[original];
+                }
+                cropped[static_cast<size_t>(y) * frameWidth + x] = static_cast<BYTE>(remap[original]);
+            }
+        }
+        if (localCount == 1) localColors[localCount++] = localColors[0];
+        hr = palette_->InitializeCustom(localColors.data(), localCount);
+    }
+
     ComPtr<IWICBitmapFrameEncode> frame;
     ComPtr<IPropertyBag2> options;
     if (SUCCEEDED(hr)) hr = encoder_->CreateNewFrame(&frame, &options);
     if (SUCCEEDED(hr)) hr = frame->Initialize(options.Get());
-    if (SUCCEEDED(hr)) hr = frame->SetSize(width_, height_);
+    if (SUCCEEDED(hr)) hr = frame->SetSize(frameWidth, frameHeight);
     if (SUCCEEDED(hr)) hr = frame->SetResolution(96.0, 96.0);
     WICPixelFormatGUID format = GUID_WICPixelFormat8bppIndexed;
     if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&format);
@@ -118,17 +158,25 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
     if (SUCCEEDED(hr)) hr = frame->SetPalette(palette_.Get());
 
     ComPtr<IWICMetadataQueryWriter> metadata;
-    if (SUCCEEDED(hr) && SUCCEEDED(frame->GetMetadataQueryWriter(&metadata)) && metadata) {
+    if (SUCCEEDED(hr)) hr = frame->GetMetadataQueryWriter(&metadata);
+    if (SUCCEEDED(hr)) {
+        PROPVARIANT position{};
+        PropVariantInit(&position);
+        position.vt = VT_UI2;
+        position.uiVal = static_cast<USHORT>(dirty.left);
+        hr = metadata->SetMetadataByName(L"/imgdesc/Left", &position);
+        position.uiVal = static_cast<USHORT>(dirty.top);
+        if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/imgdesc/Top", &position);
         PROPVARIANT delay{};
         PropVariantInit(&delay);
         delay.vt = VT_UI2;
         delay.uiVal = static_cast<USHORT>(std::clamp(delayCentiseconds, 1, 65535));
-        metadata->SetMetadataByName(L"/grctlext/Delay", &delay);
+        if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/Delay", &delay);
         PROPVARIANT disposal{};
         PropVariantInit(&disposal);
         disposal.vt = VT_UI1;
         disposal.bVal = 1;
-        metadata->SetMetadataByName(L"/grctlext/Disposal", &disposal);
+        if (SUCCEEDED(hr)) hr = metadata->SetMetadataByName(L"/grctlext/Disposal", &disposal);
 
         // Netscape loop extension: repeat indefinitely. Failure is non-fatal on older codecs.
         if (frames_ == 0) {
@@ -149,13 +197,15 @@ bool GifWriter::AddBgraFrame(const std::vector<uint8_t>& bgra, int delayCentisec
     }
 
     if (SUCCEEDED(hr)) {
-        hr = frame->WritePixels(height_, width_, static_cast<UINT>(indexed.size()), indexed.data());
+        hr = frame->WritePixels(frameHeight, frameWidth, static_cast<UINT>(cropped.size()), cropped.data());
     }
     if (SUCCEEDED(hr)) hr = frame->Commit();
     if (FAILED(hr)) {
         error = L"Writing the GIF frame failed: " + HrText(hr);
         return false;
     }
+    canvas_.resize(indexed.size());
+    for (size_t i = 0; i < indexed.size(); ++i) canvas_[i] = colors[indexed[i]] & 0xffffff;
     ++frames_;
     if (CurrentSize() >= limitBytes_) limitReached = true;
     return true;
@@ -170,6 +220,7 @@ bool GifWriter::Close(std::wstring* error) {
     factory_.Reset();
     width_ = height_ = 0;
     limitBytes_ = frames_ = 0;
+    canvas_.clear();
     return SUCCEEDED(result);
 }
 

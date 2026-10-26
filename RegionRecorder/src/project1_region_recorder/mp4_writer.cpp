@@ -50,7 +50,7 @@ bool Mp4Writer::Open(const std::wstring& path, int width, int height, int nomina
     if (SUCCEEDED(hr)) hr = outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     if (SUCCEEDED(hr)) hr = outputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
     const UINT32 bitrate = static_cast<UINT32>(std::clamp<int64_t>(
-        static_cast<int64_t>(width_) * height_ * nominalFps / 5, 800'000, 20'000'000));
+        static_cast<int64_t>(width_) * height_ * nominalFps / 12, 800'000, 12'000'000));
     if (SUCCEEDED(hr)) hr = outputType->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
     if (SUCCEEDED(hr))
         hr = outputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);

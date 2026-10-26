@@ -23,7 +23,7 @@ class GifWriter {
     bool IsOpen() const { return encoder_ != nullptr; }
 
    private:
-    bool HasRoomForAnotherFrame() const;
+    bool HasRoomForAnotherFrame(int width, int height) const;
 
     ComPtr<IWICImagingFactory> factory_;
     ComPtr<IWICStream> stream_;
@@ -33,6 +33,7 @@ class GifWriter {
     int height_ = 0;
     uint64_t limitBytes_ = 0;
     uint64_t frames_ = 0;
+    std::vector<WICColor> canvas_;
 };
 
 }  // namespace lc

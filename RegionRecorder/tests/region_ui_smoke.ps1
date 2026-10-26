@@ -37,8 +37,8 @@ public static class RecorderClipboardTest {
 '@
 $root = Split-Path -Parent $PSScriptRoot
 if(!$Executable) {
-    $Executable=Join-Path $root 'build/region_recorder.exe'
-    if(!(Test-Path -LiteralPath $Executable)){$Executable=Join-Path $root 'region_recorder.exe'}
+    $Executable=Join-Path $root 'build/RegionRecorder.exe'
+    if(!(Test-Path -LiteralPath $Executable)){$Executable=Join-Path $root 'RegionRecorder.exe'}
 }
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $screenshots = Join-Path $root 'build\review'

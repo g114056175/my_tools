@@ -1,71 +1,54 @@
 # RegionRecorder
 
-把桌面指定範圍錄成 MP4 或 GIF。
+**[下載 RegionRecorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/RegionRecorder.exe)**
 
-**[下載 region_recorder.exe（DXGI）](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder.exe)**
+輕量的範圍錄製工具，適合記錄桌面操作、製作教學片段與 GIF 動圖，支援跨螢幕、滑鼠游標及暫停錄製。
 
 適用 Windows 10 2004 以上／Windows 11，x64。單一 EXE 即可執行，不需安裝；Windows N 版本需先安裝 Media Feature Pack。
 
-支援跨螢幕框選與錄製；採用 DXGI，不會產生 WGC 的系統黃色擷取框。選區框線和錄製工具列不會出現在成品中。
+目前版本使用 DXGI，錄製桌面當下可見的內容，不會產生系統黃色擷取框；舊版 WGC 在部分 Windows 環境會顯示黃色框，備用下載見文末。
 
 ![設定面板](images/setup.png)
 
-1. 首次開啟預設為 **GIF、24 FPS、擷取滑鼠游標開啟、自動保存關閉、完成後自動複製開啟**；Video 預設 60 FPS。
-   保存位置自動取得目前使用者的 **Downloads（下載）** 資料夾，不固定帳號名稱；已修改過的設定會保留。
-   「擷取滑鼠游標」預設開啟，可關閉；設定會記住，適用 MP4 與 GIF，於開始錄影時套用。
-2. 按「滑鼠框選」或 `Alt + Shift + R` 拖出範圍，再按 **● 錄製**。
-   範圍統一由滑鼠框選，不需輸入座標或寬高。
-   控制列放在範圍外；若涵蓋整個桌面、沒有空間顯示控制列，會提示縮小範圍。
-3. 使用 **■ 停止、暫停／繼續、重新框選**；重新框選會先暫停。
-4. 停止後保存，或取消保存後直接複製暫存檔。**×** 會清除未保存的錄影；錄製中的 × 會先確認。
+## 使用說明
 
-自動與手動保存皆預設使用 `capture_1`、`capture_2`…（可修改檔名前綴）。程式依資料夾、前綴與格式分別記住下一個編號；只有預定檔名已存在時才掃描同系列檔案，改用目前最大編號加一。取消保存不消耗編號；自行輸入的檔名會保留。編號快取保留至程式關閉，重新開啟後從 `_1` 檢查，遇到重複再掃描。
+1. 設定 GIF／Video、FPS、保存位置與自動保存選項。
+2. 按「滑鼠框選」或 `Alt + Shift + R` 選取範圍，再按 **● 錄製**。
+3. 錄製中可停止、暫停／繼續或重新框選；紅色 **×** 會先暫停，再詢問是否捨棄。
+4. 結束後保存，或取消保存後複製暫存錄影；關閉結果會清除未保存的檔案。
 
-![框旁工具列](images/ready.png)
-![錄製中](images/recording.png)
-![未保存結果](images/result.png)
+預設 GIF 24 FPS、Video 60 FPS；保存位置為目前帳號的下載資料夾。選區框線與工具列不會出現在成品中。
 
-`Esc` 可取消初次框選，錄製中不會誤停。快捷鍵可自行設定，錄製流程中會停用重新觸發。
-最小化保留工作列；「隱藏至通知區」收起主面板。
-主視窗的 × 會結束程式；錄製中會先確認，確認後停止錄影並清除未保存的暫存檔。
-按下錄製工具列的紅色 × 時，會先暫停錄影再詢問；取消關閉後維持暫停，可按繼續恢復錄製。
+| 框選後 | 錄製中 | 未保存結果 |
+| --- | --- | --- |
+| <img src="images/ready.png" width="240" alt="框選工具列"> | <img src="images/recording.png" width="240" alt="錄製工具列"> | <img src="images/result.png" width="240" alt="未保存結果"> |
 
-錄製限制固定為 **GIF：300 MB／1 分鐘；Video：4 GB／30 分鐘**。**容量或時間任一先達上限，就會強制停止錄製，不會繼續錄影。**
-停止後會先彈出原因提示；按「確定」才開啟保存介面，開啟自動保存時則存到預設位置。
-手動暫停不計時，容量以十進位計算；為下一幀及檔案收尾預留空間，可能略早於容量上限停止。**大範圍 GIF 可能未滿 1 分鐘就先達容量限制。**
-MP4 使用 H.264 壓縮；GIF 依每一畫格建立最多 256 色的自適應色盤，改善深色介面的色偏。
-GIF 仍有色數限制，照片或漸層畫面建議使用 MP4。**目前只錄畫面，不錄系統聲音或麥克風。**
+## 錄製限制與壓縮
 
-下圖是由本工具實際錄製的 GIF：
+| 格式 | 容量上限 | 時間上限 |
+| --- | --- | --- |
+| GIF | 300 MB | 1 分鐘 |
+| MP4 | 4 GB | 30 分鐘 |
+
+**容量或時間任一先達上限，就會強制停止錄製。**
+
+MP4 使用 Windows 內建的 H.264 編碼，以較低位元率減少檔案大小，兼顧一般播放器的相容性；適合影片、照片及變化較大的畫面。
+
+GIF 使用最多 256 色的自適應色盤，改善深色介面的色偏，並透過差分區域、透明像素與重複幀合併，減少重複資料，不額外降低色數。畫面變動較大時，壓縮效果會較有限；照片與漸層也可能因 GIF 色數限制而失真，建議使用 MP4。
+
+**目前只錄畫面，不錄系統聲音或麥克風。**
+
+## GIF 示範
 
 ![GIF 示範](images/demo.gif)
 
-採用原生 Win32、DXGI Desktop Duplication 與 Media Foundation。錄到的是桌面可見內容；其他視窗的遮擋也會錄入。
-跨螢幕範圍以桌面實體像素拼接；螢幕排列間的空隙填黑。錄製中重新框選時，成品尺寸維持開始錄製時的大小。
-剪貼簿以檔案方式複製，適用檔案總管及支援檔案貼上的程式。
-
-需要自行編譯時，安裝 LLVM-MinGW 並將其 `bin` 加入 PATH；在 `RegionRecorder/` 執行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\src\build.ps1
-```
-
-EXE 產生在 `RegionRecorder/`。
-
-開發驗證：`powershell -ExecutionPolicy Bypass -File .\tests\run.ps1`。包含 DXGI 游標、旋轉像素、GIF 色彩、跨螢幕拼接、框線排除、MP4／GIF 上限及檔名編號測試；跨螢幕實測需要兩個相鄰螢幕。
-
-UI 與保存流程可分別執行 `tests/region_ui_smoke.ps1`、`tests/recording_save_ui_smoke.ps1`，以 `-Executable .\region_recorder.exe` 指定待測程式。UI 測試會操作桌面視窗並暫時使用剪貼簿，結束後恢復原內容。
-關閉與程序清理可執行 `tests/recorder_shutdown_smoke.ps1 -Executable .\region_recorder.exe`。
-上限提示與保存順序可執行 `tests/limit_notice_ui_smoke.ps1`。
-
 <details>
-<summary>WGC 備用版本與差異</summary>
+<summary>WGC 備用版本</summary>
 
-**[下載原版 region_recorder_wgc.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder_wgc.exe)** · [原版原始碼](https://github.com/g114056175/my_tools/tree/04f9a32e1cb2073bf682935ee50568474c5c2e05/region_recorder)
+[下載 WGC 舊版](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/region_recorder_wgc.exe)
 
-- **DXGI（目前預設）**：擷取螢幕當下可見內容，不產生 WGC 系統黃色擷取框，適合桌面區域錄影。
-- **WGC（備用）**：部分 Windows 環境會顯示系統黃色擷取框。WGC API 也支援指定視窗擷取，可用於取得被其他視窗遮住的內容；但**此備用區域錄影器仍擷取桌面可見內容，不會穿透遮擋**。
+部分 Windows 環境會顯示系統黃色擷取框。WGC API 也能用於擷取被其他視窗遮住的獨立視窗；但此舊版區域錄影器仍錄製桌面可見內容，不會穿透遮擋。
 
-兩版的主要 UI、錄影格式與基本操作相同；設定各自保存，首次切換需重新設定。WGC 備用版仍使用 `Ctrl + Shift + R`，未包含新版的停止原因彈窗與關閉確認時自動暫停。
+舊版使用 `Ctrl + Shift + R`，兩版設定各自保存。
 
 </details>

@@ -1,6 +1,6 @@
 # RegionRecorder
 
-**[下載 RegionRecorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/RegionRecorder.exe)**
+**[下載 RegionRecorder.exe](https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/RegionRecorder.exe?sha=32b381b2bedd)**
 
 輕量的範圍錄製工具，適合記錄桌面操作、製作教學片段與 GIF 動圖，支援跨螢幕、滑鼠游標及暫停錄製。
 

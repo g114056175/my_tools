@@ -77,7 +77,7 @@ function createChromeFixture() {
         return query?.active ? [{ id: 1, windowId: 5, url: 'https://example.test/watch' }] : [];
       },
       async get(id) { return { id, windowId: 5, active: true, url: 'https://example.test/watch' }; },
-      async sendMessage() { return { ok: true, version }; },
+      async sendMessage(_tab,message) { return { ok: true, version,activeId:message?.id }; },
     },
     webNavigation: {
       onHistoryStateUpdated: events.historyStateUpdated,
@@ -211,4 +211,63 @@ test('refreshFrames preserves newer frame reports across delayed allFrames snaps
   ]);
   const childState = await within(childRefresh, 'subframe getState');
   assert.equal(childState.target?.id, 'v-new-document');
+});
+
+test('empty child frames do not accumulate selection recipients; a later video still registers',async()=>{
+ const fixture=createChromeFixture(),selections=[];
+ chrome.tabs.sendMessage=async(_tab,message,options)=>{
+  if(message.action==='activeTarget')selections.push({id:message.id,documentId:options?.documentId});
+  return {ok:true,version,activeId:message.id};
+ };
+ await import('../extension/background.js?test=empty-child-frames');
+ const send=(message,sender)=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ const top=createContentSender('top');
+ await send({action:'report',videos:[video('main')]},top);
+ for(let frameId=1;frameId<=200;frameId++)await send({action:'report',videos:[]},{...top,frameId,documentId:'empty-'+frameId});
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(selections.length>0);assert.ok(selections.every(item=>item.documentId==='top'),'empty ad/analytics documents must not receive selection notifications');
+ const child={...top,frameId:201,documentId:'real-child'};
+ await send({action:'report',videos:[{...video('child'),lastPlayedAt:Date.now()+1000}]},child);
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(selections.some(item=>item.documentId==='real-child'&&item.id==='child'));
+ selections.length=0;await send({action:'report',videos:[]},child);
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(selections.some(item=>item.documentId==='top'&&item.id==='main'));
+ assert.ok(selections.every(item=>item.documentId!=='real-child'),'an emptied child must leave the selection recipient set');
+});
+
+test('an unresponsive page refresh does not keep the popup waiting or start duplicate probes',async()=>{
+ const fixture=createChromeFixture();
+ await import('../extension/background.js?test=popup-refresh-deadline');
+ const sender=createPopupMessageSender();
+ const send=message=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ const plan=fixture.plan({probes:[{frameId:0,documentId:'doc-slow',result:true}]});
+ const start=Date.now(),first=send({action:'getState',tabId:1});await plan.started.promise;
+ const result=await within(first,'popup refresh deadline');
+ assert.equal(result.ok,true);assert.equal(result.target,null);assert.ok(Date.now()-start<2000);
+ const repeated=await within(send({action:'getState',tabId:1}),'shared pending refresh deadline');
+ assert.equal(repeated.ok,true);assert.equal(plan.phase,'refresh','a timed out popup must share the existing in-flight page probe');
+ plan.final.resolve([{frameId:0,documentId:'doc-slow',result:[video('recovered')]}]);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'recovered');
+});
+
+test('a failed selection drops only a confirmed removed iframe and returns to the live video',async()=>{
+ const fixture=createChromeFixture(),calls=[];
+ chrome.webNavigation.getAllFrames=async()=>[{frameId:0,documentId:'top'}];
+ chrome.tabs.sendMessage=async(_tab,message,options)=>{
+  if(message.action==='activeTarget')calls.push(options?.documentId);
+  if(options?.documentId==='removed-child')return null;
+  return {ok:true,version,activeId:message.id};
+ };
+ await import('../extension/background.js?test=removed-child-selection');
+ const top=createContentSender('top');
+ const send=(message,sender=top)=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ await send({action:'report',videos:[video('main')]});
+ await send({action:'report',videos:[{...video('gone'),lastPlayedAt:Date.now()+1000}]},{...top,frameId:99,documentId:'removed-child'});
+ await new Promise(resolve=>setTimeout(resolve,80));
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'main');
+ calls.length=0;await send({action:'report',videos:[video('main')]});
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(!calls.includes('removed-child'),'later reports must not keep contacting the removed document');
 });

@@ -639,7 +639,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.10";
+  var VERSION = "0.6.11";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();
@@ -673,6 +673,18 @@
       }, () => {
         clearTimeout(timer);
         resolve(null);
+      });
+    });
+  }
+  function popupRefresh(task) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1e3);
+      Promise.resolve(task).then(() => {
+        clearTimeout(timer);
+        resolve();
+      }, () => {
+        clearTimeout(timer);
+        resolve();
       });
     });
   }
@@ -1018,6 +1030,25 @@
           announced.set(tabId, key);
           delivery.attempts = 0;
         } else {
+          let live;
+          try {
+            live = await chrome.webNavigation.getAllFrames({ tabId });
+          } catch {
+          }
+          let removed = false;
+          if (Array.isArray(live)) for (let index = 0; index < recipients.length; index++) {
+            const response = responses[index], frame = recipients[index];
+            if (response.status === "fulfilled" && response.value === true) continue;
+            if (frames.get(tabId)?.get(frame.frameId) !== frame) continue;
+            if (live.some((item) => item.frameId === frame.frameId && (!item.documentId || !frame.documentId || item.documentId === frame.documentId))) continue;
+            frames.get(tabId).delete(frame.frameId);
+            removed = true;
+          }
+          if (removed) {
+            clearSelectionDelivery(tabId);
+            await announce(tabId, true);
+            return;
+          }
           if (announced.get(tabId) === key) announced.delete(tabId);
           if (delivery.attempts < 3) delivery.timer = setTimeout(() => {
             delivery.timer = null;
@@ -1036,9 +1067,14 @@
     }
   }
   function record(tabId, frameId, documentId, videos) {
+    const items = Array.isArray(videos) ? videos.slice(0, 64) : [];
+    if (frameId > 0 && !items.length) {
+      if (frames.get(tabId)?.delete(frameId)) announce(tabId, true);
+      return;
+    }
     if (!frames.has(tabId)) frames.set(tabId, /* @__PURE__ */ new Map());
     const fresh = frames.get(tabId).get(frameId)?.documentId !== documentId;
-    frames.get(tabId).set(frameId, { frameId, documentId, videos: Array.isArray(videos) ? videos.slice(0, 64) : [] });
+    frames.get(tabId).set(frameId, { frameId, documentId, videos: items });
     announce(tabId, fresh);
   }
   async function refresh(tabId, force = false) {
@@ -1222,10 +1258,7 @@
     if (message.action === "activity") return activityFields(tabId, tab.url || "");
     if (message.action === "getState" || message.action === "cachedState") {
       const settings2 = await stored2(), pageUrl = tab.url || "", siteDisabled = disabledOnUrl(pageUrl, settings2.disabledSites, settings2.siteModes);
-      if (message.action === "getState" && settings2.enabled && !siteDisabled) try {
-        await refresh(tabId, message.refresh === true);
-      } catch {
-      }
+      if (message.action === "getState" && settings2.enabled && !siteDisabled) await popupRefresh(refresh(tabId, message.refresh === true));
       const target = siteDisabled ? null : settings2.enabled ? targetFor(tabId) : await pausedTarget(tabId), rate = await rateState();
       return { tabId, pageUrl, siteDisabled, settings: settings2, loading: tab.status === "loading", lastRate: rate.lastRate, rateRevision: rate.rateRevision, videos: target ? [target] : [], target };
     }

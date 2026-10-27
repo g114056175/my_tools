@@ -1,14 +1,19 @@
 export class VideoToast{
  constructor(document){this.document=document;this.view=document.defaultView;this.paint=this.paint.bind(this);}
  show(video,text){
-  if(this.persistent&&this.video===video){this.paint();return;}
-  this.mount(video,text,false);this.timer=setTimeout(()=>this.clear(),1100);
+  if(this.host&&this.video===video){
+   clearTimeout(this.timer);if(!this.persistent)this.setText(text);this.paint();
+  }else this.mount(video,text,false);
+  if(!this.persistent)this.timer=setTimeout(()=>this.clear(),1100);
  }
  hold(video){
   if(!video?.isConnected){this.clear();return;}
-  if(this.persistent&&this.video===video){this.renew();this.paint();return;}
-  this.mount(video,'',true);this.renew();
+  if(this.host&&this.video===video){clearTimeout(this.timer);this.persistent=true;this.host.setAttribute('data-persistent','');this.paint();}
+  else this.mount(video,'',true);
+  this.renew();
  }
+ setText(text){if(this.label.textContent!==text)this.label.textContent=text;}
+ style(node,values){for(const [key,value]of Object.entries(values))if(node.style[key]!==value)node.style[key]=value;}
  renew(){if(this.persistent){clearTimeout(this.lease);this.lease=setTimeout(()=>this.clear(),8000);}}
  release(){if(this.persistent)this.clear();}
  root(video){const fullscreen=this.document.fullscreenElement;return fullscreen?.contains(video)?fullscreen:this.document.documentElement;}
@@ -29,14 +34,14 @@ export class VideoToast{
   if(!video.isConnected){this.clear();return;}
   const root=this.root(video);if(host.parentElement!==root)root.append(host);
   const rect=video.getBoundingClientRect();if(!rect.width||!rect.height){host.style.visibility='hidden';return;}
-  if(this.persistent){let rate;try{rate=Number(video.playbackRate);}catch{}this.label.textContent=Number.isFinite(rate)&&rate>0?String(Number(rate.toFixed(2)))+'×':'—';}
+  if(this.persistent){let rate;try{rate=Number(video.playbackRate);}catch{}this.setText(Number.isFinite(rate)&&rate>0?String(Number(rate.toFixed(2)))+'×':'—');}
   let parent=host.offsetParent;if(parent===this.document.body&&this.view.getComputedStyle(parent).position==='static')parent=null;
   const bounds=parent?.getBoundingClientRect(),sx=bounds&&parent.offsetWidth?bounds.width/parent.offsetWidth:1,sy=bounds&&parent.offsetHeight?bounds.height/parent.offsetHeight:1;
   const cx=rect.left+rect.width/2,top=rect.top+Math.min(78,Math.max(18,rect.height*.1));
   const left=parent?(cx-bounds.left)/sx+(parent.scrollLeft||0)-(parent.clientLeft||0):cx+this.view.scrollX;
   const y=parent?(top-bounds.top)/sy+(parent.scrollTop||0)-(parent.clientTop||0):top+this.view.scrollY;
-  Object.assign(host.style,{left:left+'px',top:y+'px',maxWidth:Math.max(0,(rect.width-24)/sx)+'px',visibility:'visible'});
-  Object.assign(this.label.style,{fontSize:Math.min(18,Math.max(14,rect.height*.024))/sy+'px',padding:Math.min(11,Math.max(6,rect.height*.012))/sy+'px '+Math.min(16,Math.max(10,rect.width*.011))/sx+'px'});
+  this.style(host,{left:left+'px',top:y+'px',maxWidth:Math.max(0,(rect.width-24)/sx)+'px',visibility:'visible'});
+  this.style(this.label,{fontSize:Math.min(18,Math.max(14,rect.height*.024))/sy+'px',padding:Math.min(11,Math.max(6,rect.height*.012))/sy+'px '+Math.min(16,Math.max(10,rect.width*.011))/sx+'px'});
  }
  clear(){
   clearTimeout(this.timer);clearTimeout(this.lease);clearInterval(this.update);

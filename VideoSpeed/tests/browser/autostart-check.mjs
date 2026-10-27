@@ -79,6 +79,16 @@ const observerSource = String.raw`(() => {
     },
     async armFaults(tabId) { return chrome.runtime.sendMessage({ __qa072ArmFaults: true, tabId }); },
     async disarmFaults() { return chrome.runtime.sendMessage({ __qa072DisarmFaults: true }); },
+    async localKeyProbe(tabId,restore=false) {
+      const rows=await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',args:[restore],func:restore=>{
+        if(restore){const probe=globalThis.__qaLocalKeyProbe;if(probe)chrome.runtime.sendMessage=probe.original;return probe?.commands??null;}
+        const runtime=chrome.runtime,original=runtime.sendMessage,probe={original,commands:0};globalThis.__qaLocalKeyProbe=probe;
+        runtime.sendMessage=function(message,...args){
+          if(message?.scope==='video-control'&&message.action==='command'){probe.commands++;return new Promise(resolve=>setTimeout(()=>resolve({ok:false,error:'QA delayed command RPC'}),3000));}
+          return Reflect.apply(original,runtime,[message,...args]);
+        };return true;
+      }});return rows[0]?.result;
+    },
     async removeTab(tabId) { await chrome.tabs.remove(tabId); },
   };
   Object.defineProperty(globalThis, '__qaObserver', { value: api, configurable: false });
@@ -184,7 +194,7 @@ async function startServer() {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   baseUrl = 'http://127.0.0.1:' + server.address().port;
 }
-async function observerCall(name, arg) { let timer;try{return await Promise.race([observerPage.evaluate(({ method, value }) => globalThis.__qaObserver[method](value), { method: name, value: arg }),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('QA observer timeout: '+name)),6000);})]);}finally{clearTimeout(timer);} }
+async function observerCall(name, ...args) { let timer;try{return await Promise.race([observerPage.evaluate(({ method, values }) => globalThis.__qaObserver[method](...values), { method: name, values: args }),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('QA observer timeout: '+name)),6000);})]);}finally{clearTimeout(timer);} }
 async function createTestPage(url) {
   const tab = await observerCall('createTab', url);
   const page = await waitFor(() => context.pages().find(item => item.url() === url), 'test tab page did not attach: ' + url, 12000);
@@ -404,20 +414,25 @@ try {
   await spaSession.page.waitForFunction(rate=>window.__qaMedia?.()?.video?.rate===rate,expectedRate,{timeout:5000});
   const keyTrial = { tabId: spaSession.tab.id, before: keyboardBefore, actions: [] };
   try {
+    await observerCall('localKeyProbe',spaSession.tab.id);
     await spaSession.page.keyboard.press('Shift+Comma');
     await spaSession.page.waitForTimeout(sampleStepMs);
     keyTrial.afterSlower = await capture(spaSession.page, spaSession.tab.id, 'keyboard-after-less-than');
+    keyTrial.slowerToast=await spaSession.page.evaluate(()=>document.querySelector('#video-control-toast')?.shadowRoot?.querySelector('span')?.textContent);
     keyTrial.actions.push({ action: '<', keyEvents: keyTrial.afterSlower.keyEvents.slice(-3) });
     await spaSession.page.keyboard.press('Shift+Period');
     await spaSession.page.waitForTimeout(sampleStepMs);
     keyTrial.afterFaster = await capture(spaSession.page, spaSession.tab.id, 'keyboard-after-greater-than');
+    keyTrial.fasterToast=await spaSession.page.evaluate(()=>document.querySelector('#video-control-toast')?.shadowRoot?.querySelector('span')?.textContent);
+    keyTrial.backgroundCommandCalls=await observerCall('localKeyProbe',spaSession.tab.id,true);
     keyTrial.actions.push({ action: '>', keyEvents: keyTrial.afterFaster.keyEvents.slice(-3) });
     const trustedLess = keyTrial.afterSlower.keyEvents.some(event => event.key === '<' && event.trusted);
     const trustedGreater = keyTrial.afterFaster.keyEvents.some(event => event.key === '>' && event.trusted);
     keyTrial.trustedKeysObserved = trustedLess && trustedGreater;
     keyTrial.lessChangedRate = keyTrial.before.video?.rate === expectedRate && keyTrial.afterSlower.video?.rate < expectedRate;
     keyTrial.greaterRestoredRate = keyTrial.afterSlower.video?.rate < expectedRate && keyTrial.afterFaster.video?.rate === expectedRate;
-    keyTrial.pass = keyTrial.trustedKeysObserved && keyTrial.lessChangedRate && keyTrial.greaterRestoredRate;
+    keyTrial.pass = keyTrial.trustedKeysObserved && keyTrial.lessChangedRate && keyTrial.greaterRestoredRate && keyTrial.backgroundCommandCalls===0 &&
+      keyTrial.slowerToast===keyTrial.afterSlower.video.rate+'×' && keyTrial.fasterToast===expectedRate+'×';
   } catch (error) { keyTrial.error = String(error?.message || error); keyTrial.pass = false; }
   report.keyboardTrial = keyTrial;
   if (!keyTrial.pass) {

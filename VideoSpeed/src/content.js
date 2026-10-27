@@ -10,7 +10,7 @@ import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.10',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.11',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -170,7 +170,14 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    if(isRecent())registry.scan(document,true);
    if(!snapshot().some(video=>video.visible))return false;
   }
-  event.preventDefault();event.stopImmediatePropagation();send({action:'command',command});return true;
+  event.preventDefault();event.stopImmediatePropagation();
+  const video=registry.videos.get(activeId);
+  if(video&&states.has(activeId)&&eligible(video)){
+   // The selected media and MAIN bridge are in this frame. Apply and paint
+   // before waiting for the worker; remembering the choice stays asynchronous.
+   try{act(activeId,command);}catch(error){videoToast.show(video,translateMessage(locale,error.message));}
+  }else send({action:'command',command});
+  return true;
  }
  listen(document,'pointerdown',event=>{
   if(picker)return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',videos:snapshot()});}

@@ -187,7 +187,7 @@ function createChromeFixture({
       onHistoryStateUpdated: events.historyStateUpdated,
       onReferenceFragmentUpdated: events.referenceFragmentUpdated,
       onCommitted: events.navigationCommitted,
-      async getAllFrames() { return []; },
+      async getAllFrames({tabId}) { return tabs.has(tabId)?[{frameId:0,documentId:`doc-${tabId}`}]:[]; },
     },
     action: { async setTitle() {}, async setIcon() {}, async openPopup() { state.popupOpens++; } },
     scripting: {

@@ -259,7 +259,7 @@ export class MediaRegistry{
    const fullscreen=this.document.fullscreenElement===video||this.document.fullscreenElement?.contains(video)||false;
    const signature=mediaSignature(video),cached=this.titleCache.get(video);
    let title=cached?.title;
-   if(details||id===activeId){if(details||!cached||cached.key!==signature){title=mediaTitle(video,{document:this.document,index:items.length,total:this.videos.size});this.titleCache.set(video,{key:signature,title});}}
+   if(id===activeId||details&&this.videos.size===1){if(details||!cached||cached.key!==signature){title=mediaTitle(video,{document:this.document,index:items.length,total:this.videos.size});this.titleCache.set(video,{key:signature,title});}}
    else if(cached?.key!==signature)title='';
    title=title||video.getAttribute('title')||`Video ${items.length+1}`;
    const state=states.get(id);

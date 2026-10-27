@@ -3,7 +3,7 @@ import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents} from './tab-activity.js';
-const SCOPE='video-control',VERSION='0.6.10',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.11',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
@@ -15,6 +15,12 @@ function sendSelection(tabId,message,options){
  return new Promise(resolve=>{
   const timer=setTimeout(()=>resolve(null),1000);
   Promise.resolve().then(()=>chrome.tabs.sendMessage(tabId,message,options)).then(response=>{clearTimeout(timer);resolve(response);},()=>{clearTimeout(timer);resolve(null);});
+ });
+}
+function popupRefresh(task){
+ return new Promise(resolve=>{
+  const timer=setTimeout(resolve,1000);
+  Promise.resolve(task).then(()=>{clearTimeout(timer);resolve();},()=>{clearTimeout(timer);resolve();});
  });
 }
 let settingsCache,settingsTask,powerSignature,powerQueue=Promise.resolve(),settingsWrites=Promise.resolve(),language=resolveLanguage(null);
@@ -210,6 +216,18 @@ async function announce(tabId,force=false){
    if(selectionDeliveries.get(tabId)!==delivery)return;
    if(responses.every(response=>response.status==='fulfilled'&&response.value===true)){announced.set(tabId,key);delivery.attempts=0;}
    else{
+    // A removed iframe cannot acknowledge. Reconcile only failed recipients,
+    // without discarding a newer report for the same frame or document.
+    let live;try{live=await chrome.webNavigation.getAllFrames({tabId});}catch{}
+    let removed=false;
+    if(Array.isArray(live))for(let index=0;index<recipients.length;index++){
+     const response=responses[index],frame=recipients[index];
+     if(response.status==='fulfilled'&&response.value===true)continue;
+     if(frames.get(tabId)?.get(frame.frameId)!==frame)continue;
+     if(live.some(item=>item.frameId===frame.frameId&&(!item.documentId||!frame.documentId||item.documentId===frame.documentId)))continue;
+     frames.get(tabId).delete(frame.frameId);removed=true;
+    }
+    if(removed){clearSelectionDelivery(tabId);await announce(tabId,true);return;}
     if(announced.get(tabId)===key)announced.delete(tabId);
     if(delivery.attempts<3)delivery.timer=setTimeout(()=>{delivery.timer=null;if(selectionDeliveries.get(tabId)===delivery)announce(tabId,true).catch(()=>{});},delivery.attempts===1?100:400);
    }
@@ -219,9 +237,13 @@ async function announce(tabId,force=false){
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
 function record(tabId,frameId,documentId,videos){
+ const items=Array.isArray(videos)?videos.slice(0,64):[];
+ // An empty child frame has no media to select. Keeping every ad/analytics
+ // frame here made later reports contact documents that had already gone away.
+ if(frameId>0&&!items.length){if(frames.get(tabId)?.delete(frameId))announce(tabId,true);return;}
  if(!frames.has(tabId))frames.set(tabId,new Map());
  const fresh=frames.get(tabId).get(frameId)?.documentId!==documentId;
- frames.get(tabId).set(frameId,{frameId,documentId,videos:Array.isArray(videos)?videos.slice(0,64):[]});announce(tabId,fresh);
+ frames.get(tabId).set(frameId,{frameId,documentId,videos:items});announce(tabId,fresh);
 }
 async function refresh(tabId,force=false){
  const settings=await stored();if(!settings.enabled||disabledOnUrl((await chrome.tabs.get(tabId)).url,settings.disabledSites,settings.siteModes))return;
@@ -342,7 +364,7 @@ async function run(message,sender){
  if(message.action==='activity')return activityFields(tabId,tab.url||'');
  if(message.action==='getState'||message.action==='cachedState'){
   const settings=await stored(),pageUrl=tab.url||'',siteDisabled=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes);
-  if(message.action==='getState'&&settings.enabled&&!siteDisabled)try{await refresh(tabId,message.refresh===true);}catch{}
+  if(message.action==='getState'&&settings.enabled&&!siteDisabled)await popupRefresh(refresh(tabId,message.refresh===true));
   const target=siteDisabled?null:settings.enabled?targetFor(tabId):await pausedTarget(tabId),rate=await rateState();return {tabId,pageUrl,siteDisabled,settings,loading:tab.status==='loading',lastRate:rate.lastRate,rateRevision:rate.rateRevision,videos:target?[target]:[],target};
  }
  if(message.action==='updateSettings'){

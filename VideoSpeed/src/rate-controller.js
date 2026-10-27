@@ -19,7 +19,7 @@ export class RateController{
  read(){
   let result;try{result=this.readRate();}catch(error){result={status:'read-error',error:String(error?.message||error)};}
   this.actualRate=validRate(result?.actualRate)?Number(result.actualRate):null;this.defaultPlaybackRate=validRate(result?.defaultRate)?Number(result.defaultRate):null;
-  if(result?.status!=='ready'||this.actualRate===null){this.rateStatus='failed';this.rateOrigin='read-error';this.error='無法讀取播放速度';return {...result,status:'read-error',actualRate:this.actualRate};}
+  if(result?.status!=='ready'||this.actualRate===null){this.rateStatus='failed';this.rateOrigin='read-error';this.error='Playback speed unavailable';return {...result,status:'read-error',actualRate:this.actualRate};}
   if(this.desired===null)this.desired=this.actualRate;return result;
  }
  cancelRepair(){clearTimeout(this.repairTimer);this.repairTimer=null;}
@@ -55,7 +55,7 @@ export class RateController{
    if(this.mediaResetPending&&this.managedRate!==null&&this.video.readyState>=1)this.queueRepair('load');return;
   }
   this.initialized=true;
-  if(this.settings.defaultMode==='follow'&&!validRate(this.lastRate)){this.rateStatus='failed';this.rateOrigin='memory-error';this.error='無法讀取倍速記憶';this.onChange();return;}
+  if(this.settings.defaultMode==='follow'&&!validRate(this.lastRate)){this.rateStatus='failed';this.rateOrigin='memory-error';this.error='Saved speed unavailable';this.onChange();return;}
   const rate=defaultRate(this.settings,this.lastRate);
   if(rate===null){this.onInitialize(this.mediaKey);this.rateStatus=this.actualRate===null?'failed':'ready';this.rateOrigin='page';this.onMedia();return;}
   if(this.apply(rate,'default')){this.onInitialize(this.mediaKey);this.persist(rate,'default');this.onDefaultApplied(rate);}this.onMedia();
@@ -80,7 +80,7 @@ export class RateController{
   this.actualRate=validRate(result?.actualRate)?Number(result.actualRate):null;this.defaultPlaybackRate=validRate(result?.defaultRate)?Number(result.defaultRate):null;
   if(result?.status!=='ready'||!same(this.actualRate,rate)){
    this.cancelRepair();this.managedRate=null;this.desired=Number(rate);
-   this.rateStatus='failed';this.rateOrigin=result?.status||'unavailable';this.error=this.actualRate===null?'無法讀取播放速度':result?.status==='unsupported'?'此即時串流不支援倍速':result?.status==='write-error'?'播放器不接受此速度':'播放器未套用此速度';
+   this.rateStatus='failed';this.rateOrigin=result?.status||'unavailable';this.error=this.actualRate===null?'Playback speed unavailable':result?.status==='unsupported'?'Live streams do not support playback speed':result?.status==='write-error'?'Player does not accept this speed':'Player did not apply this speed';
    this.note('write-failed',{status:result?.status,error:result?.error});this.onChange();return false;
   }
   this.desired=Number(rate);this.managedRate=Number(rate);this.rateStatus='ready';this.rateOrigin=source;this.error='';this.note('applied',{source});this.onChange();return true;
@@ -89,7 +89,7 @@ export class RateController{
  observe(info){
   if(this.disposed||!this.settings.enabled||!info)return;this.sync(false,'observation',false);
   if(info.mediaKey&&info.mediaKey!==this.mediaKey)return;
-  if(info.status==='read-error'||!validRate(info.actualRate)){this.actualRate=null;this.rateStatus='failed';this.rateOrigin='read-error';this.error='無法讀取播放速度';this.note('read-failed');this.onChange();return;}
+  if(info.status==='read-error'||!validRate(info.actualRate)){this.actualRate=null;this.rateStatus='failed';this.rateOrigin='read-error';this.error='Playback speed unavailable';this.note('read-failed');this.onChange();return;}
   this.actualRate=Number(info.actualRate);this.defaultPlaybackRate=validRate(info.defaultRate)?Number(info.defaultRate):null;
   const origin=info.origin||'unknown';this.note('observed',{origin,evidence:info.evidence,property:info.property});
   if(origin==='vc'){this.onChange();return;}
@@ -117,11 +117,11 @@ export class RateController{
   if(this.disposed||this.managedRate===null||!this.settings.enabled)return;
   this.mediaResetPending=true;
   if(this.repairTimer!==null||!this.selected||this.video.paused||this.video.ended)return;
-  if(this.automaticWrites>=MAX_AUTOMATIC_WRITES){this.rateStatus='conflict';this.rateOrigin=reason;this.error='網站持續改寫播放速度';this.note('recovery-limit');this.onChange();return;}
+  if(this.automaticWrites>=MAX_AUTOMATIC_WRITES){this.rateStatus='conflict';this.rateOrigin=reason;this.error='The site keeps overriding playback speed';this.note('recovery-limit');this.onChange();return;}
   const key=this.mediaKey,revision=this.revision;
   this.repairTimer=setTimeout(()=>{
    this.repairTimer=null;
-   let currentKey;try{currentKey=this.signature();}catch{this.rateStatus='failed';this.error='無法讀取影片狀態';this.onChange();return;}
+   let currentKey;try{currentKey=this.signature();}catch{this.rateStatus='failed';this.error='Video state unavailable';this.onChange();return;}
    if(this.disposed||revision!==this.revision||currentKey!==key||this.managedRate===null||!this.selected||!this.settings.enabled||this.video.paused||this.video.ended||this.video.readyState===0||!this.canInitialize())return;
    const result=this.read();if(result.status!=='ready')return;
    if(same(this.actualRate,this.managedRate)&&(this.settings.defaultMode==='off'||same(this.defaultPlaybackRate,this.managedRate))){this.mediaResetPending=false;return;}
@@ -138,9 +138,9 @@ export class RateController{
  }
  command(action,value){
   this.sync(false,'command',false);this.cancelRepair();this.revision++;this.automaticWrites=0;const current=this.actualRate;
-  if(['faster','slower','fineFaster','fineSlower'].includes(action)&&!validRate(current))throw Error('無法讀取播放速度');
+  if(['faster','slower','fineFaster','fineSlower'].includes(action)&&!validRate(current))throw Error('Playback speed unavailable');
   const next=action==='reset'?1:action==='preferred'?this.settings.preferredRate:action==='faster'?stepRate(current,this.settings.steps,1):action==='slower'?stepRate(current,this.settings.steps,-1):action==='fineFaster'?fineStepRate(current,this.settings.steps,1):action==='fineSlower'?fineStepRate(current,this.settings.steps,-1):Number(value);
-  if(!validRate(next))throw Error('無效的播放速度');this.initialized=true;this.mediaResetPending=false;
+  if(!validRate(next))throw Error('Invalid playback speed');this.initialized=true;this.mediaResetPending=false;
   if(this.apply(normalizeRate(next),'command')){this.onInitialize(this.mediaKey);this.persist(this.desired,'command');}return this.snapshot();
  }
  snapshot(){return {rate:this.actualRate,desiredRate:this.desired,rateStatus:this.rateStatus,rateOrigin:this.rateOrigin,rateError:this.error};}

@@ -91,7 +91,7 @@ test('window focus transitions without an active tab still persist their revisio
  assert.equal(activity.snapshot().revision,1);
 });
 
-test('replays startup transitions in order and ignores activation from a background window',()=>{
+test('caches a pre-focus activation and applies it only when that window gains focus',()=>{
  const clock=clockAt(0),activity=new TabActivity({now:clock.now});
  activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:8,untilByTab:{}});
  const events=[
@@ -101,13 +101,72 @@ test('replays startup transitions in order and ignores activation from a backgro
   {type:'focus',windowId:2,at:300},
   {type:'activated',windowId:2,tabId:20,at:350},
  ];
- assert.deepEqual(replayTabActivityEvents(activity,events),[10,11,12,20]);
+ assert.deepEqual(replayTabActivityEvents(activity,events),[10,11,12,99,20]);
  assert.deepEqual(activity.reconcile({windowId:2,tabId:20},400),[]);
- assert.deepEqual(activity.activity(10),{focused:false,until:10_100,revision:12});
- assert.deepEqual(activity.activity(11),{focused:false,until:10_200,revision:12});
- assert.deepEqual(activity.activity(12),{focused:false,until:10_300,revision:12});
- assert.deepEqual(activity.activity(99),{focused:false,until:0,revision:12});
- assert.deepEqual(activity.activity(20),{focused:true,until:0,revision:12});
+ assert.deepEqual(activity.activity(10),{focused:false,until:10_100,revision:13});
+ assert.deepEqual(activity.activity(11),{focused:false,until:10_200,revision:13});
+ assert.deepEqual(activity.activity(12),{focused:false,until:10_300,revision:13});
+ assert.deepEqual(activity.activity(99),{focused:false,until:10_350,revision:13});
+ assert.deepEqual(activity.activity(20),{focused:true,until:0,revision:13});
+});
+
+test('background activation is cached without granting a lease before window focus',()=>{
+ const activity=new TabActivity();
+ activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{}});
+ assert.deepEqual(activity.setActiveTab(2,20,100),[]);
+ assert.deepEqual(activity.activity(20,100),{focused:false,until:0,revision:5});
+ assert.deepEqual(activity.snapshot(100).activeByWindow,{'1':10,'2':20});
+ assert.deepEqual(activity.setFocusedWindow(2,200),[10,20]);
+ assert.deepEqual(activity.activity(10,200),{focused:false,until:10_200,revision:7});
+ assert.deepEqual(activity.activity(20,200),{focused:true,until:0,revision:7});
+});
+
+test('reconcile remembers the actual tab before consuming a stale window candidate',()=>{
+ const activity=new TabActivity();
+ activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{}});
+ activity.setActiveTab(2,20,100);
+ assert.deepEqual(activity.reconcile({windowId:2,tabId:21},200),[10,21]);
+ assert.deepEqual(activity.activity(20,200),{focused:false,until:0,revision:7});
+ assert.deepEqual(activity.activity(21,200),{focused:true,until:0,revision:7});
+ assert.deepEqual(activity.snapshot(200).activeByWindow,{'1':10,'2':21});
+});
+
+test('a newly focused cached tab receives a blur deadline when focus leaves before query reconciliation',()=>{
+ const activity=new TabActivity();
+ activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:8,untilByTab:{}});
+ const affected=replayTabActivityEvents(activity,[
+  {type:'activated',windowId:2,tabId:20,at:100},
+  {type:'focus',windowId:2,at:110},
+  {type:'focus',windowId:3,at:120},
+ ]);
+ assert.deepEqual(affected,[10,20]);
+ assert.deepEqual(activity.activity(20,120),{focused:false,until:10_120,revision:11});
+ assert.deepEqual(activity.activity(10,120),{focused:false,until:10_110,revision:11});
+});
+
+test('snapshot restores per-window candidates and forget/prune remove stale cache entries',()=>{
+ const activity=new TabActivity();
+ activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:4,untilByTab:{'9':150},activeByWindow:{'1':10,'2':20,'bad':30,'3':-1}});
+ const snapshot=activity.snapshot(100);
+ assert.deepEqual(snapshot.activeByWindow,{'1':10,'2':20});
+ assert.deepEqual(snapshot.untilByTab,{'9':150});
+ const restored=new TabActivity().restore(snapshot);
+ assert.equal(restored.forget(20),true);
+ assert.deepEqual(restored.snapshot(100).activeByWindow,{'1':10});
+ assert.equal(restored.forget(9),true);
+ assert.deepEqual(restored.snapshot(150).untilByTab,{});
+});
+
+test('forgetWindow removes its cached candidate and blurs its current tab',()=>{
+ const clock=clockAt(0),activity=new TabActivity({now:clock.now});
+ activity.restore({version:1,focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{}});
+ activity.setActiveTab(2,20,100);
+ assert.deepEqual(activity.forgetWindow(2,100),[]);
+ assert.deepEqual(activity.snapshot(100).activeByWindow,{'1':10});
+ assert.deepEqual(activity.forgetWindow(1,100),[10]);
+ assert.deepEqual(activity.activity(10,200),{focused:false,until:10_100,revision:6});
+ assert.equal(activity.focusedWindowId,null);
+ assert.deepEqual(activity.snapshot(200).activeByWindow,{});
 });
 
 test('a later stable focus query does not refresh leases for intermediate tabs',()=>{

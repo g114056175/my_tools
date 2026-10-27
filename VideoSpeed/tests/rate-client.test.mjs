@@ -18,6 +18,11 @@ test('read errors and invalid responses never manufacture a remembered 1x',()=>{
  const token=client.begin(8);assert.equal(client.acknowledge(token,{ok:false,error:'storage failed'}),false);
  assert.equal(client.rate,8);assert.equal(client.snapshot().pending,true);assert.equal(client.error,'storage failed');
 });
+test('rate-client validation and missing persistence confirmations use canonical English messages',()=>{
+ const client=new RateClient();assert.throws(()=>client.begin(NaN),{message:'Invalid playback speed'});
+ const token=client.begin(8);assert.equal(client.acknowledge(token,{ok:false}),false);
+ assert.equal(client.error,'Saved speed could not be confirmed');
+});
 test('newer confirmed cross-tab memory is accepted after local acknowledgement',()=>{
  const client=new RateClient();client.accept({lastRate:2,rateRevision:3});assert.equal(client.accept({lastRate:1.5,rateRevision:4}),true);
  assert.equal(client.rate,1.5);assert.equal(client.accept({lastRate:1,rateRevision:4}),false);

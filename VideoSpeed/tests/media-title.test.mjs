@@ -16,7 +16,7 @@ test('YouTube generic aria label never outranks the real page title',()=>{
   assert.equal(mediaTitle(video({'aria-label':'YouTube 影片播放器'}, {}, doc)),'A real clip');
 });
 test('platform names, translated player labels and controls are generic',()=>{
-  for(const name of ['Video','YouTube','YouTube video player','YouTube 影片播放器','Twitch 影片播放器','Embedded video','嵌入式影片','影片 2','播放','Bilibili'])assert.equal(cleanMediaTitle(name),'',name);
+  for(const name of ['Video','YouTube','YouTube video player','YouTube 影片播放器','Twitch 影片播放器','Embedded video','嵌入式影片','影片 2','Video 2','播放','Bilibili'])assert.equal(cleanMediaTitle(name),'',name);
 });
 test('bound YouTube titles require current media identity',()=>{
   const attrs={'data-video-control-title':'Current title','data-video-control-title-id':'yt:abc','data-video-control-content-id':'yt:abc'};
@@ -39,15 +39,15 @@ test('social post copy is not used as a media title',()=>{
   const doc=document('Unrelated feed');
   for(const title of ['First post','Second post']){
     const article={querySelector:selector=>selector==='[data-testid="tweetText"]'?element({},title):null};
-    assert.equal(mediaTitle(video({'aria-label':'Embedded video'},{article},doc),{document:doc,total:2,index:0}),'影片 1');
+    assert.equal(mediaTitle(video({'aria-label':'Embedded video'},{article},doc),{document:doc,total:2,index:0}),'Video 1');
   }
 });
 test('social copy, replies, and translations never become media titles',()=>{
  const doc=document('Unrelated feed');
  const article={querySelector:selector=>selector==='[data-testid="tweetText"]'?element({},'Here’s what we’re cooking with Codex: 以下是...'):null};
- assert.equal(mediaTitle(video({'aria-label':'Embedded video'},{article},doc),{document:doc,total:2,index:0}),'影片 1');
+ assert.equal(mediaTitle(video({'aria-label':'Embedded video'},{article},doc),{document:doc,total:2,index:0}),'Video 1');
  const card={querySelector:selector=>selector==='[data-testid="video-title"]'?element({},'COOKED: Ep. 1'):null};
- assert.equal(mediaTitle(video({}, {'article':card}, doc),{document:doc,total:2,index:0}),'影片 1');
+ assert.equal(mediaTitle(video({}, {'article':card}, doc),{document:doc,total:2,index:0}),'Video 1');
 });
 test('X broadcast card aria title is scoped to the owning article',()=>{
  const doc=document('Unrelated feed');
@@ -78,12 +78,12 @@ test('explicit card titles stay bound to each video in a multi-video article',()
 test('a sibling-only card title is ignored',()=>{
  const doc=document('Feed');const sibling=element({'data-video-title':'Other card'}),videoItem=video({}, {'article':sibling}, doc);
  const article={tagName:'ARTICLE',querySelectorAll:selector=>selector==='video'?[videoItem]:[]};videoItem.parentElement=article;
- assert.equal(mediaTitle(videoItem,{document:doc,total:1,index:0}),'影片 1');
+ assert.equal(mediaTitle(videoItem,{document:doc,total:1,index:0}),'Video 1');
 });
 test('player control labels cannot become titles or escape into another post',()=>{
   const player={querySelector:selector=>['[aria-label]','[title]','[data-title]'].includes(selector)?element({'aria-label':'Play',title:'Fullscreen','data-title':'Mute'}):null};
   const doc=document('Global title');
-  assert.equal(mediaTitle(video({'aria-label':'Video'},{'[data-player]':player},doc),{document:doc,total:3,index:1}),'影片 2');
+  assert.equal(mediaTitle(video({'aria-label':'Video'},{'[data-player]':player},doc),{document:doc,total:3,index:1}),'Video 2');
 });
 test('explicit data title is read as an attribute',()=>{
   const doc=document('Fallback');
@@ -95,12 +95,12 @@ test('generic OG metadata is skipped and unknown media is numbered',()=>{
   const entries={'meta[property="og:title"]':element({content:'YouTube video player'})};
   const doc=document('Actual page title',entries);
   assert.equal(mediaTitle(video({}, {},doc)),'Actual page title');
-  doc.title='YouTube';assert.equal(mediaTitle(video({}, {},doc)),'影片 1');
+  doc.title='YouTube';assert.equal(mediaTitle(video({}, {},doc)),'Video 1');
 });
 test('an empty post does not inherit an unrelated page heading',()=>{
   const doc=document('Other title',{'h1.video-title':element({},'Other main video')});
   const article={querySelector:()=>null};
-  assert.equal(mediaTitle(video({'aria-label':'Video'},{article},doc)),'影片 1');
+  assert.equal(mediaTitle(video({'aria-label':'Video'},{article},doc)),'Video 1');
 });
 test('page titles are read again after generic single-player SPA navigation',()=>{
   const doc=document('First route');const item=video({}, {},doc);

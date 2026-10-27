@@ -261,7 +261,7 @@ export class MediaRegistry{
    let title=cached?.title;
    if(details||id===activeId){if(details||!cached||cached.key!==signature){title=mediaTitle(video,{document:this.document,index:items.length,total:this.videos.size});this.titleCache.set(video,{key:signature,title});}}
    else if(cached?.key!==signature)title='';
-   title=title||video.getAttribute('title')||`影片 ${items.length+1}`;
+   title=title||video.getAttribute('title')||`Video ${items.length+1}`;
    const state=states.get(id);
    const visibleArea=visible?Math.max(0,Math.min(view.innerWidth,rect.right)-Math.max(0,rect.left))*Math.max(0,Math.min(view.innerHeight,rect.bottom)-Math.max(0,rect.top)):0;
    items.push({id,title:String(title).trim().slice(0,200),visible,visibleArea,area:Math.round(rect.width*rect.height),fullscreen,playing:!video.paused&&!video.ended,lastPlayedAt:Number(video.getAttribute('data-video-control-last-played'))||0,interactedAt:interactions.get(video)||0,connected:video.isConnected,videoQuality:video.videoWidth&&video.videoHeight?Math.min(video.videoWidth,video.videoHeight):video.videoHeight||0,videoHeight:video.videoHeight||0,...state?.rate.snapshot(),quality:state?.quality||{status:'pending'}});

@@ -30,7 +30,7 @@ const resultsPath = path.join(reportDirectory, 'results.json');
 const runtimeFiles = [
   'manifest.json', 'background.js', 'tab-activity.js', 'content.js', 'page-bridge.js',
   'popup.html', 'popup.js', 'popup.css', 'settings.js', 'site-rules.js', 'site-domain.js',
-  'i18n.js', 'rate-memory.js', 'quality-options.js',
+  'i18n.js', 'locale-zh.js', 'rate-memory.js', 'quality-options.js',
   'icons/16.png', 'icons/32.png', 'icons/48.png', 'icons/128.png',
 ];
 const probeKey = 'videospeed.qa-069.activity.dom-probe';

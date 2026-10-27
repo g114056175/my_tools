@@ -28,6 +28,14 @@ test('invalid rules cannot silently become broader exclusions',()=>{
  for(const raw of ['','javascript:alert(1)','https://user:pass@example.com/','youtube.com:443','https://*.youtube.com/*','https://example.com/a*/b/*'])assert.throws(()=>normalizeSiteRule(raw));
  assert.deepEqual(normalizeSiteRules([null,'youtube.com','youtube.com','javascript:bad']),['youtube.com']);assert.throws(()=>validateSiteRules(Array(201).fill('youtube.com')));
 });
+test('site-rule validation failures expose canonical English messages',()=>{
+ assert.throws(()=>normalizeSiteRule(''),{message:'Enter a domain or full URL'});
+ assert.throws(()=>normalizeSiteRule('bad:443'),{message:'Invalid domain'});
+ assert.throws(()=>normalizeSiteRule('ftp://example.test'),{message:'Enter an http or https URL'});
+ assert.throws(()=>normalizeSiteRule('https://example.test/a*'),{message:'Only a trailing /* path wildcard is supported'});
+ assert.throws(()=>validateSiteRules(Array(201).fill('example.test')),{message:'Up to 200 block rules are supported'});
+ assert.throws(()=>validateSettings({...normalizeSettings({disabledSites:['example.test']}),siteModes:{'example.test':'invalid'}}),{message:'Invalid exclusion mode'});
+});
 
 test('legacy exclusions stay Full and Default retains manual controls without changing saved preferences',()=>{
  const legacy=normalizeSettings({disabledSites:['youtube.com'],defaultMode:'follow',qualityEnabled:true});

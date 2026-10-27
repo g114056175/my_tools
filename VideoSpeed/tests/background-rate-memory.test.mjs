@@ -28,6 +28,11 @@ test('serializes a confirmed write behind a delayed initial read',async()=>{
  assert.deepEqual(storage.log,['get:start','get:done','set:start','set:done']);
 });
 
+test('saved speed revision overflow reports its canonical English message',async()=>{
+ const memory=new RateMemory(new LocalStorage({lastRate:2,lastRateRevision:Number.MAX_SAFE_INTEGER}));
+ await assert.rejects(memory.remember(3,'command'),{message:'Saved speed revision limit reached'});
+});
+
 test('a read queued after a delayed confirmed write sees its acknowledged revision',async()=>{
  const storage=new LocalStorage({lastRate:2,lastRateRevision:7}),entered=deferred(),release=deferred();
  storage.getImpl=async keys=>{entered.resolve();await release.promise;return Object.fromEntries(keys.filter(key=>Object.hasOwn(storage.data,key)).map(key=>[key,storage.data[key]]));};
@@ -121,7 +126,7 @@ test('propagates storage reread errors while reconciling an external change',asy
 test('propagates storage read and seed-write failures instead of returning one',async()=>{
  const readError=Error('storage read failed'),readStorage=new LocalStorage();readStorage.getImpl=()=>{throw readError;};
  await assert.rejects(new RateMemory(readStorage).read(),error=>error===readError);
- await assert.rejects(new RateMemory(new LocalStorage({lastRate:NaN,lastRateRevision:2})).read(),/無效的播放速度記憶資料/);
+ await assert.rejects(new RateMemory(new LocalStorage({lastRate:NaN,lastRateRevision:2})).read(),/Invalid saved playback speed data/);
  const writeError=Error('storage write failed'),writeStorage=new LocalStorage();writeStorage.setImpl=()=>{throw writeError;};
  await assert.rejects(new RateMemory(writeStorage).read(),error=>error===writeError);
  assert.equal(writeStorage.sets.length,0);
@@ -138,8 +143,8 @@ test('retries a transient initial read failure without replacing memory with one
 
 test('invalid stored memory stays an error and is never reseeded as one',async()=>{
  const storage=new LocalStorage({lastRate:NaN,lastRateRevision:4}),memory=new RateMemory(storage);
- await assert.rejects(memory.load(),/無效的播放速度記憶資料/);
- await assert.rejects(memory.read(),/無效的播放速度記憶資料/);
+ await assert.rejects(memory.load(),/Invalid saved playback speed data/);
+ await assert.rejects(memory.read(),/Invalid saved playback speed data/);
  assert.deepEqual(storage.sets,[]);assert(Number.isNaN(storage.data.lastRate));
 });
 

@@ -1,13 +1,13 @@
 function webUrl(value){try{const url=new URL(value);return /^https?:$/.test(url.protocol)?url:null;}catch{return null;}}
 const hostOf=url=>url.hostname.toLowerCase().replace(/^www\./,'').replace(/\.$/,'');
 export function normalizeSiteRule(value){
- const raw=String(value??'').trim();if(!raw||raw.length>2048)throw Error('請輸入網域或完整網址');
+ const raw=String(value??'').trim();if(!raw||raw.length>2048)throw Error('Enter a domain or full URL');
  if(!raw.includes('://')&&!/[/?#*\s]/.test(raw)){
-  const url=webUrl('https://'+raw);if(!url||url.username||url.password||url.port||raw.includes(':')&&!/^\[[a-f0-9:]+\]$/i.test(raw))throw Error('網域格式不正確');
-  const host=hostOf(url);if(!host)throw Error('網域格式不正確');return host;
+  const url=webUrl('https://'+raw);if(!url||url.username||url.password||url.port||raw.includes(':')&&!/^\[[a-f0-9:]+\]$/i.test(raw))throw Error('Invalid domain');
+  const host=hostOf(url);if(!host)throw Error('Invalid domain');return host;
  }
- const url=webUrl(raw);if(!url||url.username||url.password)throw Error('請輸入 http 或 https 網址');
- if(url.hostname.includes('*')||url.pathname.includes('*')&&(!url.pathname.endsWith('/*')||url.pathname.slice(0,-1).includes('*'))||url.search.includes('*'))throw Error('僅支援網址路徑結尾的 /*');
+ const url=webUrl(raw);if(!url||url.username||url.password)throw Error('Enter an http or https URL');
+ if(url.hostname.includes('*')||url.pathname.includes('*')&&(!url.pathname.endsWith('/*')||url.pathname.slice(0,-1).includes('*'))||url.search.includes('*'))throw Error('Only a trailing /* path wildcard is supported');
  url.hostname=hostOf(url);url.searchParams.sort();return url.href;
 }
 export function normalizeSiteRules(raw){
@@ -15,7 +15,7 @@ export function normalizeSiteRules(raw){
  const rules=[];for(const item of raw.slice(0,200)){try{const rule=normalizeSiteRule(item);if(!rules.includes(rule))rules.push(rule);}catch{}}return rules;
 }
 export function validateSiteRules(raw){
- if(!Array.isArray(raw)||raw.length>200)throw Error('最多可設定 200 條停用規則');return [...new Set(raw.map(normalizeSiteRule))];
+ if(!Array.isArray(raw)||raw.length>200)throw Error('Up to 200 block rules are supported');return [...new Set(raw.map(normalizeSiteRule))];
 }
 export function normalizeSiteModes(raw,rules){
  if(!raw||typeof raw!=='object'||Array.isArray(raw))return {};
@@ -27,8 +27,8 @@ export function normalizeSiteModes(raw,rules){
 }
 export function validateSiteModes(raw,rules){
  if(raw===undefined)return {};
- if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).length>200)throw Error('無效的除外類型');
- for(const [value,mode]of Object.entries(raw))if(!['full','default'].includes(mode)||!rules.includes(normalizeSiteRule(value)))throw Error('無效的除外類型');
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).length>200)throw Error('Invalid exclusion mode');
+ for(const [value,mode]of Object.entries(raw))if(!['full','default'].includes(mode)||!rules.includes(normalizeSiteRule(value)))throw Error('Invalid exclusion mode');
  return normalizeSiteModes(raw,rules);
 }
 function matchesSiteRule(url,raw){

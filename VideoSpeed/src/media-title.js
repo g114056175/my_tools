@@ -1,6 +1,6 @@
 const PLATFORM = /^(?:youtube|twitch|bilibili|facebook|instagram|tiktok|twitter|x|哔哩哔哩|嗶哩嗶哩)$/iu;
 const GENERIC = /^(?:(?:youtube|twitch|bilibili|facebook|instagram|tiktok)\s*[-|·:]?\s*)?(?:(?:html5|embedded)\s*)?(?:video|media|影片|视频|視頻|嵌入(?:式)?影片|嵌入(?:式)?視頻)(?:\s*(?:player|播放器))?$/iu;
-const CONTROL = /^(?:播放器|播放|暫停|暂停|播放影片|播放视频|全螢幕|全屏|首頁|首页|home|play|pause|fullscreen|影片\s*\d+)$/iu;
+const CONTROL = /^(?:播放器|播放|暫停|暂停|播放影片|播放视频|全螢幕|全屏|首頁|首页|home|play|pause|fullscreen|(?:video|影片)\s*\d+)$/iu;
 
 export function cleanMediaTitle(value){
   if(value==null)return '';
@@ -95,7 +95,7 @@ export function mediaTitle(video,{document=video?.ownerDocument,index=0,total=1}
     const name=pageTitle(document);if(name)return name;
   }
   if(total===1&&!article){const name=pageTitle(document);if(name)return name;}
-  return `影片 ${index+1}`;
+  return `Video ${index+1}`;
 }
 
 export {GENERIC as GENERIC_MEDIA_TITLE};

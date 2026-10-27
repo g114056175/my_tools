@@ -4,21 +4,21 @@ import {disabledOnUrl,normalizeSiteRule} from './site-rules.js';
 import {siteDomain} from './site-domain.js';
 import {resolveLanguage,translate,translateMessage,applyPopupLanguage} from './i18n.js';
 const $=id=>document.getElementById(id),drafts=new Map();
-let state,tabId,revision=0,refreshRevision=0,rateRevision=0,enterCommit=false,rateDirty=false,dragging=false,rateTarget='',sliderKey='',pendingRate=null,sendingRate=false,rateTimer,refreshTimer,closed=false;
+let state,tabId,revision=0,refreshRevision=0,rateRevision=0,enterCommit=false,rateDirty=false,dragging=false,rateTarget='',sliderKey='',pendingRate=null,sendingRate=false,rateTimer,refreshTimer,closed=false,unavailableReason='';
 let powerBusy=false,stepInputDirty=false,stepInputRevision=0,stepTimer,shortcutRecording='',siteInputDirty=false,siteInputPage='';
-const shortcutActions=[['slower','上一刻度'],['faster','下一刻度'],['fineSlower','細調減速'],['fineFaster','細調加速'],['reset','還原 1×'],['preferred','偏好速度']];
-let language=resolveLanguage(null,chrome.i18n.getUILanguage());const t=(key,values)=>translate(language,key,values);
+const shortcutActions=[['slower','Prev tick'],['faster','Next tick'],['fineSlower','Fine down'],['fineFaster','Fine up'],['reset','Reset 1×'],['preferred','Preferred']];
+let language=resolveLanguage();const t=(key,values)=>translate(language,key,values);
 const systemTheme=matchMedia('(prefers-color-scheme: dark)');let appearance='system';
 function paintTheme(){const dark=appearance==='dark'||appearance==='system'&&systemTheme.matches;document.documentElement.dataset.theme=dark?'dark':'light';for(const button of document.querySelectorAll('button[data-theme]')){const active=button.dataset.theme===(dark?'dark':'light');button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}}
 function paintLanguage(){applyPopupLanguage(document,language);for(const button of document.querySelectorAll('[data-language]')){const active=button.dataset.language===language;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}for(const node of document.querySelectorAll('[role=alert]'))if(node.dataset.message)node.textContent=translateMessage(language,node.dataset.message);sliderKey='';if(state)render();}
-try{const storedUi=await chrome.storage.local.get(['popupTheme','popupLanguage']);if(['light','dark'].includes(storedUi.popupTheme))appearance=storedUi.popupTheme;language=resolveLanguage(storedUi.popupLanguage,chrome.i18n.getUILanguage());}catch{}
+try{const storedUi=await chrome.storage.local.get(['popupTheme','popupLanguage']);if(['light','dark'].includes(storedUi.popupTheme))appearance=storedUi.popupTheme;language=resolveLanguage(storedUi.popupLanguage);}catch{language='en';}
 paintLanguage();paintTheme();systemTheme.addEventListener('change',paintTheme);
 for(const button of document.querySelectorAll('button[data-theme],button[data-language]'))button.addEventListener('click',async()=>{
  if(!state||!effective().enabled)return;cancelRecording();
- try{await chrome.storage.local.set(button.dataset.theme?{popupTheme:button.dataset.theme}:{popupLanguage:button.dataset.language});}catch{error('feedback',button.dataset.theme?'外觀保存失敗':'保存失敗：無法連線');}
+ try{await chrome.storage.local.set(button.dataset.theme?{popupTheme:button.dataset.theme}:{popupLanguage:button.dataset.language});}catch{error('feedback',button.dataset.theme?'Could not save appearance':'Could not save: Could not connect');}
 });
-chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.popupTheme){appearance=['light','dark'].includes(changes.popupTheme.newValue)?changes.popupTheme.newValue:'system';paintTheme();}if(changes.popupLanguage){language=resolveLanguage(changes.popupLanguage.newValue,chrome.i18n.getUILanguage());paintLanguage();}});
-const send=async message=>{const result=await chrome.runtime.sendMessage({scope:'video-control',...(tabId?{tabId}:{}),...message});if(!result?.ok)throw Error(result?.error||'無法連線');return result;};
+chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.popupTheme){appearance=['light','dark'].includes(changes.popupTheme.newValue)?changes.popupTheme.newValue:'system';paintTheme();}if(changes.popupLanguage){language=resolveLanguage(changes.popupLanguage.newValue);paintLanguage();}});
+const send=async message=>{const result=await chrome.runtime.sendMessage({scope:'video-control',...(tabId?{tabId}:{}),...message});if(!result?.ok)throw Error(result?.error||'Could not connect');return result;};
 function error(id,text=''){$(id).dataset.message=text;$(id).textContent=translateMessage(language,text);$(id).hidden=!text;}
 function effective(){return {...state.settings,...Object.fromEntries([...drafts].map(([key,item])=>[key,item.value]))};}
 function closeQuality(){ $('quality-list').hidden=true;$('quality').setAttribute('aria-expanded','false'); }
@@ -53,7 +53,7 @@ function qualityOptions(settings){
  }
  for(const option of $('quality-list').children)option.setAttribute('aria-selected',String(option.dataset.quality===menu.selected));
  $('quality').dataset.value=menu.selected;$('quality').classList.toggle('has-quality',settings.qualityEnabled);
- $('quality-value').textContent=translateMessage(language,menu.options.find(item=>item.value===menu.selected)?.label||'關閉');
+ $('quality-value').textContent=translateMessage(language,menu.options.find(item=>item.value===menu.selected)?.label||'Off');
  if(!$('quality-list').hidden)positionQuality();
 }
 function fitStepsInput(){const input=$('steps-input');if(!input.offsetWidth)return;input.style.height='0px';input.style.height=Math.max(42,Math.min(180,input.scrollHeight+2))+'px';}
@@ -66,24 +66,25 @@ function renderShortcuts(settings){
  if(!$('shortcut-list').children.length){
   for(const [action,label]of shortcutActions){
    const row=document.createElement('div');row.className='shortcut-row';
-   const text=document.createElement('span');text.dataset.shortcutLabel=action;text.textContent=t(label);if(action==='preferred')text.title=t('按下偏好快捷鍵，跳至偏好速度');
-   const button=document.createElement('button');button.type='button';button.className='shortcut-key';button.dataset.shortcut=action;button.setAttribute('aria-label','設定'+label+'快捷鍵');
+   const text=document.createElement('span');text.dataset.shortcutLabel=action;text.textContent=t(label);if(action==='preferred')text.title=t('Use the preferred-speed shortcut to switch to this speed');
+   const button=document.createElement('button');button.type='button';button.className='shortcut-key';button.dataset.shortcut=action;button.setAttribute('aria-label',t('Set shortcut: {action}',{action:t(label)}));
    button.addEventListener('click',()=>{shortcutRecording=shortcutRecording===action?'':action;error('shortcut-error');renderShortcuts(effective());button.focus();});
-   const clear=document.createElement('button');clear.type='button';clear.className='shortcut-clear';clear.dataset.shortcutClear=action;clear.textContent='×';clear.setAttribute('aria-label','清除'+label+'快捷鍵');
+   const clear=document.createElement('button');clear.type='button';clear.className='shortcut-clear';clear.dataset.shortcutClear=action;clear.textContent='×';clear.setAttribute('aria-label',t('Clear shortcut: {action}',{action:t(label)}));
    clear.addEventListener('click',()=>saveShortcut(action,''));row.append(text,button,clear);$('shortcut-list').append(row);
   }
  }
  for(const [action,label]of shortcutActions){
   const key=settings.shortcuts[action]||'',button=document.querySelector('[data-shortcut="'+action+'"]'),recording=shortcutRecording===action;
-  const text=document.querySelector('[data-shortcut-label="'+action+'"]');text.textContent=t(label);if(action==='preferred')text.title=t('按下偏好快捷鍵，跳至偏好速度');button.setAttribute('aria-label',t('設定{action}快捷鍵',{action:t(label)}));
-  button.textContent=recording?t('請按按鍵'):key||t('未設定');button.title=key;button.classList.toggle('is-recording',recording);button.classList.toggle('is-empty',!key&&!recording);button.disabled=!settings.enabled;
-  const clear=document.querySelector('[data-shortcut-clear="'+action+'"]');clear.disabled=!settings.enabled||!key;clear.setAttribute('aria-label',t('清除{action}快捷鍵',{action:t(label)}));
+  const text=document.querySelector('[data-shortcut-label="'+action+'"]');text.textContent=t(label);if(action==='preferred')text.title=t('Use the preferred-speed shortcut to switch to this speed');button.setAttribute('aria-label',t('Set shortcut: {action}',{action:t(label)}));
+  button.textContent=recording?t('Press a key'):key||t('Unbound');button.title=key;button.classList.toggle('is-recording',recording);button.classList.toggle('is-empty',!key&&!recording);button.disabled=!settings.enabled;
+  const clear=document.querySelector('[data-shortcut-clear="'+action+'"]');clear.disabled=!settings.enabled||!key;clear.setAttribute('aria-label',t('Clear shortcut: {action}',{action:t(label)}));
  }
 }
 function unavailable(reason=''){
+ unavailableReason=reason;
  if(state)state.target=null;
  $('controls').hidden=false;$('playback').hidden=true;document.body.classList.add('empty');
- $('single-target').textContent=t('未取得影片資訊');$('single-target').title=translateMessage(language,reason);
+ $('single-target').textContent=t('No video found');$('single-target').title=translateMessage(language,reason);
  pendingRate=null;rateTarget='';rateDirty=false;shortcutRecording='';
  if(state)render();$('single-target').title=translateMessage(language,reason);
 }
@@ -98,7 +99,7 @@ function renderSites(settings){
    mode.title=mode.dataset.mode==='default'?'Skip automatic speed and quality settings':'Disable all features on this site';
    mode.setAttribute('aria-label',rule+': '+mode.textContent+'. '+mode.title);
    mode.addEventListener('click',()=>{const next={...effective().siteModes};if(next[rule]==='default')delete next[rule];else Object.defineProperty(next,rule,{value:'default',enumerable:true,configurable:true,writable:true});saveField('siteModes',next);});
-   const remove=document.createElement('button');remove.type='button';remove.className='site-remove';remove.textContent='×';remove.setAttribute('aria-label',t('移除 {rule}',{rule}));remove.addEventListener('click',()=>{const next={...effective().siteModes};delete next[rule];saveFields({disabledSites:effective().disabledSites.filter(item=>item!==rule),siteModes:next});});row.append(label,mode,remove);return row;
+   const remove=document.createElement('button');remove.type='button';remove.className='site-remove';remove.textContent='×';remove.setAttribute('aria-label',t('Remove {rule}',{rule}));remove.addEventListener('click',()=>{const next={...effective().siteModes};delete next[rule];saveFields({disabledSites:effective().disabledSites.filter(item=>item!==rule),siteModes:next});});row.append(label,mode,remove);return row;
   }));
  }
  for(const button of $('site-list').querySelectorAll('button'))button.disabled=!settings.enabled;
@@ -118,7 +119,7 @@ function renderSlider(){
    const position=steps.length===1?50:index/(steps.length-1)*100,x=position/100*width,label=formatRate(value),hitWidth=Math.max(24,measure.measureText(label).width+6);
    let row=rows.findIndex(right=>x-hitWidth/2>=right+3);if(row<0){row=rows.length;rows.push(-Infinity);}rows[row]=x+hitWidth/2;
    const line=document.createElement('span');line.className='tick-line';line.style.left=position+'%';line.setAttribute('aria-hidden','true');
-   const button=document.createElement('button');button.type='button';button.className='tick';button.dataset.rate=String(value);button.textContent=label;button.setAttribute('aria-label',t('套用 {rate} 倍速',{rate:label}));
+   const button=document.createElement('button');button.type='button';button.className='tick';button.dataset.rate=String(value);button.textContent=label;button.setAttribute('aria-label',t('Set speed to {rate}×',{rate:label}));
    button.style.left=position+'%';button.style.top=String(5+row*22)+'px';button.style.minWidth=hitWidth+'px';button.addEventListener('click',()=>queueRate(value));nodes.push(line,button);
   }
   list.style.height=String(Math.max(1,rows.length)*22+5)+'px';list.replaceChildren(...nodes);
@@ -126,21 +127,24 @@ function renderSlider(){
  const known=validRate(state.target?.rate),rate=validRate($('current-rate').value)?Number($('current-rate').value):known?state.target.rate:effective().steps[0];
  if(!dragging)slider.value=String(positionAtRate(rate,steps));
  slider.style.setProperty('--progress',(steps.length>1?Number(slider.value)/(steps.length-1)*100:0)+'%');
- slider.disabled=!enabled||!known||steps.length<2;slider.setAttribute('aria-valuetext',known?t('{rate} 倍速',{rate:formatRate(rate)}):t('無法讀取播放速度'));
+ slider.disabled=!enabled||!known||steps.length<2;slider.setAttribute('aria-valuetext',known?t('{rate}×',{rate:formatRate(rate)}):t('Playback speed unavailable'));
  for(const tick of $('slider-ticks').querySelectorAll('.tick')){tick.disabled=!enabled;tick.classList.toggle('active',known&&Math.abs(Number(tick.dataset.rate)-rate)<.001);}
 }
 function render(){
- if(!state)return;
+ if(!state)return;document.body.classList.remove('loading');document.body.removeAttribute('aria-busy');
  const settings=effective(),blocked=disabledOnUrl(state.pageUrl,settings.disabledSites,settings.siteModes),target=blocked?null:state.target;
+ const pending=settings.enabled&&!blocked&&!target&&state.loading&&!unavailableReason;
+ document.body.classList.toggle('source-pending',!!pending);
+ if(pending)document.body.setAttribute('aria-busy','true');
  document.body.classList.toggle('is-off',!settings.enabled);
  $('enabled').classList.toggle('active',settings.enabled);$('enabled').setAttribute('aria-pressed',String(settings.enabled));$('enabled').disabled=powerBusy;
- $('enabled').title=t(settings.enabled?'關閉 VideoSpeed':'啟用 VideoSpeed');$('enabled').setAttribute('aria-label',$('enabled').title);
+ $('enabled').title=t(settings.enabled?'Disable VideoSpeed':'Enable VideoSpeed');$('enabled').setAttribute('aria-label',$('enabled').title);
  $('pick').disabled=!settings.enabled||blocked;$('refresh').disabled=!settings.enabled||blocked;$('controls').inert=!settings.enabled;
  $('open-settings').disabled=!settings.enabled;$('settings-view').inert=!settings.enabled;
  if(!settings.enabled||blocked){pendingRate=null;clearTimeout(rateTimer);dragging=false;rateDirty=false;shortcutRecording='';closeQuality();}
  if(!settings.enabled){$('advanced').open=false;$('home-view').hidden=false;$('settings-view').hidden=true;}
  $('controls').hidden=false;$('playback').hidden=!settings.enabled||!target;document.body.classList.toggle('empty',!target);
- $('single-target').textContent=target?.title||t(!settings.enabled?'已關閉':blocked?'此網站已停用':'未取得影片資訊');$('single-target').title=target?.title||'';
+ $('single-target').textContent=target?.title||(unavailableReason?translateMessage(language,unavailableReason):t(!settings.enabled?'Disabled':blocked?'Disabled on this site':pending?'Loading…':'No video found'));$('single-target').title=target?.title||(unavailableReason?translateMessage(language,unavailableReason):'');
  $('settings-fields').disabled=!settings.enabled;
  for(const button of document.querySelectorAll('[data-mode]')){button.classList.toggle('active',button.dataset.mode===settings.defaultMode);button.setAttribute('aria-pressed',String(button.dataset.mode===settings.defaultMode));}
  $('custom-row').hidden=settings.defaultMode!=='custom';
@@ -153,7 +157,7 @@ function render(){
  else if($('rate-error').dataset.runtimeError){error('rate-error');delete $('rate-error').dataset.runtimeError;}
  $('current-rate').disabled=!target||!settings.enabled;
  for(const button of document.querySelectorAll('[data-command]'))button.disabled=!target||!settings.enabled;
- for(const [id,action,label]of [['previous-step','slower','上一個刻度'],['next-step','faster','下一個刻度'],['slower','fineSlower','降低一小格'],['faster','fineFaster','提高一小格']]){$(id).title=t(label)+(settings.shortcuts[action]?' ('+settings.shortcuts[action]+')':'');$(id).setAttribute('aria-label',t(label));}
+ for(const [id,action,label]of [['previous-step','slower','Previous tick'],['next-step','faster','Next tick'],['slower','fineSlower','Fine decrease'],['faster','fineFaster','Fine increase']]){$(id).title=t(label)+(settings.shortcuts[action]?' ('+settings.shortcuts[action]+')':'');$(id).setAttribute('aria-label',t(label));}
  renderSteps(settings);renderShortcuts(settings);renderSites(settings);renderSlider();
 }
 async function saveFields(patch){
@@ -163,7 +167,7 @@ async function saveFields(patch){
  try{
   const result=await send({action:'updateSettings',patch:Object.fromEntries(changes)});state.settings=result.settings;
   for(const [key,item]of items)if(drafts.get(key)===item)drafts.delete(key);render();if(changes.some(([key])=>key==='disabledSites'||key==='siteModes'))await refresh(true);return true;
- }catch(problem){for(const [key,item]of items)if(drafts.get(key)===item)drafts.delete(key);error('feedback','保存失敗：'+problem.message);render();return false;}
+ }catch(problem){for(const [key,item]of items)if(drafts.get(key)===item)drafts.delete(key);error('feedback','Could not save: '+problem.message);render();return false;}
 }
 const saveField=(key,value)=>saveFields({[key]:value});
 const port=chrome.runtime.connect({name:'video-control-popup'});
@@ -171,9 +175,9 @@ async function refresh(full=false,force=false){
  const request=++refreshRevision;
  try{
   const response=await send({action:full?'getState':'cachedState',refresh:force});if(closed||request!==refreshRevision)return;
-  state=response;tabId=response.tabId;render();error('feedback');
+  state=response;tabId=response.tabId;unavailableReason='';render();error('feedback');
   port.postMessage({action:'watch',tabId});
- }catch(problem){if(!closed&&request===refreshRevision){if(!state){const data=await chrome.storage.local.get('settings');state={settings:normalizeSettings(data.settings),target:null,pageUrl:''};}unavailable(problem.message);}}
+  }catch(problem){if(!closed&&request===refreshRevision){if(!state){let data={};try{data=await chrome.storage.local.get('settings');}catch{}state={settings:normalizeSettings(data.settings),target:null,pageUrl:''};}unavailable(problem?.message||'Could not connect');}}
 }
 port.onMessage.addListener(message=>{if(message.action==='updated'){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>refresh(),100);}});
 const renew=setInterval(()=>{if(!state||!effective().enabled||disabledOnUrl(state.pageUrl,effective().disabledSites,effective().siteModes))return;try{port.postMessage({action:'renew'});}catch{}},3000);
@@ -190,7 +194,7 @@ async function flushRate(){
 }
 function queueRate(value,immediate=true){
  if(!state?.target||!effective().enabled)return;
- if(!validRate(value)){error('rate-error','速度範圍：0.06–16×');return;}
+ if(!validRate(value)){error('rate-error','Speed range: 0.06–16×');return;}
  pendingRate={value:normalizeRate(value),key:state.target.key,revision:++rateRevision};$('current-rate').value=formatRate(value);rateDirty=true;error('rate-error');renderSlider();
  clearTimeout(rateTimer);if(immediate)flushRate();else rateTimer=setTimeout(flushRate,60);
 }
@@ -248,21 +252,21 @@ $('step-reset-cancel').addEventListener('click',()=>{$('step-reset-toolbar').hid
 $('step-reset-confirm').addEventListener('click',async()=>{clearTimeout(stepTimer);const request=++stepInputRevision;if(await saveField('steps',[...DEFAULT_STEPS])&&request===stepInputRevision){stepInputDirty=false;$('steps-input').value=DEFAULT_STEPS.map(formatRate).join(', ');fitStepsInput();$('step-reset-toolbar').hidden=true;error('step-error');}});
 async function saveShortcut(action,key){
  const shortcuts={...effective().shortcuts,[action]:key},duplicate=key&&shortcutActions.find(([other])=>other!==action&&shortcuts[other]===key);
- if(duplicate){error('shortcut-error','已用於「'+duplicate[1]+'」');return false;}
+ if(duplicate){error('shortcut-error',t('Already assigned to “{action}”',{action:t(duplicate[1])}));return false;}
  shortcutRecording='';error('shortcut-error');return saveField('shortcuts',shortcuts);
 }
 window.addEventListener('keydown',event=>{
  if(!shortcutRecording||event.isComposing)return;
  event.preventDefault();event.stopImmediatePropagation();
  if(event.key==='Escape'){cancelRecording();error('shortcut-error');return;}
- const key=shortcutFromEvent(event);if(key)saveShortcut(shortcutRecording,key);else if(!['Shift','Control','Alt','Meta','AltGraph'].includes(event.key))error('shortcut-error','請使用字元鍵或修飾鍵組合');
+ const key=shortcutFromEvent(event);if(key)saveShortcut(shortcutRecording,key);else if(!['Shift','Control','Alt','Meta','AltGraph'].includes(event.key))error('shortcut-error','Use a character key with optional modifiers');
 },true);
 $('shortcut-reset-request').addEventListener('click',()=>{cancelRecording();$('shortcut-reset-toolbar').hidden=false;});
 $('shortcut-reset-cancel').addEventListener('click',()=>{$('shortcut-reset-toolbar').hidden=true;});
 $('shortcut-reset-confirm').addEventListener('click',async()=>{if(await saveField('shortcuts',{...DEFAULT_SHORTCUTS})){$('shortcut-reset-toolbar').hidden=true;error('shortcut-error');}});
 for(const [id,key]of [['preferred-rate','preferredRate'],['custom-rate','customRate']]){
  $(id).addEventListener('input',()=>{if(validRate($(id).value))saveField(key,normalizeRate($(id).value));});
- $(id).addEventListener('change',()=>{if(validRate($(id).value))saveField(key,normalizeRate($(id).value));else error('feedback','速度範圍：0.06–16×');});
+ $(id).addEventListener('change',()=>{if(validRate($(id).value))saveField(key,normalizeRate($(id).value));else error('feedback','Speed range: 0.06–16×');});
  $(id).addEventListener('blur',()=>render());
  $(id).addEventListener('keydown',event=>{if(event.key==='Enter')$(id).blur();});
 }

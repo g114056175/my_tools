@@ -66,7 +66,7 @@ export function highlightMedia(options = {}) {
   const host = video.parentElement || globalThis.document?.body || globalThis.document?.documentElement;
   const sameTarget = old?.video === video && old.mediaKey === wanted && old.frame?.isConnected;
   if (sameTarget) {
-    const title = String(options.title ?? '').trim() || '影片';
+    const title = String(options.title ?? '').trim() || "Video";
     if (old.titleNode && old.titleNode.textContent !== title) old.titleNode.textContent = title;
     old.requestId = options.requestId;
     if (host?.append && old.frame.parentElement !== host) {
@@ -94,7 +94,7 @@ export function highlightMedia(options = {}) {
   // generic aria/title/document strings frequently describe the page rather
   // than this media element.
   const titleNode = globalThis.document.createElement('span'), rate = globalThis.document.createElement('span');
-  titleNode.textContent = String(options.title ?? '').trim() || '影片';
+  titleNode.textContent = String(options.title ?? '').trim() || "Video";
   Object.assign(titleNode.style, {minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis'});
   Object.assign(rate.style, {flexShrink: '0', fontVariantNumeric: 'tabular-nums'});
   label.append(titleNode, rate);

@@ -3,19 +3,19 @@ import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from './i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents} from './tab-activity.js';
-const SCOPE='video-control',VERSION='0.6.8',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.9',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
 function tabGeneration(tabId){if(!tabGenerations.has(tabId))tabGenerations.set(tabId,++navigationSerial);return tabGenerations.get(tabId);}
 const frameGeneration=(tabId,frameId)=>frameGenerations.get(tabId)?.get(frameId)||0;
-let settingsCache,powerSignature,powerQueue=Promise.resolve(),settingsWrites=Promise.resolve(),language=resolveLanguage(null,chrome.i18n.getUILanguage());
+let settingsCache,powerSignature,powerQueue=Promise.resolve(),settingsWrites=Promise.resolve(),language=resolveLanguage(null);
 const rateMemory=new RateMemory(chrome.storage.local);
 const rateWriteLedger=new RateWriteLedger();
-const tabActivity=new TabActivity(),activityNoticeQueues=new Map(),activityRestoreAttempts=new Set();
+const tabActivity=new TabActivity(),activityNoticeQueues=new Map(),activityRestoreAttempts=new Set(),activityRestoreTasks=new Map();
 let activityReady,activityInitialized=false,activityEventRevision=0,activityGeneration=0,activityEvents=[],activityWrites=Promise.resolve();
-const titleFor=(settings,blocked=false)=>translate(language,!settings.enabled?'VideoSpeed（已關閉）':blocked?'VideoSpeed（此網站已停用）':'VideoSpeed');
-const settingsReady=chrome.storage.local.get(['settings','popupLanguage']).then(data=>{settingsCache=normalizeSettings(data.settings);language=resolveLanguage(data.popupLanguage,chrome.i18n.getUILanguage());});
+const titleFor=(settings,blocked=false)=>translate(language,!settings.enabled?"VideoSpeed (disabled)":blocked?"VideoSpeed (disabled on this site)":'VideoSpeed');
+const settingsReady=chrome.storage.local.get(['settings','popupLanguage']).then(data=>{settingsCache=normalizeSettings(data.settings);language=resolveLanguage(data.popupLanguage);});
 async function stored(){await settingsReady;return settingsCache;}
 async function rateState(){await settingsReady;return rateMemory.read();}
 async function optionalRateState(){try{return await rateState();}catch{return null;}}
@@ -37,11 +37,11 @@ function queueActivityEvent(event){
 }
 function applyActivityEvent(event){
  if(event.type==='activated'){
-  if(event.windowId!==tabActivity.focusedWindowId)return;
-  activityGeneration++;
+  const cached=tabActivity.rememberActiveTab(event.windowId,event.tabId);
+  if(event.windowId===tabActivity.focusedWindowId)activityGeneration++;
   const previousRevision=tabActivity.revision;
   const affected=tabActivity.setActiveTab(event.windowId,event.tabId,event.at);
-  if(tabActivity.revision!==previousRevision)saveActivity().catch(()=>{});
+  if(cached||tabActivity.revision!==previousRevision)saveActivity().catch(()=>{});
   for(const tabId of affected)notifyActivity(tabId);
   return;
  }
@@ -62,14 +62,23 @@ function applyActivityEvent(event){
  }).catch(()=>{});
 }
 async function initializeTabActivity(){
+ const startedAt=Date.now(),windowAtStart=chrome.windows.getLastFocused().catch(()=>null);
  let session={};try{session=await chrome.storage.session.get('tabActivity');}catch{}
  tabActivity.restore(session.tabActivity);
- let context;const affected=new Set();
+ const initialWindow=await windowAtStart;
+ let context;const affected=new Set(),buffered=[];
  for(;;){
-  for(const tabId of replayTabActivityEvents(tabActivity,activityEvents.splice(0),{windowIdNone:chrome.windows.WINDOW_ID_NONE}))affected.add(tabId);
+  buffered.push(...activityEvents.splice(0));
   const revision=activityEventRevision;
   try{context=await readFocusedContext();}catch{context={windowId:null,tabId:null};}
   if(revision!==activityEventRevision)continue;
+  const firstFocus=buffered.find(event=>event.type==='focus');
+  let seedWindow=null;
+  if(initialWindow?.focused&&Number.isInteger(initialWindow.id))seedWindow=initialWindow.id;
+  else if(firstFocus?.windowId===chrome.windows.WINDOW_ID_NONE&&Number.isInteger(initialWindow?.id)&&buffered.some(event=>event.type==='activated'&&event.windowId===initialWindow.id&&event.at<=firstFocus.at))seedWindow=initialWindow.id;
+  if(!firstFocus&&Number.isInteger(context.windowId))seedWindow=context.windowId;
+  if(seedWindow!==null&&tabActivity.focusedWindowId!==seedWindow)for(const tabId of tabActivity.setFocusedWindow(seedWindow,buffered[0]?.at||startedAt))affected.add(tabId);
+  for(const tabId of replayTabActivityEvents(tabActivity,buffered,{windowIdNone:chrome.windows.WINDOW_ID_NONE}))affected.add(tabId);
   for(const tabId of tabActivity.reconcile(context,Date.now()))affected.add(tabId);
   break;
  }
@@ -82,31 +91,33 @@ async function initializeTabActivity(){
 activityReady=initializeTabActivity();
 activityReady.then(affected=>{for(const tabId of affected)notifyActivity(tabId);}).catch(()=>{});
 chrome.tabs.onActivated.addListener(info=>queueActivityEvent({type:'activated',tabId:info.tabId,windowId:info.windowId,at:Date.now()}));
+chrome.tabs.onCreated?.addListener(tab=>{if(tab.active)queueActivityEvent({type:'activated',tabId:tab.id,windowId:tab.windowId,at:Date.now()});});
 chrome.windows.onFocusChanged.addListener(windowId=>queueActivityEvent({type:'focus',windowId,at:Date.now()}));
+chrome.windows.onRemoved?.addListener(windowId=>{const at=Date.now();activityReady.then(()=>{for(const tabId of tabActivity.forgetWindow(windowId,at))notifyActivity(tabId);saveActivity().catch(()=>{});}).catch(()=>{});});
 async function activityFor(tabId){await activityReady;return tabActivity.activity(tabId);}
 async function activityFields(tabId,pageUrl){
  const [settings,rate]=await Promise.all([stored(),optionalRateState()]);
  if(pageUrl===undefined)try{pageUrl=(await chrome.tabs.get(tabId)).url||'';}catch{pageUrl='';}
- return {activity:await activityFor(tabId),settings,pageUrl,...(rate?{lastRate:rate.lastRate,rateRevision:rate.rateRevision}:{})};
+ return {activity:await activityFor(tabId),settings,pageUrl,language,...(rate?{lastRate:rate.lastRate,rateRevision:rate.rateRevision}:{})};
 }
 async function sendActivityUpdate(tabId){
  let tab;try{tab=await chrome.tabs.get(tabId);}catch{return;}
  const fields=await activityFields(tabId,tab.url||''),message={scope:SCOPE,action:'activity',...fields};
  try{const response=await chrome.tabs.sendMessage(tabId,message);if(response?.ok===true&&response.version===VERSION)return;}catch{}
- if(activityRestoreAttempts.has(tabId)||!/^https?:/i.test(tab.url||''))return;
+ // New documents receive manifest scripts at document_start; do not queue an
+ // idle-time recovery in front of later blur/focus notifications.
+ if(tab.status==='loading'||activityRestoreAttempts.has(tabId)||!/^https?:/i.test(tab.url||''))return;
  activityRestoreAttempts.add(tabId);
- try{
-  await restoreOpenTab(tabId);
-  const latestTab=await chrome.tabs.get(tabId),latest=await activityFields(tabId,latestTab.url||'');
-  await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'activity',...latest});
- }catch{}
+ if(!activityRestoreTasks.has(tabId)){
+  const task=restoreOpenTab(tabId).then(()=>notifyActivity(tabId)).catch(()=>{}).finally(()=>{if(activityRestoreTasks.get(tabId)===task)activityRestoreTasks.delete(tabId);});
+  activityRestoreTasks.set(tabId,task);
+ }
 }
 function notifyActivity(tabId){
- const previous=activityNoticeQueues.get(tabId)||Promise.resolve();
- const next=previous.catch(()=>{}).then(()=>sendActivityUpdate(tabId));
- activityNoticeQueues.set(tabId,next);
- next.finally(()=>{if(activityNoticeQueues.get(tabId)===next)activityNoticeQueues.delete(tabId);}).catch(()=>{});
- return next;
+ const pending=activityNoticeQueues.get(tabId);if(pending){pending.again=true;return pending.task;}
+ const job={again:true,task:null};activityNoticeQueues.set(tabId,job);
+ job.task=(async()=>{try{while(job.again){job.again=false;await sendActivityUpdate(tabId);}}catch{}finally{if(activityNoticeQueues.get(tabId)===job)activityNoticeQueues.delete(tabId);}})();
+ return job.task;
 }
 async function pausedTarget(tabId){await powerQueue;const data=await chrome.storage.session.get('pausedTargets');return data.pausedTargets?.[tabId]||null;}
 function syncPower(settings){
@@ -131,7 +142,7 @@ async function applyPagePolicy(tabId,pageUrl,settings,rate){
  const blocked=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes),enabled=settings.enabled&&!blocked;
  if(!enabled){frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);}
  if(rate===undefined)rate=await optionalRateState();
- const message={scope:SCOPE,action:'power',settings,pageUrl,activity:await activityFor(tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
+ const message={scope:SCOPE,action:'power',settings,pageUrl,language,activity:await activityFor(tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
  await chrome.tabs.sendMessage(tabId,message).catch(()=>{});
  await chrome.action.setIcon({tabId,path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
  await chrome.action.setTitle({tabId,title:titleFor(settings,blocked)});
@@ -190,7 +201,7 @@ async function refresh(tabId,force=false){
 }
 async function refreshFrames(tabId){
  const generation=tabGeneration(tabId),before=new Map(frames.get(tabId)||[]),frameVersions=new Map(frameGenerations.get(tabId)||[]);
- const probes=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'ISOLATED',func:version=>{
+ const probes=await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,allFrames:true},world:'ISOLATED',func:version=>{
   if(/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname))return 'skip';
   const api=globalThis[Symbol.for('video-control.api')];
   try{if(api?.version===version&&api.alive())return true;}catch{}
@@ -199,13 +210,13 @@ async function refreshFrames(tabId){
  },args:[VERSION]});
  const missing=probes.filter(frame=>frame.result===false).map(frame=>frame.frameId);
  if(missing.length){
-  await chrome.scripting.executeScript({target:{tabId,frameIds:missing},world:'MAIN',files:['page-bridge.js']});
-  await chrome.scripting.executeScript({target:{tabId,frameIds:missing},world:'ISOLATED',files:['content.js']});
+  await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds:missing},world:'MAIN',files:['page-bridge.js']});
+  await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds:missing},world:'ISOLATED',files:['content.js']});
  }
- const results=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'ISOLATED',func:async()=>{
+ const results=await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,allFrames:true},world:'ISOLATED',func:async()=>{
   if(/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname))return [];
   const api=globalThis[Symbol.for('video-control.api')];
-  if(!api?.alive?.())throw Error('影片控制未能連線');
+  if(!api?.alive?.())throw Error("Could not connect to the video");
   return await api.refresh();
  }});
  let liveFrames;try{liveFrames=await chrome.webNavigation.getAllFrames({tabId});}catch{}
@@ -219,17 +230,17 @@ async function refreshFrames(tabId){
  await announce(tabId);
  return true;
 }
-async function currentTab(){const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id)throw Error('請先開啟有影片的網頁');return tab;}
+async function currentTab(){const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!tab?.id)throw Error("Open a page with a video first");return tab;}
 async function dispatch(tabId,message,retry=true){
  const target=message.key?itemsFor(tabId).find(item=>item.key===message.key):targetFor(tabId);
- if(!target)throw Error('影片已切換，請重新選取');
+ if(!target)throw Error("Video changed; select it again");
  const settings=await stored();
- if(!settings.enabled)throw Error('VideoSpeed 已關閉');
- if(disabledOnUrl((await chrome.tabs.get(tabId)).url,settings.disabledSites,settings.siteModes))throw Error('此網站已停用');
+ if(!settings.enabled)throw Error("VideoSpeed is disabled");
+ if(disabledOnUrl((await chrome.tabs.get(tabId)).url,settings.disabledSites,settings.siteModes))throw Error("Disabled on this site");
  let result;
- try{result=await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'control',id:target.id,command:message.command,value:message.value},optionsOf(target));}
+ try{result=await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'control',id:target.id,command:message.command,value:message.value,language},optionsOf(target));}
  catch(error){if(!retry||message.key)throw error;await refresh(tabId,true);return dispatch(tabId,message,false);}
- if(!result?.ok)throw Error(result?.error||'影片未回應，請重新整理網頁');
+ if(!result?.ok)throw Error(result?.error||"Video did not respond; reload the page");
  const frame=frames.get(tabId)?.get(target.frameId);
  if(frame?.documentId===target.documentId){const video=frame.videos.find(item=>item.id===target.id);if(video)Object.assign(video,result.result);}
  return result.result;
@@ -252,7 +263,7 @@ function changeSettings(patch){
 }
 async function run(message,sender){
  await activityReady;
- if(message.action==='settings'){const settings=await stored(),rate=await rateState();return {settings,lastRate:rate.lastRate,rateRevision:rate.rateRevision,pageUrl:sender.tab?.url||'',activity:await activityFor(sender.tab?.id)};}
+ if(message.action==='settings'){const settings=await stored(),rate=await rateState();return {settings,lastRate:rate.lastRate,rateRevision:rate.rateRevision,pageUrl:sender.tab?.url||'',language,activity:await activityFor(sender.tab?.id)};}
  if(message.action==='report'){
   const hint=message.rememberedRate,token=hint?rateWriteLedger.begin(hint,sender):null,settings=await stored();let targetMatches=false;
   if(settings.enabled&&sender.tab?.id&&!disabledOnUrl(sender.tab.url,settings.disabledSites,settings.siteModes)&&!disabledOnUrl(sender.url,settings.disabledSites,settings.siteModes)){
@@ -279,7 +290,7 @@ async function run(message,sender){
  if(message.action==='getState'||message.action==='cachedState'){
   const settings=await stored(),pageUrl=tab.url||'',siteDisabled=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes);
   if(message.action==='getState'&&settings.enabled&&!siteDisabled)try{await refresh(tabId,message.refresh===true);}catch{}
-  const target=siteDisabled?null:settings.enabled?targetFor(tabId):await pausedTarget(tabId),rate=await rateState();return {tabId,pageUrl,siteDisabled,settings,lastRate:rate.lastRate,rateRevision:rate.rateRevision,videos:target?[target]:[],target};
+  const target=siteDisabled?null:settings.enabled?targetFor(tabId):await pausedTarget(tabId),rate=await rateState();return {tabId,pageUrl,siteDisabled,settings,loading:tab.status==='loading',lastRate:rate.lastRate,rateRevision:rate.rateRevision,videos:target?[target]:[],target};
  }
  if(message.action==='updateSettings'){
   const fields=['enabled','preferredRate','defaultMode','customRate','qualityEnabled','preferredQuality','steps','shortcuts','disabledSites','siteModes'];
@@ -289,20 +300,20 @@ async function run(message,sender){
  if(message.action==='setEnabled')return {settings:await changeSettings({enabled:message.enabled===true})};
  if(message.action==='saveSettings')return {settings:await changeSettings(validateSettings(message.settings))};
  const settings=await stored();
- if(!settings.enabled)throw Error('VideoSpeed 已關閉');
- if(disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes))throw Error('此網站已停用');
+ if(!settings.enabled)throw Error("VideoSpeed is disabled");
+ if(disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes))throw Error("Disabled on this site");
  if(message.action==='select'){
-  if(!itemsFor(tabId).some(item=>item.key===message.key))throw Error('影片已切換，請重新選取');
+  if(!itemsFor(tabId).some(item=>item.key===message.key))throw Error("Video changed; select it again");
   pinned.set(tabId,message.key);await announce(tabId);await highlight(tabId,true);return {};
  }
- if(message.action==='pick'){await refresh(tabId,true);await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'pick',language:message.language});return {};}
+ if(message.action==='pick'){await refresh(tabId,true);await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'pick',language:resolveLanguage(message.language||language)});return {};}
  if(message.action==='cancelPick'){await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'cancelPick'}).catch(()=>{});return {};}
  if(message.action==='command'){if(!targetFor(tabId))await refresh(tabId);return {result:await dispatch(tabId,message)};}
- throw Error('不支援的操作');
+ throw Error("Unsupported action");
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  if(message?.scope!==SCOPE)return;
- run(message,sender).then(result=>respond({ok:true,...result}),error=>respond({ok:false,error:error.message||'操作失敗'}));return true;
+ run(message,sender).then(result=>respond({ok:true,...result}),error=>respond({ok:false,error:error.message||"Operation failed"}));return true;
 });
 chrome.runtime.onConnect.addListener(port=>{
  if(port.name==='video-control-content'){contentPorts.add(port);port.onDisconnect.addListener(()=>contentPorts.delete(port));return;}
@@ -325,17 +336,17 @@ function forgetTab(tabId){
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{const data=await chrome.storage.session.get('pausedTargets'),frozen={...data.pausedTargets};if(Object.hasOwn(frozen,tabId)){delete frozen[tabId];await chrome.storage.session.set({pausedTargets:frozen});}});
 }
 function forgetActivityTab(tabId){
- activityRestoreAttempts.delete(tabId);activityNoticeQueues.delete(tabId);
+ activityRestoreAttempts.delete(tabId);activityRestoreTasks.delete(tabId);activityNoticeQueues.delete(tabId);
  if(tabActivity.forget(tabId))saveActivity().catch(()=>{});
 }
-chrome.tabs.onRemoved.addListener(tabId=>{forgetTab(tabId);forgetActivityTab(tabId);tabGenerations.delete(tabId);});
-chrome.tabs.onUpdated.addListener((tabId,change)=>{if(change.status==='loading'){forgetTab(tabId);activityRestoreAttempts.delete(tabId);}if(change.url)applyPagePolicy(tabId,change.url).catch(()=>{});});
+chrome.tabs.onRemoved.addListener(tabId=>{forgetTab(tabId);activityReady.then(()=>forgetActivityTab(tabId)).catch(()=>{});tabGenerations.delete(tabId);});
+chrome.tabs.onUpdated.addListener((tabId,change)=>{if(change.status==='loading'){forgetTab(tabId);activityRestoreAttempts.delete(tabId);}if(change.status==='complete')activityFor(tabId).then(activity=>{if(activity.focused||activity.until>Date.now())notifyActivity(tabId);}).catch(()=>{});if(change.url)applyPagePolicy(tabId,change.url).catch(()=>{});});
 async function frameRoute(details){
  if(details.frameId===0||details.tabId<0)return;
  const settings=await stored();if(!settings.enabled)return;
  const tab=await chrome.tabs.get(details.tabId),blocked=disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes)||disabledOnUrl(details.url,settings.disabledSites,settings.siteModes);
  if(blocked){frames.get(details.tabId)?.delete(details.frameId);await announce(details.tabId,true);}
- const rate=await optionalRateState(),message={scope:SCOPE,action:'power',settings,pageUrl:tab.url||'',activity:await activityFor(details.tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
+ const rate=await optionalRateState(),message={scope:SCOPE,action:'power',settings,pageUrl:tab.url||'',language,activity:await activityFor(details.tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
  await chrome.tabs.sendMessage(details.tabId,message,details.documentId?{documentId:details.documentId}:{frameId:details.frameId}).catch(()=>{});
 }
 chrome.webNavigation.onHistoryStateUpdated.addListener(details=>frameRoute(details).catch(()=>{}));
@@ -347,13 +358,13 @@ chrome.storage.onChanged.addListener((changes,area)=>{
  if(area==='local')rateMemory.observeChanges(changes,area).catch(()=>{});
  if(area==='local'&&changes.settings){settingsCache=normalizeSettings(changes.settings.newValue);syncPower(settingsCache).catch(()=>{});}
  if(area==='local'&&changes.popupLanguage){
-  language=resolveLanguage(changes.popupLanguage.newValue,chrome.i18n.getUILanguage());
+  language=resolveLanguage(changes.popupLanguage.newValue);
   stored().then(async settings=>{await chrome.action.setTitle({title:titleFor(settings)});const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger));await Promise.allSettled([...tabs].map(async tabId=>{const tab=await chrome.tabs.get(tabId);await chrome.action.setTitle({tabId,title:titleFor(settings,disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes))});}));}).catch(()=>{});
  }
 });
 
 async function restoreOpenTab(tabId){
- const frames=await chrome.scripting.executeScript({target:{tabId,allFrames:true},world:'ISOLATED',func:version=>{
+ const frames=await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,allFrames:true},world:'ISOLATED',func:version=>{
   if(/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname))return false;
   const api=globalThis[Symbol.for('video-control.api')];
   try{if(api?.version===version&&api.alive())return false;}catch{}
@@ -364,8 +375,8 @@ async function restoreOpenTab(tabId){
  },args:[VERSION]});
  const frameIds=frames.filter(frame=>frame.result===true).map(frame=>frame.frameId);
  if(!frameIds.length)return;
- await chrome.scripting.executeScript({target:{tabId,frameIds},world:'MAIN',files:['page-bridge.js']});
- await chrome.scripting.executeScript({target:{tabId,frameIds},world:'ISOLATED',files:['content.js']});
+ await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds},world:'MAIN',files:['page-bridge.js']});
+ await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds},world:'ISOLATED',files:['content.js']});
 }
 async function restoreOpenTabs(){
  // 僅在更新時被動接管既有分頁，不執行影片深查。

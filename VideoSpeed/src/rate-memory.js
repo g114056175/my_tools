@@ -46,7 +46,7 @@ export class RateMemory{
   if(!hasRate&&!hasRevision){state={lastRate:1,rateRevision:0};seed=true;}
   else if(rateValue(data?.lastRate)&&!hasRevision){state={lastRate:data.lastRate,rateRevision:0};seed=true;}
   else if(rateValue(data?.lastRate)&&revisionValue(data?.lastRateRevision))state={lastRate:data.lastRate,rateRevision:data.lastRateRevision};
-  else throw Error('無效的播放速度記憶資料');
+  else throw Error('Invalid saved playback speed data');
   if(seed)await this.storage.set(stored(state));
   this.state=state;
   return state;
@@ -76,7 +76,7 @@ export class RateMemory{
    const currentState=await this.ensureLoaded();
    if(!stillCurrent())return null;
    if(currentState.lastRate===rate)return copy(currentState);
-   if(currentState.rateRevision>=Number.MAX_SAFE_INTEGER)throw Error('播放速度記憶版本已達上限');
+   if(currentState.rateRevision>=Number.MAX_SAFE_INTEGER)throw Error('Saved speed revision limit reached');
    const next={lastRate:rate,rateRevision:currentState.rateRevision+1};
    if(!stillCurrent())return null;
    try{await this.storage.set(stored(next));}

@@ -123,7 +123,7 @@ test('read exceptions or NaN never become a fabricated 1x or successful preferen
  for(const failure of [()=>NaN,()=>{throw Error('read failed');}]){
   const v=new Video();Object.defineProperty(v,'playbackRate',{get:failure,set(){throw Error('must not write');}});
   const rates=[],c=controller(v,settings(),{onRate:r=>rates.push(r)});assert.equal(c.snapshot().rate,null);assert.equal(c.snapshot().rateStatus,'failed');assert.deepEqual(rates,[]);
-  assert.throws(()=>c.command('faster'),/無法讀取/);c.dispose();
+  assert.throws(()=>c.command('faster'),/Playback speed unavailable/);c.dispose();
  }
 });
 test('rejected or ignored setters cannot announce or persist success',()=>{

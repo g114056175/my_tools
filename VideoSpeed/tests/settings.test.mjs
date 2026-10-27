@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DEFAULT_STEPS,DEFAULT_SHORTCUTS,normalizeSettings,normalizeSteps,formatRate,normalizeRate,validateSettings,stepRate,fineStepRate,defaultRate,shortcutFromEvent,shortcutAction,editingEvent,rankTargets,rateAtPosition,positionAtRate} from '../src/settings.js';
+import {DEFAULT_STEPS,DEFAULT_SHORTCUTS,normalizeSettings,normalizeSteps,formatRate,normalizeRate,validateSettings,validateSteps,stepRate,fineStepRate,defaultRate,shortcutFromEvent,shortcutAction,editingEvent,rankTargets,rateAtPosition,positionAtRate} from '../src/settings.js';
 test('malformed stored settings recover to usable defaults',()=>{for(const raw of [null,'broken',42,[]])assert.deepEqual(normalizeSettings(raw),normalizeSettings());});
 test('global disabled state persists and legacy preferences migrate',()=>{
  assert.equal(normalizeSettings({enabled:false}).enabled,false);
@@ -38,6 +38,13 @@ test('steps normalize and invalid settings do not save silently',()=>{
  for(const steps of ['','0,1','1,-2','1,NaN','1,17'])assert.throws(()=>validateSettings({...normalizeSettings(),steps}));
  assert.throws(()=>validateSettings({...normalizeSettings(),preferredRate:''}));
  assert.throws(()=>validateSettings({...normalizeSettings(),shortcuts:{slower:'x',faster:'x',reset:':',preferred:'"'}}));
+});
+test('validation failures expose canonical English messages',()=>{
+ const settings=normalizeSettings();
+ assert.throws(()=>validateSettings({...settings,preferredRate:0}),{message:'Enter a speed between 0.06 and 16'});
+ assert.throws(()=>validateSteps(''),{message:'Use 1–64 ticks between 0.06 and 16'});
+ assert.throws(()=>validateSettings({...settings,shortcuts:{...settings.shortcuts,slower:' '}}),{message:'Use a character key with optional modifiers'});
+ assert.throws(()=>validateSettings({...settings,shortcuts:{...settings.shortcuts,faster:settings.shortcuts.slower}}),{message:'Shortcuts must be unique'});
 });
 test('legacy four-shortcut settings migrate with fine controls unbound',()=>{
  const legacy=normalizeSettings({schemaVersion:2,shortcuts:{slower:'<',faster:'>',reset:':',preferred:'"'}});

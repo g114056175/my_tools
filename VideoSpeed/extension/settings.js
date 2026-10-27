@@ -54,23 +54,23 @@ export function normalizeSettings(raw={}){
   qualityEnabled:raw.qualityEnabled===true,preferredQuality:Number.isInteger(Number(raw.preferredQuality))&&(Number(raw.preferredQuality)===0||Number(raw.preferredQuality)>=100&&Number(raw.preferredQuality)<=8640)?Number(raw.preferredQuality):1080,shortcuts,disabledSites,siteModes:normalizeSiteModes(raw.siteModes,disabledSites)};
 }
 export function validateSettings(raw){
- if(!validRate(raw.preferredRate)||!validRate(raw.customRate))throw Error('速度請填入 0.06～16 之間的數字');
+ if(!validRate(raw.preferredRate)||!validRate(raw.customRate))throw Error('Enter a speed between 0.06 and 16');
  const steps=validateSteps(raw.steps);
  const shortcuts={...DEFAULT_SHORTCUTS};
  for(const action of Object.keys(shortcuts)){
   if(raw.shortcuts?.[action]===undefined)continue;
   const normalized=normalizeShortcut(raw.shortcuts[action]);
-  if(normalized===null)throw Error('快捷鍵請使用單一字元或修飾鍵組合');
+  if(normalized===null)throw Error('Use a character key with optional modifiers');
   shortcuts[action]=normalized;
  }
  const keys=Object.values(shortcuts).filter(Boolean);
- if(new Set(keys).size!==keys.length)throw Error('已設定的快捷鍵不可重複');
+ if(new Set(keys).size!==keys.length)throw Error('Shortcuts must be unique');
  const disabledSites=validateSiteRules(raw.disabledSites??[]),siteModes=validateSiteModes(raw.siteModes,disabledSites);
  return normalizeSettings({...raw,steps,shortcuts,disabledSites,siteModes});
 }
 export function validateSteps(raw){
  const values=Array.isArray(raw)?raw:String(raw??'').trim().split(/[\s,，、]+/);
- if(!values.length||values.length>64||values.some(value=>!validRate(value)))throw Error('刻度範圍：0.06–16，最多 64 個');
+ if(!values.length||values.length>64||values.some(value=>!validRate(value)))throw Error('Use 1–64 ticks between 0.06 and 16');
  return normalizeSteps(values);
 }
 export const defaultRate=(settings,lastRate=1)=>settings.defaultMode==='off'?null:settings.defaultMode==='custom'?settings.customRate:validRate(lastRate)?Number(lastRate):1;

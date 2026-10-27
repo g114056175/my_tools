@@ -21,6 +21,8 @@ input[type=number]{appearance:textfield}input::-webkit-inner-spin-button{appeara
 .source-row{height:40px;padding:0 14px;display:flex;align-items:center;gap:6px;min-width:0}
 .source-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px;font-weight:500}
 .empty .source-title{color:var(--danger);font-size:12px}
+.loading .source-title,.source-pending .source-title{color:var(--muted)}
+.loading .power-button:disabled{visibility:hidden;cursor:wait}
 .icon-button{display:inline-flex;align-items:center;justify-content:center;padding:0;width:24px;height:26px;flex:0 0 24px;background:none;color:var(--icon)}
 .icon-button:hover{background:var(--accent-soft);color:var(--accent-strong)}
 .icon-button svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}

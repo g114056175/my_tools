@@ -19,14 +19,14 @@ export class RateClient{
   return 'handled';
  }
  begin(rate){
-  if(!validRate(rate))throw Error('無效的播放速度');
+  if(!validRate(rate))throw Error('Invalid playback speed');
   const token=++this.serial;this.pending={token,rate:Number(rate)};this.rate=Number(rate);this.error='';this.onChange(this.rate);return token;
  }
  acknowledge(token,response){
   const snapshot=response?.ok&&validRate(response.lastRate)&&revision(response.rateRevision);
   const valid=snapshot&&response.accepted===true&&response.rateWriteId===token&&response.rateSessionId===this.sessionId;
   if(this.pending?.token!==token){if(snapshot)this.accept(response);return false;}
-  if(!valid){if(snapshot)this.accept(response);this.error=response?.error||'播放速度記憶尚未確認';return false;}
+  if(!valid){if(snapshot)this.accept(response);this.error=response?.error||'Saved speed could not be confirmed';return false;}
   this.pending=null;const latest=this.deferred?.rateRevision>response.rateRevision?this.deferred:response;this.deferred=null;
   return this.accept(latest);
  }

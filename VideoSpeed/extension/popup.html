@@ -1,41 +1,41 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VideoSpeed</title><link rel="stylesheet" href="popup.css"></head>
-<body class="empty">
+<body class="loading" aria-busy="true">
  <div id="home-view">
  <div class="source-row">
-  <button id="enabled" class="power-button" type="button" aria-label="啟用 VideoSpeed" aria-pressed="false" title="啟用 VideoSpeed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M7 5.7a8 8 0 1 0 10 0"/></svg></button>
-  <span id="single-target" class="source-title">未取得影片資訊</span>
-  <button id="open-settings" type="button" class="icon-button" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.2 3-.7 2.4-2 .9L4.2 6l-2 3.4 1.6 1.9v1.4l-1.6 1.9 2 3.4 2.3-.3 2 .9.7 2.4h3.6l.7-2.4 2-.9 2.3.3 2-3.4-1.6-1.9v-1.4l1.6-1.9-2-3.4-2.3.3-2-.9-.7-2.4Z"/><circle cx="11" cy="12" r="3"/></svg></button>
-  <button id="pick" class="icon-button" title="在網頁選取影片" aria-label="在網頁選取影片"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button>
-  <button id="refresh" class="icon-button" title="更新影片資訊" aria-label="更新影片資訊"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button>
+  <button id="enabled" class="power-button" type="button" aria-label="Loading" title="Loading" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M7 5.7a8 8 0 1 0 10 0"/></svg></button>
+  <span id="single-target" class="source-title" role="status" aria-live="polite">Loading…</span>
+  <button id="open-settings" type="button" class="icon-button" aria-label="Settings" title="Settings" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.2 3-.7 2.4-2 .9L4.2 6l-2 3.4 1.6 1.9v1.4l-1.6 1.9 2 3.4 2.3-.3 2 .9.7 2.4h3.6l.7-2.4 2-.9 2.3.3 2-3.4-1.6-1.9v-1.4l1.6-1.9-2-3.4-2.3.3-2-.9-.7-2.4Z"/><circle cx="11" cy="12" r="3"/></svg></button>
+  <button id="pick" class="icon-button" title="Select a video on the page" aria-label="Select a video on the page" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M12 7v10m-5-5h10"/></svg></button>
+  <button id="refresh" class="icon-button" title="Refresh video" aria-label="Refresh video" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M19.5 10a8 8 0 1 0 .2 5"/></svg></button>
  </div>
  <main id="controls" hidden>
-  <section id="playback" class="playback" aria-label="播放速度">
+  <section id="playback" class="playback" aria-label="Playback speed">
    <div class="speed-controls">
-    <button id="previous-step" data-command="slower" class="jump-button" aria-label="上一個刻度"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5 8 12l8 7"/></svg></button>
-    <button id="slower" data-command="fineSlower" class="adjust" aria-label="降低一小格"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-    <div class="speed-center"><div class="rate-value"><input id="current-rate" type="number" placeholder="—" min="0.06" max="16" step="any" aria-label="目前播放速度" disabled><span>×</span></div></div>
-    <button id="faster" data-command="fineFaster" class="adjust" aria-label="提高一小格"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
-    <button id="next-step" data-command="faster" class="jump-button" aria-label="下一個刻度"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 8 7-8 7"/></svg></button>
+    <button id="previous-step" data-command="slower" class="jump-button" aria-label="Previous tick"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5 8 12l8 7"/></svg></button>
+    <button id="slower" data-command="fineSlower" class="adjust" aria-label="Fine decrease"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+    <div class="speed-center"><div class="rate-value"><input id="current-rate" type="number" placeholder="—" min="0.06" max="16" step="any" aria-label="Current playback speed" disabled><span>×</span></div></div>
+    <button id="faster" data-command="fineFaster" class="adjust" aria-label="Fine increase"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+    <button id="next-step" data-command="faster" class="jump-button" aria-label="Next tick"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 8 7-8 7"/></svg></button>
    </div>
    <p id="rate-error" class="error" role="alert" hidden></p>
-   <div class="slider-body"><input id="rate-slider" type="range" min="0" max="11" step="any" value="3" aria-label="播放速度拉條" disabled><div id="slider-ticks" class="slider-ticks"></div></div>
+   <div class="slider-body"><input id="rate-slider" type="range" min="0" max="11" step="any" value="3" aria-label="Playback speed slider" disabled><div id="slider-ticks" class="slider-ticks"></div></div>
   </section>
   <details id="advanced" class="settings-panel">
-   <summary><svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg><span>播放選項</span></summary>
-   <div class="settings-tabs" role="tablist" aria-label="播放選項" data-tab-group="playback">
-    <button id="tab-preferences" type="button" role="tab" data-settings-tab="preferences" aria-controls="panel-preferences" aria-selected="true">偏好</button>
-    <button id="tab-sites" type="button" role="tab" data-settings-tab="sites" aria-controls="panel-sites" aria-selected="false" tabindex="-1">除外</button>
+   <summary><svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg><span>Playback options</span></summary>
+   <div class="settings-tabs" role="tablist" aria-label="Playback options" data-tab-group="playback">
+    <button id="tab-preferences" type="button" role="tab" data-settings-tab="preferences" aria-controls="panel-preferences" aria-selected="true">Prefs</button>
+    <button id="tab-sites" type="button" role="tab" data-settings-tab="sites" aria-controls="panel-sites" aria-selected="false" tabindex="-1">Exclude</button>
    </div>
    <div id="panel-preferences" role="tabpanel" aria-labelledby="tab-preferences">
     <fieldset id="settings-fields">
-     <div class="settings-row preset-row"><span class="field-label" title="首次載入影片的播放速度">速度預設</span><div class="mode-switch" role="group" aria-label="速度預設"><button type="button" data-mode="off">關閉</button><button type="button" data-mode="follow" title="跟隨上一部影片最後使用的速度">跟隨</button><button type="button" data-mode="custom" title="每部影片載入時使用指定速度">指定</button></div><label id="custom-row" class="custom-setting" for="custom-rate" title="每部影片載入時使用指定速度" hidden>指定速度<div class="number-wrap"><input id="custom-rate" type="number" min="0.06" max="16" step="any" value="2"><span>×</span></div></label></div>
-     <div class="settings-row quality-preferred-row"><div class="quality-group"><span class="quality-label" id="quality-label">畫質鎖定</span><div class="quality-picker"><button id="quality" type="button" role="combobox" aria-labelledby="quality-label quality-value" aria-haspopup="listbox" aria-controls="quality-list" aria-expanded="false"><span id="quality-value">關閉</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button><div id="quality-list" role="listbox" aria-label="畫質鎖定" hidden></div></div></div><label class="preferred-setting" for="preferred-rate" title="按下偏好快捷鍵，跳至偏好速度">偏好速度<div class="number-wrap"><input id="preferred-rate" type="number" min="0.06" max="16" step="any" value="2"><span>×</span></div></label></div>
+     <div class="settings-row preset-row"><span class="field-label" title="Playback speed when a video first starts">Default</span><div class="mode-switch" role="group" aria-label="Default"><button type="button" data-mode="off">Off</button><button type="button" data-mode="follow" title="Use the last speed from the previous video">Last</button><button type="button" data-mode="custom" title="Start each video at the fixed speed">Fixed</button></div><label id="custom-row" class="custom-setting" for="custom-rate" title="Start each video at the fixed speed" hidden>Fixed<div class="number-wrap"><input id="custom-rate" type="number" min="0.06" max="16" step="any" value="2"><span>×</span></div></label></div>
+     <div class="settings-row quality-preferred-row"><div class="quality-group"><span class="quality-label" id="quality-label">Quality</span><div class="quality-picker"><button id="quality" type="button" role="combobox" aria-labelledby="quality-label quality-value" aria-haspopup="listbox" aria-controls="quality-list" aria-expanded="false"><span id="quality-value">Off</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button><div id="quality-list" role="listbox" aria-label="Quality" hidden></div></div></div><label class="preferred-setting" for="preferred-rate" title="Use the preferred-speed shortcut to switch to this speed">Preferred<div class="number-wrap"><input id="preferred-rate" type="number" min="0.06" max="16" step="any" value="2"><span>×</span></div></label></div>
     </fieldset>
    </div>
    <div id="panel-sites" role="tabpanel" aria-labelledby="tab-sites" hidden>
-    <div class="site-add"><input id="site-input" type="text" spellcheck="false" autocomplete="off" placeholder="網域或影片網址" aria-label="新增停用網域或影片網址"><button id="site-add" type="button" class="small-button" aria-label="新增停用規則">＋</button></div>
+    <div class="site-add"><input id="site-input" type="text" spellcheck="false" autocomplete="off" placeholder="Domain or video URL" aria-label="Add a blocked domain or video URL"><button id="site-add" type="button" class="small-button" aria-label="Add block rule">＋</button></div>
     <p id="site-error" class="error" role="alert" hidden></p>
     <div id="site-list" class="site-list"></div>
    </div>
@@ -43,31 +43,31 @@
  </main>
  </div>
  <section id="settings-view" hidden>
-  <header class="settings-header"><button id="settings-back" type="button" class="icon-button" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><h1>設定</h1></header>
+  <header class="settings-header"><button id="settings-back" type="button" class="icon-button" title="Back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button><h1>Settings</h1></header>
   <div class="settings-content">
-   <div class="settings-tabs" role="tablist" aria-label="設定分類" data-tab-group="configuration">
-    <button id="tab-interface" type="button" role="tab" data-settings-tab="interface" aria-controls="panel-interface" aria-selected="true">介面</button>
-    <button id="tab-steps" type="button" role="tab" data-settings-tab="steps" aria-controls="panel-steps" aria-selected="false" tabindex="-1">刻度</button>
-    <button id="tab-shortcuts" type="button" role="tab" data-settings-tab="shortcuts" aria-controls="panel-shortcuts" aria-selected="false" tabindex="-1">快捷</button>
+   <div class="settings-tabs" role="tablist" aria-label="Settings tabs" data-tab-group="configuration">
+    <button id="tab-interface" type="button" role="tab" data-settings-tab="interface" aria-controls="panel-interface" aria-selected="true">Interface</button>
+    <button id="tab-steps" type="button" role="tab" data-settings-tab="steps" aria-controls="panel-steps" aria-selected="false" tabindex="-1">Ticks</button>
+    <button id="tab-shortcuts" type="button" role="tab" data-settings-tab="shortcuts" aria-controls="panel-shortcuts" aria-selected="false" tabindex="-1">Keys</button>
    </div>
    <div id="panel-interface" role="tabpanel" aria-labelledby="tab-interface">
-    <div class="interface-row"><span id="appearance-label">外觀</span><div class="interface-switch appearance-switch" role="group" aria-labelledby="appearance-label">
-     <button type="button" data-theme="light" aria-pressed="false"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg><span>淺色</span></button>
-     <button type="button" data-theme="dark" aria-pressed="false"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.2A8.5 8.5 0 0 1 9.8 4 8.5 8.5 0 1 0 20 14.2Z"/></svg><span>深色</span></button>
+    <div class="interface-row"><span id="appearance-label">Appearance</span><div class="interface-switch appearance-switch" role="group" aria-labelledby="appearance-label">
+     <button type="button" data-theme="light" aria-pressed="false"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg><span>Light</span></button>
+     <button type="button" data-theme="dark" aria-pressed="false"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.2A8.5 8.5 0 0 1 9.8 4 8.5 8.5 0 1 0 20 14.2Z"/></svg><span>Dark</span></button>
     </div></div>
-    <div class="interface-row"><span id="language-label">語言</span><div class="interface-switch" role="group" aria-labelledby="language-label"><button type="button" data-language="zh-Hant" aria-pressed="false">中文</button><button type="button" data-language="en" aria-pressed="false">English</button></div></div>
+    <div class="interface-row"><span id="language-label">Language</span><div class="interface-switch" role="group" aria-labelledby="language-label"><button type="button" data-language="zh-Hant" aria-pressed="false">Chinese</button><button type="button" data-language="en" aria-pressed="false">English</button></div></div>
    </div>
    <div id="panel-steps" role="tabpanel" aria-labelledby="tab-steps" hidden>
-    <textarea id="steps-input" rows="3" spellcheck="false" aria-label="速度刻度" placeholder="0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4"></textarea>
+    <textarea id="steps-input" rows="3" spellcheck="false" aria-label="Speed ticks" placeholder="0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 3.5, 4"></textarea>
     <p id="step-error" class="error" role="alert" hidden></p>
-    <div class="editor-actions"><button id="step-reset-request" type="button" class="text-button">恢復預設</button></div>
-    <div id="step-reset-toolbar" class="reset-pane" hidden><span>恢復預設刻度？</span><button id="step-reset-cancel" type="button" class="small-button">取消</button><button id="step-reset-confirm" type="button" class="small-button">恢復</button></div>
+    <div class="editor-actions"><button id="step-reset-request" type="button" class="text-button">Reset defaults</button></div>
+    <div id="step-reset-toolbar" class="reset-pane" hidden><span>Reset ticks?</span><button id="step-reset-cancel" type="button" class="small-button">Cancel</button><button id="step-reset-confirm" type="button" class="small-button">Reset</button></div>
    </div>
    <div id="panel-shortcuts" role="tabpanel" aria-labelledby="tab-shortcuts" hidden>
     <div id="shortcut-list" class="shortcut-list"></div>
     <p id="shortcut-error" class="error" role="alert" hidden></p>
-    <div class="editor-actions"><button id="shortcut-reset-request" type="button" class="text-button">恢復預設</button></div>
-    <div id="shortcut-reset-toolbar" class="reset-pane" hidden><span>恢復預設快捷鍵？</span><button id="shortcut-reset-cancel" type="button" class="small-button">取消</button><button id="shortcut-reset-confirm" type="button" class="small-button">恢復</button></div>
+    <div class="editor-actions"><button id="shortcut-reset-request" type="button" class="text-button">Reset defaults</button></div>
+    <div id="shortcut-reset-toolbar" class="reset-pane" hidden><span>Reset shortcuts?</span><button id="shortcut-reset-cancel" type="button" class="small-button">Cancel</button><button id="shortcut-reset-confirm" type="button" class="small-button">Reset</button></div>
    </div>
   </div>
  </section>

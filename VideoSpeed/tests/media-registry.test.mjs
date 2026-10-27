@@ -149,7 +149,7 @@ test('disposal clears only its own registry identity and preserves first-load hi
  assert.equal(video.getAttribute('data-video-control-initialized'),'media-A');
  const old=new MediaRegistry(document,()=>{},()=>{},{owner:'old'});
  const current=new MediaRegistry(document,()=>{},()=>{},{owner:'current'});
- old.dispose();assert.equal(video.getAttribute('data-video-control-id'),'v1');assert.equal(video.getAttribute('data-video-control-registry'),'current');
+ old.dispose();assert.equal(video.getAttribute('data-video-control-id'),current.ids.get(video));assert.equal(video.getAttribute('data-video-control-registry'),'current');
  current.dispose();assert.equal(video.getAttribute('data-video-control-id'),null);
 });
 
@@ -197,4 +197,11 @@ test('disposed registries cannot resume exploration',t=>{
  const later=document.createElement('video');document.append(later);
  document.dispatch('play',{type:'play',composedPath:()=>[later]});
  assert.equal(registry.exploring,false);assert.equal(added.length,0);assert.equal(observers.size,0);
+});
+
+test('recreating a registry in the same document cannot reuse a previous target id',t=>{
+ const {document,registry}=fixture(t),video=document.createElement('video');document.append(video);registry.add(video);
+ const oldId=registry.ids.get(video);registry.dispose();
+ const replacement=new MediaRegistry(document,()=>{},()=>{});const newId=replacement.ids.get(video);
+ assert.ok(oldId&&newId);assert.notEqual(newId,oldId);replacement.dispose();
 });

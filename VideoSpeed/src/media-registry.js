@@ -83,7 +83,7 @@ export class MediaRegistry{
  add(video){
   if(this.disposed||!this.exploring||!video.isConnected||this.ids.has(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
-  const id='v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
+  const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }
  notePlay(video){video.setAttribute('data-video-control-last-played',String(Date.now()));}
  clearIdentity(id,video){if(video.getAttribute('data-video-control-registry')===this.owner&&video.getAttribute('data-video-control-id')===id){video.removeAttribute('data-video-control-id');video.removeAttribute('data-video-control-registry');}}

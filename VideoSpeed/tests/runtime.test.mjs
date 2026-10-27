@@ -101,6 +101,14 @@ test('guard handles async listener invalidation without an unhandled rejection',
  assert.equal(disposed,1);
 });
 
+test('a guarded response stops after its context is invalidated during an async request',async()=>{
+ let valid=true,replies=0,disposed=0;
+ const runtime={id:'test',getManifest(){if(!valid)throw Error('Extension context invalidated.');return {};}};
+ const messenger=createRuntimeMessenger(runtime,()=>disposed++),respond=messenger.guard(()=>replies++);
+ const pending=Promise.resolve().then(()=>respond({ok:true}));valid=false;
+ assert.equal(await pending,null);assert.equal(replies,0);assert.equal(disposed,1);
+});
+
 test('ordinary receiver failure does not dispose a live content script',async()=>{
  let disposed=0;
  const runtime={id:'x',sendMessage:async()=>{throw Error('Could not establish connection. Receiving end does not exist.');}};

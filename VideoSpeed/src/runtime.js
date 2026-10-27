@@ -1,4 +1,4 @@
-const isContextInvalidatedError=error=>{
+export const isContextInvalidatedError=error=>{
  try{return /extension context invalidated/i.test(String(error?.message??error));}
  catch{return false;}
 };

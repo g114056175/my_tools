@@ -1,13 +1,14 @@
 {
   "name": "video-speed",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build/build.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:browser": "node tests/browser/release-check.mjs",
-    "test:activity": "node tests/browser/activity-check.mjs"
+    "test:activity": "node tests/browser/activity-check.mjs",
+    "test:stability": "node tests/browser/stability-check.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

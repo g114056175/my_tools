@@ -2,15 +2,20 @@ import {normalizeSettings,shortcutAction,editingEvent,validRate} from './setting
 import {RateController} from './rate-controller.js';
 import {MediaRegistry,mediaSignature,mediaPreviewInfo,mediaCanInitialize} from './media-registry.js';
 import {highlightMedia} from './media-highlight.js';
-import {createRuntimeMessenger} from './runtime.js';
+import {createRuntimeMessenger,isContextInvalidatedError} from './runtime.js';
 import {VideoToast} from './video-toast.js';
 import {settingsForUrls} from './site-rules.js';
 import {RateClient} from './rate-client.js';
 import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
-const SCOPE='video-control',VERSION='0.6.7',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.8',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
-if(previous?.version!==VERSION||!previous?.alive?.()){try{previous?.dispose?.();}catch{}boot();}
+let reuse=false;
+try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
+if(!reuse){
+ try{previous?.dispose?.();}catch{}
+ try{boot();}catch(error){if(!isContextInvalidatedError(error))throw error;}
+}
 function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecent,onIdle}){
  const qualityDelays=[250,600,1200,2400];
  const videoToast=new VideoToast(document);
@@ -276,6 +281,7 @@ function boot(){
  };
  const receive=(message,sender,respond)=>{
   if(message?.scope!==SCOPE)return;
+  respond=messenger.guard(respond);
   if(message.action==='power'||message.action==='activity'){
    rateClient.accept(message);
    if(!acceptActivity(message.activity)){respond({ok:true,version:VERSION,enabled:!!session});return;}

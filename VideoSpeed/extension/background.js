@@ -639,7 +639,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.11";
+  var VERSION = "0.6.12";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();

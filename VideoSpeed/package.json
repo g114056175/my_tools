@@ -1,6 +1,6 @@
 {
   "name": "video-speed",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "test:language": "node tests/browser/language-check.mjs",
     "test:autostart": "node tests/browser/autostart-check.mjs",
     "test:routes": "node --test tests/browser/page-bridge-route-check.mjs",
-    "test:soak": "node tests/browser/long-playback-soak.mjs"
+    "test:soak": "node tests/browser/long-playback-soak.mjs",
+    "test:notices": "node tests/browser/initial-rate-notice-check.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

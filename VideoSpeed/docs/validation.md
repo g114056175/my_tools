@@ -1,3 +1,28 @@
+# VideoSpeed 0.6.12 驗證
+
+2026-10-27。本輪只修正自動速度提示的時序及去重，倍速與畫質仍在原先初始化流程套用；VideoPocket 未修改。
+
+## 修改與原因
+
+- 舊提示在預設速度套用成功後，只憑 paused／readyState 判斷是否顯示。0.6.11 的一次真實 YouTube reload 中，提示出現在首個非廣告影片影格之前約 18ms；readyState 足夠不代表畫面已呈現。
+- 現在自動提示等待可見影片的 requestVideoFrameCallback。沒有此 API 時，須先觀測播放進度，再等一次 animation frame。手動快捷鍵、按鈕和輸入仍立即提示。
+- 同一 YouTube 路由共用提示去重，不因播放器替換 video 元素而再次彈出；換到另一部影片可顯示新的提示。
+- 舊預覽提示以包含 currentSrc／src 的 media signature 比對，來源切換可能清掉尚未顯示的狀態。現在保留待顯示提示，依預覽播放週期及可取得的卡片 ID 區分；只有來源可辨識時，也允許下一個已換來源的預覽顯示。關閉功能、手動選速及移除影片會取消排程。
+- 不新增輪詢掃描或全頁觀察器。只有等待提示的影片保留一個影格 callback，顯示或取消後移除事件監聽。
+
+## 本輪結果
+
+- 單元／整合 269 項通過，包含新增的首幀等待、來源切換、元素替換去重、預覽重播、取消及 fallback 檢查。
+- Chromium 與 Brave 各通過 10 項實際瀏覽器結構測試：不可見載入、首幀時序、同片替換元素、新片、手動調速、YouTube 預覽換來源／重播，以及 Bilibili 預覽／重播。使用真實本地影片，網站結構由測試提供，不等同兩站實站驗收。
+- 既有回歸 11 項及標示穩定性 3 組通過。另以 Chromium 不開 popup 驗證 4 次新文件、2 次 SPA、初始設定／選取通知／MAIN 橋接器故障恢復，以及 worker 冷啟動。
+- 真實公開 YouTube 的一輪 0.6.12 載入：可見正片首幀前 0 次提示，首幀後約 56ms 出現一次 2×；動畫期間的多次位置快照屬於同一提示週期。
+- 真實 YouTube 預覽本輪未完成驗收：隔離 profile 中依序 hover 三張普通推薦卡，網站均未建立預覽影片。這不是通過結果，也未判作擴充功能失敗；本輪的 YouTube 預覽可用性證據限於結構測試。
+
+測試可用 `npm test`、`npm run test:notices`、`npm run test:stability` 與 `npm run test:autostart` 重跑。實際結果與產物檢查碼保存在本機輸出的 VideoSpeed-validation.json。先前完整使用環境的長播卡死、持續 Extension context invalidated，以及偶發 worker script-fetch 的唯一觸發條件仍未定位；本輪不對這些問題新增已解決的聲明。
+
+<details>
+<summary>0.6.11 驗證紀錄</summary>
+
 # VideoSpeed 0.6.11 驗證
 
 2026-10-27。針對長時間播放後延遲、提示缺漏與 popup 無回應，修正事件回授及控制路徑；VideoPocket 未修改。
@@ -37,3 +62,5 @@
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>

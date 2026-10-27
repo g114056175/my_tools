@@ -8,14 +8,14 @@ export class InitialRateNotice{
  request(){
   if(this.disposed)return;
   this.pending=true;this.anchorTime=this.video.currentTime;
-  if(!this.listening){for(const type of ['playing','loadeddata','timeupdate','resize'])this.video.addEventListener(type,this.wake);this.listening=true;}
+  if(!this.listening){for(const type of ['playing','loadeddata','timeupdate','resize'])this.video.addEventListener(type,this.wake);this.video.ownerDocument?.addEventListener?.('visibilitychange',this.wake);this.listening=true;}
   this.wake();
  }
  ready(){
   const video=this.video;
-  if(this.disposed||!this.pending||!video.isConnected||video.paused||video.ended||video.readyState<2||!this.canShow())return false;
+  if(this.disposed||!this.pending||!video.isConnected||video.paused||video.ended||video.readyState<2||video.ownerDocument?.visibilityState==='hidden'||!this.canShow())return false;
   if(video.checkVisibility&&!video.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
-  const rect=video.getBoundingClientRect();return rect.width>0&&rect.height>0;
+  const rect=video.getBoundingClientRect();return rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<(this.view.innerHeight??Infinity)&&rect.left<(this.view.innerWidth??Infinity);
  }
  wake(){
   if(!this.ready()){this.cancelFrame();return;}
@@ -40,7 +40,7 @@ export class InitialRateNotice{
  }
  cancel(){
   this.pending=false;this.cancelFrame();
-  if(this.listening){for(const type of ['playing','loadeddata','timeupdate','resize'])this.video.removeEventListener(type,this.wake);this.listening=false;}
+  if(this.listening){for(const type of ['playing','loadeddata','timeupdate','resize'])this.video.removeEventListener(type,this.wake);this.video.ownerDocument?.removeEventListener?.('visibilitychange',this.wake);this.listening=false;}
  }
  dispose(){this.disposed=true;this.cancel();}
 }

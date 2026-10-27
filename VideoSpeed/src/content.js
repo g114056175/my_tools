@@ -1,6 +1,6 @@
 import {normalizeSettings,shortcutAction,editingEvent,validRate} from './settings.js';
 import {RateController} from './rate-controller.js';
-import {MediaRegistry,mediaSignature,mediaPreviewInfo,mediaCanInitialize} from './media-registry.js';
+import {MediaRegistry,mediaSignature,isMediaPreview,mediaCanInitialize} from './media-registry.js';
 import {highlightMedia} from './media-highlight.js';
 import {createRuntimeMessenger,isContextInvalidatedError} from './runtime.js';
 import {VideoToast} from './video-toast.js';
@@ -11,7 +11,7 @@ import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.12',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.13',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -29,7 +29,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  let settings=initialSettings,ready=true,reportTimer,activeId=null,hasTarget=false,lastRate=initialRate,requestSerial=0,picker=null,rememberedRate=null;
  const states=new Map(),interactions=new WeakMap(),pending=new Map(),rateResponses=new Map();
  let trustedRateInput=null,retained=new WeakMap();
- const eligible=video=>video.isConnected&&(isRecent()||retained.get(video)===mediaSignature(video)&&!video.paused&&!video.ended);
+ const eligible=video=>video.isConnected&&!isMediaPreview(video)&&(isRecent()||retained.get(video)===mediaSignature(video)&&!video.paused&&!video.ended);
  const hasRetained=()=>[...registry.videos.values()].some(eligible);
  const report=()=>{if(disposed)return;if(!isRecent()&&!hasRetained()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!hasRetained()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
  listen(document,'video-control:rate-result-v3',event=>{
@@ -61,19 +61,19 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   let data;try{data=JSON.parse(event.detail);}catch{return;}
   const video=event.composedPath().find(node=>node?.tagName==='VIDEO'),id=video?.getAttribute('data-video-control-id');
   const state=id&&states.get(id);
-  if(data?.owner===rateClient.sessionId&&state?.rate&&id===data.videoId&&data.info?.mediaKey===state.rateKeyToken&&(data.info?.origin!=='user'||trustedRateInput?.consume(video,data.info))){if(data.info.origin==='user')state.notice?.cancel();state.rate.observe({...data.info,mediaKey:state.rateKey});}
+  if(data?.owner===rateClient.sessionId&&state?.rate&&!isMediaPreview(video)&&id===data.videoId&&data.info?.mediaKey===state.rateKeyToken&&(data.info?.origin!=='user'||trustedRateInput?.consume(video,data.info))){if(data.info.origin==='user')state.notice?.cancel();state.rate.observe({...data.info,mediaKey:state.rateKey});}
  },true);
  const registry=new MediaRegistry(document,(video,id)=>{
-  const preview=mediaPreviewInfo(video),signature=mediaSignature(video),initializedKey=preview?'':video.getAttribute('data-video-control-initialized')||'';
+  const signature=mediaSignature(video),initializedKey=video.getAttribute('data-video-control-initialized')||'';
   const preserved=initializedKey===signature;
-  const state={quality:{status:preserved?'preserved':'pending'},attempts:0,qualityKey:preserved?signature:null,timer:null,revision:0,rateKey:null,rateKeyToken:'',keySerial:0,noticeCycle:0,noticePreviewId:previewNoticeId(preview),noticeSource:video.currentSrc||video.src||''};states.set(id,state);
-  state.notice=new InitialRateNotice(video,{shown:shownNotice,identity:()=>noticeIdentity(video,id,state),canShow:()=>!disposed&&settings.enabled&&settings.defaultMode!=='off'&&id===activeId&&state.rate?.initialized&&eligible(video)&&mediaCanInitialize(video),show:()=>videoToast.show(video,video.playbackRate+'×')});
+  const state={quality:{status:preserved?'preserved':'pending'},attempts:0,qualityKey:preserved?signature:null,timer:null,revision:0,rateKey:null,rateKeyToken:'',keySerial:0};states.set(id,state);
+  state.notice=new InitialRateNotice(video,{shown:shownNotice,identity:()=>state.rate?.mediaKey,canShow:()=>!disposed&&settings.enabled&&settings.defaultMode!=='off'&&id===activeId&&state.rate?.initialized&&eligible(video)&&mediaCanInitialize(video),show:()=>videoToast.show(video,video.playbackRate+'×')});
   state.rate=new RateController(video,{...settings,enabled:ready&&settings.enabled},{
    readRate:()=>rateOperation(video,id,{op:'read'}),
    writeRate:(_rate,options)=>rateOperation(video,id,options),
    releaseRate:()=>rateOperation(video,id,{op:'release'}),
-   signature:()=>mediaSignature(video),isPreview:()=>!!mediaPreviewInfo(video),canInitialize:()=>eligible(video)&&mediaCanInitialize(video),initializedKey,onInitialize:key=>video.setAttribute('data-video-control-initialized',key),lastRate,selected:id===activeId,onChange:report,
-   onDefaultApplied:()=>{updateNoticeIdentity(video,id,state);state.notice.request();},
+   signature:()=>mediaSignature(video),canInitialize:()=>eligible(video)&&mediaCanInitialize(video),initializedKey,onInitialize:key=>video.setAttribute('data-video-control-initialized',key),lastRate,selected:id===activeId,onChange:report,
+   onDefaultApplied:()=>state.notice.request(),
    onRate:(rate,source)=>{
     lastRate=rate;const rateWriteId=rateClient.begin(rate),hint={id,rate,source,rateWriteId,rateSessionId:rateClient.sessionId};rememberedRate=hint;
     for(const item of states.values())if(item.rate)item.rate.lastRate=rate;
@@ -82,7 +82,6 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    onMedia:()=>queueMicrotask(()=>{
     if(disposed||!states.has(id))return;
     if(!isRecent()&&!eligible(video)){onIdle();return;}
-    updateNoticeIdentity(video,id,state);
     state.notice.wake();
     if(state.qualityKey!==state.rate.mediaKey){state.qualityKey=state.rate.mediaKey;state.attempts=0;state.revision++;clearTimeout(state.timer);state.timer=null;state.quality={status:'pending'};}
     queueQuality(video,id);
@@ -90,38 +89,22 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   });
   for(const name of ['pause','play','ended','resize','loadedmetadata'])listen(video,name,report);
   state.onPlayback=()=>state.notice.wake();
-  state.onNoticeReset=()=>{if(mediaPreviewInfo(video)){state.noticeCycle++;state.notice.cancel();}};
   state.onNoticeSource=()=>state.notice.cancelFrame();
   for(const name of ['play','playing'])listen(video,name,state.onPlayback);
-  for(const name of ['pause','ended'])listen(video,name,state.onNoticeReset);
   for(const name of ['loadstart','emptied'])listen(video,name,state.onNoticeSource);
  },report);
  registry.onRemove=(id,video)=>{
   const state=states.get(id);state?.notice.dispose();state?.rate.dispose();clearTimeout(state?.timer);states.delete(id);
+  if(videoToast.video===video)videoToast.clear();
+  if(id===activeId){activeId=null;hasTarget=false;marker({clear:true});report();}
   for(const name of ['pause','play','ended','resize','loadedmetadata'])video.removeEventListener(name,report);
   for(const name of ['play','playing'])video.removeEventListener(name,state?.onPlayback);
-  for(const name of ['pause','ended'])video.removeEventListener(name,state?.onNoticeReset);
   for(const name of ['loadstart','emptied'])video.removeEventListener(name,state?.onNoticeSource);
  };
  trustedRateInput=new TrustedRateInput(document,{getRecords:()=>[...registry.videos].map(([id,video])=>({video,selected:id===activeId,mediaKey:states.get(id)?.rateKeyToken}))});
  trustedRateInput.start();
  globalThis[Symbol.for('video-control.identities')]={keys:registry.ids};
  const snapshot=(details=false)=>registry.snapshot(states,interactions,{details,activeId});
- function previewNoticeId(preview){return preview?.id&&!/^(?:blob:|https?:)/i.test(preview.id)?preview.platform+':'+preview.id:'';}
- function updateNoticeIdentity(video,id,state){
-  const preview=mediaPreviewInfo(video),next=previewNoticeId(preview),source=video.currentSrc||video.src||'';
-  if(preview){
-   if(next&&state.noticePreviewId&&next!==state.noticePreviewId)state.noticeCycle++;
-   else if(!next&&source&&source!==state.noticeSource&&shownNotice.key==='preview:'+id+':'+state.noticeCycle)state.noticeCycle++;
-   if(next)state.noticePreviewId=next;
-  }
-  state.noticeSource=source;
- }
- function noticeIdentity(video,id,state){
-  if(mediaPreviewInfo(video))return 'preview:'+id+':'+state.noticeCycle;
-  try{const url=new URL(location.href);if(/(^|\.)youtube\.com$/.test(url.hostname)){const key=url.searchParams.get('v')||url.pathname.match(/^\/(?:shorts|embed)\/([^/]+)/)?.[1];if(key)return 'yt:'+key;}}catch{}
-  return state.rate?.mediaKey;
- }
  function marker(options){
   globalThis[Symbol.for('video-control.selection')]={videos:[...registry.videos.values()]};
   const result=highlightMedia(options);
@@ -132,7 +115,6 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  }
  function queueQuality(video,id){
   const state=states.get(id);if(disposed||!state||!ready||id!==activeId||!state.rate.initialized&&!state.rate.initializationAttempts||!eligible(video)||!mediaCanInitialize(video))return;
-  if(mediaPreviewInfo(video)){state.quality={status:'preview'};return;}
   if(!settings.enabled||!settings.qualityEnabled){state.quality={status:'disabled'};return;}
   if(video.readyState<1||state.timer||state.attempts>qualityDelays.length||['applied','requested','failed','preserved'].includes(state.quality.status))return;
   state.timer=setTimeout(async()=>{
@@ -175,6 +157,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   return hasRetained();
  }
  function act(id,command,value,language=locale){
+  registry.prune();
   const video=registry.videos.get(id),state=states.get(id);if(!video||!state||!video.isConnected)throw Error("Video changed; select it again");
   if(!eligible(video))throw Error("Return to the video tab first");
   if(!settings.enabled)throw Error("VideoSpeed is disabled");
@@ -242,6 +225,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   if(message?.scope!==SCOPE)return;
   try{
    if(message.action==='activeTarget'){
+    registry.prune();
     if(message.id&&!registry.videos.has(message.id)){report();respond({ok:false,activeId:null,error:'Video changed; select it again'});return;}
     activeId=message.id||null;hasTarget=!!message.hasTarget;rateClient.accept(message);updateLastRate(rateClient.rate);
     for(const [id,state]of states){state.rate.lastRate=lastRate;state.rate.select(id===activeId);state.notice.wake();if(id!==activeId){clearTimeout(state.timer);state.timer=null;}}

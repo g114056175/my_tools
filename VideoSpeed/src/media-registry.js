@@ -7,54 +7,26 @@ function sourceObjectKey(video){
   return sourceObjectIds.get(source);
  }catch{return '';}
 }
-const YT_CARD='ytd-video-preview,#video-preview,#inline-preview-player,ytd-moving-thumbnail-renderer,ytd-thumbnail,yt-thumbnail-view-model,yt-lockup-view-model,ytd-video-renderer,ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer,ytd-playlist-video-renderer,ytd-reel-item-renderer';
-const BILI_CARD='bili-video-card,.bili-video-card,.video-card,.video-card-common';
+const YT_PREVIEW='ytd-video-preview,#video-preview,#inline-preview-player,ytd-moving-thumbnail-renderer,ytd-thumbnail,yt-thumbnail-view-model';
+const YT_CARD='yt-lockup-view-model,ytd-video-renderer,ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer,ytd-playlist-video-renderer,ytd-reel-item-renderer';
+const BILI_PREVIEW='bili-video-card,.bili-video-card';
+const BILI_CARD='.video-card,.video-card-common';
 const MAX_MUTATION_BATCHES=64,MAX_MUTATION_RECORDS=4096,MAX_MUTATION_NODES=4096;
-function linkId(card,platform,target){
- const links=card?.querySelectorAll?.('a[href]')||[];
- for(const link of links){
-  try{
-   const url=new URL(link.href||link.getAttribute?.('href')||'',target.location.href);
-   if(platform==='youtube'&&/(^|\.)youtube\.com$/.test(url.hostname)){
-    const id=url.searchParams.get('v')||url.pathname.match(/^\/(?:shorts|embed|live)\/([^/]+)/)?.[1];if(id)return id;
-   }
-   if(platform==='bilibili'&&/(^|\.)bilibili\.com$/.test(url.hostname)){
-    const id=url.pathname.match(/^\/video\/([^/?#]+)/)?.[1]||url.pathname.match(/^\/bangumi\/play\/(ep\d+)/)?.[1];if(id)return id;
-   }
-  }catch{}
- }
- return '';
-}
-function cardValue(card,names){for(const name of names){const value=card?.getAttribute?.(name);if(value)return String(value).trim();}return '';}
-function previewCard(video,selector,platform,attrs,target){
- let card=video.closest?.(selector);const shell=card;
- for(let depth=0;card&&depth<5;depth++,card=card.parentElement?.closest?.(selector)){
-  const id=cardValue(card,attrs)||linkId(card,platform,target);if(id)return {card,id};
- }
- if(shell?.nodeType===1){const bound=video.getAttribute?.('data-video-control-preview-id')||'',source=video.currentSrc||video.src||'';if(bound||source)return {card:shell,id:bound||source};}
- return null;
-}
-/** Identify only media embedded in a known YouTube or Bilibili preview shell/card.
- * A card ID, verified player ID or source distinguishes recycled preview content.
- */
-export function mediaPreviewInfo(video,target=globalThis){
+// Thumbnail previews are excluded before a source, card ID or title is available.
+// Only known site containers count; muted/small social-feed videos remain media.
+export function isMediaPreview(video,target=video?.ownerDocument?.defaultView||globalThis){
  try{
   const host=new URL(target.location.href).hostname;
-  if(/(^|\.)youtube\.com$/.test(host)){
-   const owner=previewCard(video,YT_CARD,'youtube',['data-video-id','video-id','data-id'],target);if(!owner)return null;
-   const source=video.currentSrc||video.src||video.getAttribute?.('src')||'';
-   return {platform:'youtube',card:owner.card,id:owner.id,signature:`preview:yt:${owner.id}:${source}`};
-  }
-  if(/(^|\.)bilibili\.com$/.test(host)){
-   const owner=previewCard(video,BILI_CARD,'bilibili',['data-bvid','bvid','data-aid','aid','data-epid'],target);if(!owner)return null;
-   const source=video.currentSrc||video.src||video.getAttribute?.('src')||'';
-   return {platform:'bilibili',card:owner.card,id:owner.id,signature:`preview:bili:${owner.id}:${source}`};
-  }
+  const youtube=/(^|\.)youtube\.com$/.test(host),bilibili=/(^|\.)bilibili\.com$/.test(host);
+  if(!youtube&&!bilibili)return false;
+  const path=[];for(let node=video,depth=0;node&&depth<8;node=node.getRootNode?.()?.host,depth++)path.push(node);
+  if(path.some(node=>node.closest?.(youtube?YT_PREVIEW:BILI_PREVIEW)))return true;
+  if(path.some(node=>node.closest?.(youtube?'#movie_player,ytd-reel-video-renderer,#shorts-player':'.bpx-player-container,#bilibili-player,bwp-video')))return false;
+  return path.some(node=>!!node.closest?.(youtube?YT_CARD:BILI_CARD));
  }catch{}
- return null;
+ return false;
 }
 export function mediaSignature(video,target=globalThis){
- const preview=mediaPreviewInfo(video,target);if(preview)return preview.signature;
  let route='';
  try{
   const url=new URL(target.location.href),host=url.hostname;
@@ -65,7 +37,7 @@ export function mediaSignature(video,target=globalThis){
 }
 export function mediaCanInitialize(video,target=globalThis){
  try{
-  if(mediaPreviewInfo(video,target))return true;
+  if(isMediaPreview(video,target))return false;
   const url=new URL(target.location.href),player=video.closest?.('#movie_player,.html5-video-player');
   if(!/(^|\.)youtube\.com$/.test(url.hostname)||!player)return true;
   if(player.classList?.contains('ad-showing')||player.classList?.contains('ad-interrupting')||video.getAttribute('data-video-control-ad')==='true')return false;
@@ -77,11 +49,13 @@ export class MediaRegistry{
  constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true}={}){
   Object.assign(this,{document,onAdd,onChange,owner,exploring,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
   const seenEvents=new WeakSet();
-  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video))){this.add(video);if(event.type==='play')this.notePlay(video);this.onChange();}};
+  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video))){this.add(video);if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
   this.scan(document);this.enqueue(document);
  }
  add(video){
-  if(this.disposed||!this.exploring||!video.isConnected||this.ids.has(video))return;
+  if(this.disposed||!video.isConnected)return;
+  if(isMediaPreview(video,this.document.defaultView)){const id=this.ids.get(video);if(id)this.remove(id,video);return;}
+  if(!this.exploring||this.ids.has(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
   const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }
@@ -241,14 +215,14 @@ export class MediaRegistry{
  }
  prune(){
   let changed=false;
-  for(const [id,video]of this.videos)if(!video.isConnected){this.remove(id,video);changed=true;}
+  for(const [id,video]of this.videos)if(!video.isConnected||isMediaPreview(video,this.document.defaultView)){this.remove(id,video);changed=true;}
   for(const [root,observer]of this.observers)if(root.host&&!root.host.isConnected){observer.disconnect();for(const event of ['play','loadedmetadata','loadstart'])root.removeEventListener(event,this.discover,true);this.observers.delete(root);this.walkedRoots.delete(root);this.walkDeferred.delete(root);}
   return changed;
  }
  fromEvent(event){
-  for(const node of event.composedPath?.()||[])if(this.ids.has(node))return node;
+  for(const node of event.composedPath?.()||[])if(this.ids.has(node)&&!isMediaPreview(node,this.document.defaultView))return node;
   const x=event.clientX,y=event.clientY;if(!Number.isFinite(x)||!Number.isFinite(y))return null;
-  const hits=[...this.videos.values()].filter(video=>{const r=video.getBoundingClientRect();return r.width>0&&r.height>0&&x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;});
+  const hits=[...this.videos.values()].filter(video=>{if(isMediaPreview(video,this.document.defaultView))return false;const r=video.getBoundingClientRect();return r.width>0&&r.height>0&&x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;});
   return hits.length===1?hits[0]:null;
  }
  snapshot(states,interactions,{details=false,activeId=null}={}){

@@ -436,6 +436,8 @@ async function runChecks() {
     await waitVideoRate(1);
     await hostPage.keyboard.press('Shift+Quote');
     await waitVideoRate(2);
+    // Local keyboard playback is immediate; durable memory is acknowledged asynchronously.
+    await waitFor(async () => (await storageGet(['lastRate'])).lastRate === 2, 'explicit shortcut memory was not saved within 1.5s', 1500);
     assert.equal((await storageGet(['lastRate'])).lastRate, 2, 'explicit shortcut did not update memory');
 
     await patchSettings({ defaultMode: 'follow' }, { lastRate: 3, lastRateRevision: 20 });

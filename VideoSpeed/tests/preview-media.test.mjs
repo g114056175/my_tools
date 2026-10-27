@@ -1,87 +1,66 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mediaPreviewInfo,mediaSignature,mediaCanInitialize} from '../src/media-registry.js';
-import {RateController} from '../src/rate-controller.js';
-import {normalizeSettings} from '../src/settings.js';
+import {isMediaPreview,mediaSignature,mediaCanInitialize} from '../src/media-registry.js';
 
-function card(attrs={},hrefs=[]){return {getAttribute:name=>attrs[name]??null,querySelectorAll:()=>hrefs.map(href=>({href,getAttribute:()=>href}))};}
-function previewVideo(container,source='blob:preview'){
- return {currentSrc:source,src:source,closest(selector){
-  if(selector.includes('ytd-video-preview')||selector.includes('bili-video-card'))return container;
-  return null;
- }};
+const target=href=>({location:{href}});
+function video(ancestors=[],source=''){
+ return {currentSrc:source,src:source,getAttribute:()=>null,
+  closest:selector=>selector.split(',').some(value=>ancestors.includes(value))?{}:null,
+  querySelectorAll(){assert.fail('Preview exclusion must not explore titles, links or sources');},
+ };
 }
-function target(href){return {location:{href}};}
-class Video extends EventTarget{
- constructor(src='blob:first'){super();this.value=1;this.writes=0;this.readyState=1;this.paused=false;this.ended=false;this.currentSrc=src;}
- get playbackRate(){return this.value;}
- set playbackRate(value){this.writes++;this.value=value;queueMicrotask(()=>this.dispatchEvent(new Event('ratechange')));}
-}
-const settings=()=>normalizeSettings({defaultMode:'follow'});
-const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('YouTube card preview identity comes from its thumbnail link, while the route player stays normal',()=>{
- const owner=card({},['https://www.youtube.com/watch?v=previewA']);
- const video=previewVideo(owner);
- const info=mediaPreviewInfo(video,target('https://www.youtube.com/'));
- assert.equal(info?.platform,'youtube');assert.equal(info?.id,'previewA');assert.match(info.signature,/^preview:yt:previewA:/);
- assert.equal(mediaSignature(video,target('https://www.youtube.com/')),info.signature);
- const main={currentSrc:'blob:main',closest:selector=>selector==='#movie_player,.html5-video-player'?{}:null};
- assert.equal(mediaPreviewInfo(main,target('https://www.youtube.com/watch?v=main')),null);
- assert.equal(mediaSignature(main,target('https://www.youtube.com/watch?v=main')),'yt:main');
+test('YouTube hover shells are excluded even before a source or video ID exists',()=>{
+ for(const shell of ['ytd-video-preview','#inline-preview-player','ytd-moving-thumbnail-renderer','ytd-thumbnail','yt-thumbnail-view-model']){
+  const item=video([shell,'.html5-video-player']);
+  assert.equal(isMediaPreview(item,target('https://www.youtube.com/watch?v=A')),true,shell);
+  assert.equal(mediaCanInitialize(item,target('https://www.youtube.com/watch?v=A')),false,shell);
+ }
 });
 
-test('Bilibili video-card preview uses its card BV ID and leaves the player unclassified',()=>{
- const owner=card({'data-bvid':'BV1preview'}),video=previewVideo(owner);
- const info=mediaPreviewInfo(video,target('https://www.bilibili.com/'));
- assert.equal(info?.platform,'bilibili');assert.equal(info?.id,'BV1preview');
- const main={currentSrc:'blob:main',closest:selector=>selector==='.bpx-player-container,#bilibili-player,bwp-video'?{}:null};
- assert.equal(mediaPreviewInfo(main,target('https://www.bilibili.com/video/BV1main')),null);
- assert.equal(mediaSignature(main,target('https://www.bilibili.com/video/BV1main')),'bili:/video/BV1main:1');
+test('Bilibili thumbnail previews are excluded without a BV ID or source',()=>{
+ for(const shell of ['bili-video-card','.bili-video-card','.video-card','.video-card-common']){
+  const item=video([shell]);
+  assert.equal(isMediaPreview(item,target('https://www.bilibili.com/video/BV1main')),true,shell);
+  assert.equal(mediaCanInitialize(item,target('https://www.bilibili.com/video/BV1main')),false,shell);
+ }
 });
 
-test('a confirmed YouTube card preview is not blocked by the main-player readiness gate',()=>{
- const owner=card({},['https://www.youtube.com/watch?v=previewA']);
- const video={currentSrc:'blob:preview',closest(selector){
-  if(selector.includes('ytd-video-preview'))return owner;
-  if(selector==='#movie_player,.html5-video-player')return {classList:{contains:()=>false}};
-  return null;
- },getAttribute:()=>null};
- assert.equal(mediaCanInitialize(video,target('https://www.youtube.com/watch?v=main')),true);
+test('real YouTube players and Shorts take precedence over generic card ancestors',()=>{
+ for(const route of ['watch?v=main','shorts/main','embed/main','live/main']){
+  const item=video(['#movie_player','ytd-rich-item-renderer'],'blob:main');
+  assert.equal(isMediaPreview(item,target('https://www.youtube.com/'+route)),false,route);
+ }
+ assert.equal(isMediaPreview(video(['ytd-reel-video-renderer','ytd-reel-item-renderer']),target('https://www.youtube.com/shorts/main')),false);
+ assert.equal(isMediaPreview(video(['#movie_player','ytd-video-preview']),target('https://www.youtube.com/watch?v=main')),true,'an explicit preview shell still wins');
+ assert.equal(mediaSignature(video(['#movie_player'],'blob:main'),target('https://www.youtube.com/watch?v=main')),'yt:main');
 });
 
-test('preview pause/reset and re-entry always use the followed rate without changing remembered rate',async()=>{
- const video=new Video(),remembered=[];video.paused=true;
- const controller=new RateController(video,settings(),{selected:true,lastRate:4,isPreview:()=>true,onRate:rate=>remembered.push(rate)});
- const start=()=>{video.paused=false;video.dispatchEvent(new Event('play'));assert.equal(video.playbackRate,4);};
- start();
- video.paused=true;video.dispatchEvent(new Event('pause'));video.playbackRate=1;await tick();
- assert.equal(controller.lastRate,4);assert.deepEqual(remembered,[]);
- start();
- video.paused=true;video.dispatchEvent(new Event('ended'));video.dispatchEvent(new Event('emptied'));video.playbackRate=1;await tick();
- assert.equal(controller.lastRate,4);assert.deepEqual(remembered,[]);
- video.currentSrc='blob:second-card';video.paused=false;video.dispatchEvent(new Event('loadedmetadata'));
- assert.equal(video.playbackRate,4);assert.equal(controller.lastRate,4);assert.deepEqual(remembered,[]);controller.dispose();
+test('Bilibili primary and episode players remain media inside generic layout cards',()=>{
+ for(const player of ['.bpx-player-container','#bilibili-player','bwp-video']){
+  const item=video([player,'.video-card'],'blob:main');
+  assert.equal(isMediaPreview(item,target('https://www.bilibili.com/video/BV1main')),false,player);
+ }
+ assert.equal(mediaSignature(video(['.bpx-player-container'],'blob:main'),target('https://www.bilibili.com/video/BV1main?p=2')),'bili:/video/BV1main:2');
 });
 
-test('preview extension commands do not replace the remembered default',()=>{
- const video=new Video(),remembered=[];
- const controller=new RateController(video,settings(),{selected:true,lastRate:4,isPreview:()=>true,onRate:rate=>remembered.push(rate)});
- controller.command('set',1.5);assert.equal(video.playbackRate,1.5);assert.equal(controller.lastRate,4);assert.deepEqual(remembered,[]);controller.dispose();
+test('a preview shell across an open shadow boundary is still excluded',()=>{
+ const host=video(['ytd-video-preview']),item=video();item.getRootNode=()=>({host});
+ assert.equal(isMediaPreview(item,target('https://www.youtube.com/')),true);
 });
 
-test('custom 4x default is reapplied to the next preview regardless of remembered rate',()=>{
- const video=new Video(),custom=normalizeSettings({defaultMode:'custom',customRate:4});video.paused=true;
- const controller=new RateController(video,custom,{selected:true,lastRate:1,isPreview:()=>true});
- video.paused=false;video.dispatchEvent(new Event('play'));assert.equal(video.playbackRate,4);
- video.paused=true;video.dispatchEvent(new Event('pause'));video.playbackRate=1;
- video.paused=false;video.dispatchEvent(new Event('play'));assert.equal(video.playbackRate,4);assert.equal(controller.lastRate,1);controller.dispose();
+test('social feeds and unrelated hosts are never excluded by thumbnail-like classes',()=>{
+ for(const host of ['www.facebook.com','www.instagram.com','www.tiktok.com','www.youtube.com.example.test','example.test']){
+  const item=video(['.video-card','ytd-video-preview'],'blob:feed');
+  assert.equal(isMediaPreview(item,target('https://'+host+'/feed')),false,host);
+  assert.equal(mediaCanInitialize(item,target('https://'+host+'/feed')),true,host);
+ }
 });
 
-test('native 1x remains authoritative for a normal YouTube player',async()=>{
- const video=new Video(),remembered=[];
- const controller=new RateController(video,settings(),{selected:true,lastRate:4,isPreview:()=>false,onRate:rate=>remembered.push(rate)});
- assert.equal(video.playbackRate,4);video.playbackRate=1;
- controller.observe({origin:'user',status:'ready',actualRate:1,defaultRate:video.defaultPlaybackRate,mediaKey:controller.mediaKey,evidence:'native-rate-option'});await tick();
- assert.equal(controller.lastRate,1);assert.equal(remembered.at(-1),1);controller.dispose();
+test('main YouTube readiness and ad validation still apply independently of previews',()=>{
+ const item=video(['#movie_player'],'blob:main'),attrs=new Map();item.getAttribute=name=>attrs.get(name)??null;
+ assert.equal(mediaCanInitialize(item,target('https://www.youtube.com/watch?v=A')),false);
+ attrs.set('data-video-control-ready','true');attrs.set('data-video-control-ready-key','yt:A');
+ assert.equal(mediaCanInitialize(item,target('https://www.youtube.com/watch?v=A')),true);
+ attrs.set('data-video-control-ad','true');assert.equal(mediaCanInitialize(item,target('https://www.youtube.com/watch?v=A')),false);
 });

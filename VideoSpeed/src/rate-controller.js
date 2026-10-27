@@ -7,15 +7,14 @@ function readVideo(video){
  catch(error){return {status:'read-error',actualRate:null,defaultRate:null,error:String(error?.message||error)};}
 }
 export class RateController{
- constructor(video,settings,{signature=()=>video.currentSrc||video.src||'',isPreview=()=>false,canInitialize=()=>true,onChange=()=>{},onMedia=()=>{},onRate=()=>{},onInitialize=()=>{},onDefaultApplied=()=>{},readRate,writeRate,releaseRate,initializedKey='',lastRate=1,selected=false}={}){
-  Object.assign(this,{video,settings,signature,isPreview,canInitialize,onChange,onMedia,onRate,onInitialize,onDefaultApplied,initializedKey,lastRate,selected,
+ constructor(video,settings,{signature=()=>video.currentSrc||video.src||'',canInitialize=()=>true,onChange=()=>{},onMedia=()=>{},onRate=()=>{},onInitialize=()=>{},onDefaultApplied=()=>{},readRate,writeRate,releaseRate,initializedKey='',lastRate=1,selected=false}={}){
+  Object.assign(this,{video,settings,signature,canInitialize,onChange,onMedia,onRate,onInitialize,onDefaultApplied,initializedKey,lastRate,selected,
    readRate:readRate||(()=>readVideo(video)),writeRate,releaseRate,mediaKey:null,initialized:false,disposed:false,actualRate:null,defaultPlaybackRate:null,desired:null,managedRate:null,
    rateStatus:'unknown',rateOrigin:'unknown',error:'',revision:0,automaticWrites:0,initializationAttempts:0,initializationBlocked:false,initializationTimer:null,repairTimer:null,mediaResetPending:false,awaitingMedia:false,localDefault:null,adoptionPending:false,events:[]});
   this.handlers={};
   for(const name of ['loadedmetadata','loadeddata','loadstart','play','playing','pause','ended','ratechange','emptied']){const handler=()=>this.event(name);this.handlers[name]=handler;video.addEventListener(name,handler);}
   this.sync();
  }
- dynamicPreview(){try{return !!this.isPreview()||String(this.mediaKey||'').startsWith('preview:');}catch{return false;}}
  note(kind,extra={}){this.events.push({kind,at:Date.now(),rate:this.actualRate,desired:this.desired,...extra});if(this.events.length>32)this.events.shift();}
  read(){
   let result;try{result=this.readRate();}catch(error){result={status:'read-error',error:String(error?.message||error)};}
@@ -52,7 +51,6 @@ export class RateController{
    this.error='';this.rateStatus='unknown';this.onMedia();
   }
   this.read();if(mediaEvent||eventName==='playing')this.awaitingMedia=false;
-  if(this.dynamicPreview()&&eventName==='play'&&this.video.readyState>0){this.awaitingMedia=false;this.initialized=false;}
   if(initialize)this.initialize();
  }
  select(selected){this.selected=selected;if(selected)this.sync();else {this.read();this.cancelRepair();this.cancelInitialization();}}
@@ -105,7 +103,7 @@ export class RateController{
   }
   this.desired=Number(rate);this.managedRate=Number(rate);this.rateStatus='ready';this.rateOrigin=source;this.error='';this.note('applied',{source});this.onChange();return true;
  }
- persist(rate,source){if(source==='default'&&this.settings.defaultMode==='follow')return;if(!this.dynamicPreview()&&this.selected&&validRate(rate)){this.lastRate=Number(rate);this.onRate(Number(rate),source);}}
+ persist(rate,source){if(source==='default'&&this.settings.defaultMode==='follow')return;if(this.selected&&validRate(rate)){this.lastRate=Number(rate);this.onRate(Number(rate),source);}}
  observe(info){
   if(this.disposed||!this.settings.enabled||!info)return;this.sync(false,'observation',false);
   if(info.mediaKey&&info.mediaKey!==this.mediaKey)return;
@@ -151,9 +149,6 @@ export class RateController{
  event(name){
   if(this.disposed)return;
   if(name==='loadstart'||name==='emptied'){this.cancelRepair();this.revision++;this.mediaResetPending=true;}
-  const preview=this.dynamicPreview();
-  if(preview&&(name==='pause'||name==='ended')){this.release();this.initialized=false;this.awaitingMedia=false;}
-  if(preview&&(name==='loadstart'||name==='emptied')){this.initialized=false;this.awaitingMedia=true;}
   this.sync(name==='loadedmetadata',name);if(name==='ratechange')this.onChange();
  }
  command(action,value){

@@ -87,13 +87,14 @@ test('transient initialization retries are bounded per source and the budget res
  c.dispose();
 });
 
-test('successful repeated previews do not consume the failure retry budget',()=>{
- const v=new Video(),c=controller(v,settings(),{isPreview:()=>true});
+test('pausing and resuming a main video do not reapply defaults over an explicit choice',()=>{
+ const v=new Video(),notices=[],c=controller(v,settings(),{onDefaultApplied:rate=>notices.push(rate)});c.command('set',1.5);
  for(let i=0;i<8;i++){
-  v.paused=true;v.dispatchEvent(new Event('pause'));v.value=1;
+  v.paused=true;v.dispatchEvent(new Event('pause'));
   v.paused=false;v.dispatchEvent(new Event('play'));
-  assert.equal(v.playbackRate,2);assert.equal(c.initialized,true);assert.equal(c.initializationAttempts,0);
+  assert.equal(v.playbackRate,1.5);assert.equal(c.initialized,true);assert.equal(c.initializationAttempts,0);
  }
+ assert.deepEqual(notices,[2]);
  c.dispose();
 });
 test('a lone transient default failure retries without another media event or popup',async()=>{

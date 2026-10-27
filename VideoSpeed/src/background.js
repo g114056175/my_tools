@@ -3,7 +3,7 @@ import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents} from './tab-activity.js';
-const SCOPE='video-control',VERSION='0.6.12',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.13',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;

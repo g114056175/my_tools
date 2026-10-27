@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.12/VideoSpeed.zip)** · Chrome／Brave · 預覽版
+**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.13/VideoSpeed.zip)** · Chrome／Brave · 預覽版
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -26,7 +26,7 @@
 ## 功能
 
 - **直接調速**：輸入倍速、點選刻度或拖曳滑桿；左右加減按鈕依目前刻度區間微調。
-- **播放偏好**：速度可選關閉、跟隨上一部或指定倍速，預覽、動態載入與換片也適用。支援的播放器可設定起始畫質；首次套用後仍可手動調整。
+- **播放偏好**：速度可選關閉、跟隨上一部或指定倍速，動態載入與換片也適用。支援的播放器可設定起始畫質；首次套用後仍可手動調整。略過 YouTube、Bilibili 的縮圖預覽，保留主影片控制。
 - **自訂操作**：編輯刻度與快捷鍵；修改刻度不會立即改變正在播放的速度。
 - **網站除外**：新增網域或影片網址，點規則旁的類型切換。`Full` 停止所有功能；`Default` 僅略過自動速度與畫質設定，保留手動操作。
 - **背景節流**：僅探索聚焦分頁，離開後保留 10 秒載入緩衝；既有背景播放保留控制，切回時再補查。

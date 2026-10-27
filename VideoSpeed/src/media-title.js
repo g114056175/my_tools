@@ -74,7 +74,7 @@ function boundTitle(video, document) {
   if (!identity) return '';
   const current = video.getAttribute?.('data-video-control-content-id');
   const route = routeId(document);
-  return identity === current && (!route || identity === `yt:${route}` || video.getAttribute?.('data-video-control-preview-id') === identity)
+  return identity === current && (!route || identity === `yt:${route}`)
     ? value
     : '';
 }

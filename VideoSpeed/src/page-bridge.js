@@ -3,7 +3,7 @@ import {syncPlayerRate} from './player-rate.js';
 import {mediaPreviewInfo} from './media-registry.js';
 import {RateBridge} from './rate-bridge.js';
 const marker=Symbol.for('video-control.page-bridge-v3');
-const version='0.6.9',previous=globalThis[marker];
+const version='0.6.10',previous=globalThis[marker];
 if(previous?.version!==version){
  try{if(previous?.dispose)previous.dispose();else previous?.stop?.();}catch{}
  let active=false,exploring=true,qualityEnabled=false,abort,restore=[],generation=0,rateBridge=null,bridgeOwner=null,refreshBindings=()=>{};
@@ -107,6 +107,7 @@ if(previous?.version!==version){
   const changed=exploring!==(state?.exploring!==false);exploring=state?.exploring!==false;
   if(!exploring){for(const timer of retryTimers.values())clearTimeout(timer);retryTimers.clear();}
   qualityEnabled=state?.qualityEnabled===true;if(state?.enabled===true){if(active&&changed)refreshBindings();else start();}else stop();
+  document.dispatchEvent(new CustomEvent('video-control:bridge-ready-v1',{detail:JSON.stringify({owner:bridgeOwner,version,enabled:active})}));
  };
  document.addEventListener('video-control:bridge-state-v4',configure,true);
  const api={version,active:()=>active,owner:()=>bridgeOwner,stop,dispose(){stop();document.removeEventListener('video-control:bridge-state-v4',configure,true);if(globalThis[marker]===api)delete globalThis[marker];}};

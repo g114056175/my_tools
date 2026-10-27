@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RateController,MAX_AUTOMATIC_WRITES} from '../src/rate-controller.js';
+import {RateController,MAX_AUTOMATIC_WRITES,MAX_INITIALIZATION_ATTEMPTS} from '../src/rate-controller.js';
 import {DEFAULT_STEPS,normalizeSettings} from '../src/settings.js';
 import {mediaSignature} from '../src/media-registry.js';
 class Video extends EventTarget{
@@ -35,9 +35,106 @@ test('only the selected video initializes after media becomes ready',()=>{
  v.readyState=1;v.dispatchEvent(new Event('loadedmetadata'));assert.equal(v.writes,0);c.select(true);
  assert.equal(v.playbackRate,2);assert.equal(v.defaultPlaybackRate,2);c.dispose();assert.equal(v.defaultPlaybackRate,1);assert.equal(v.playbackRate,2);
 });
+test('default-off mode waits for a transient native read failure without writing',()=>{
+ const v=new Video();let reads=0;
+ const readRate=()=>++reads===1?{status:'read-error',actualRate:null,defaultRate:null}:{status:'ready',actualRate:v.playbackRate,defaultRate:v.defaultPlaybackRate};
+ const c=controller(v,settings({defaultMode:'off'}),{readRate});
+ assert.equal(c.initialized,false);assert.equal(c.snapshot().rateStatus,'failed');assert.equal(v.writes,0);
+ c.sync();
+ assert.equal(c.initialized,true);assert.equal(c.snapshot().rateStatus,'ready');assert.equal(v.writes,0);c.dispose();
+});
+test('a transient first bridge failure can retry on media readiness and apply the saved default',()=>{
+ for(const firstFailure of ['unavailable','read-error']){
+  const v=new Video(),attempts=[],rates=[],notices=[];
+  const writeRate=(rate,options)=>{
+   attempts.push({rate,options});
+   if(attempts.length===1)return {status:firstFailure,actualRate:null,defaultRate:null};
+   if(options.op!=='adopt')v.value=rate;
+   if(options.maintainDefault)v.defaultPlaybackRate=rate;
+   return {status:'ready',actualRate:v.playbackRate,defaultRate:v.defaultPlaybackRate};
+  };
+  const c=controller(v,settings(),{writeRate,onRate:(rate,source)=>rates.push([rate,source]),onDefaultApplied:rate=>notices.push(rate)});
+  assert.equal(v.playbackRate,1,firstFailure);
+  assert.equal(c.initialized,false,`${firstFailure} must not consume initialization`);
+  assert.equal(c.snapshot().rateStatus,'failed',firstFailure);
+  v.dispatchEvent(new Event('loadedmetadata'));
+  assert.equal(v.playbackRate,2,firstFailure);
+  assert.equal(v.defaultPlaybackRate,2,firstFailure);
+  assert.equal(c.initialized,true,firstFailure);
+  assert.equal(attempts.length,2,firstFailure);
+  assert.deepEqual(rates,[[2,'default']],firstFailure);
+  assert.deepEqual(notices,[2],firstFailure);
+  c.dispose();
+ }
+});
+test('transient initialization retries are bounded per source and the budget resets for a new source',()=>{
+ const v=new Video();let attempts=0;
+ const writeRate=(rate,options)=>{
+  attempts++;
+  if(attempts<=MAX_INITIALIZATION_ATTEMPTS)return {status:'unavailable',actualRate:null,defaultRate:null};
+  v.value=rate;if(options.maintainDefault)v.defaultPlaybackRate=rate;
+  return {status:'ready',actualRate:v.playbackRate,defaultRate:v.defaultPlaybackRate};
+ };
+ const c=controller(v,settings(),{writeRate});
+ for(let i=0;i<MAX_INITIALIZATION_ATTEMPTS+5;i++)c.sync();
+ assert.equal(attempts,MAX_INITIALIZATION_ATTEMPTS);
+ assert.equal(c.initialized,false);
+ assert.equal(c.snapshot().rateStatus,'failed');
+ v.currentSrc='https://example.test/second.mp4';v.dispatchEvent(new Event('loadedmetadata'));
+ assert.equal(attempts,MAX_INITIALIZATION_ATTEMPTS+1);
+ assert.equal(c.initialized,true);
+ assert.equal(v.playbackRate,2);
+ c.dispose();
+});
+
+test('successful repeated previews do not consume the failure retry budget',()=>{
+ const v=new Video(),c=controller(v,settings(),{isPreview:()=>true});
+ for(let i=0;i<8;i++){
+  v.paused=true;v.dispatchEvent(new Event('pause'));v.value=1;
+  v.paused=false;v.dispatchEvent(new Event('play'));
+  assert.equal(v.playbackRate,2);assert.equal(c.initialized,true);assert.equal(c.initializationAttempts,0);
+ }
+ c.dispose();
+});
+test('a lone transient default failure retries without another media event or popup',async()=>{
+ const v=new Video();let attempts=0,notices=0;
+ const c=controller(v,settings(),{writeRate:rate=>{
+  if(++attempts===1)return {status:'unavailable',actualRate:null,defaultRate:null};
+  v.value=rate;v.defaultPlaybackRate=rate;return {status:'ready',actualRate:rate,defaultRate:rate};
+ },onDefaultApplied:()=>notices++});
+ assert.equal(v.playbackRate,1);
+ await new Promise(resolve=>setTimeout(resolve,150));
+ assert.equal(v.playbackRate,2);assert.equal(attempts,2);assert.equal(notices,1);c.dispose();
+});
+test('a pending default retry is cancelled by a real explicit choice',async()=>{
+ const v=new Video();let attempts=0;
+ const c=controller(v,settings(),{writeRate:rate=>{
+  if(++attempts===1)return {status:'unavailable',actualRate:null,defaultRate:null};
+  v.value=rate;v.defaultPlaybackRate=rate;return {status:'ready',actualRate:rate,defaultRate:rate};
+ }});
+ c.command('set',3);
+ await new Promise(resolve=>setTimeout(resolve,150));
+ assert.equal(v.playbackRate,3);assert.equal(attempts,2);assert.equal(c.initializationTimer,null);c.dispose();
+});
+test('a failed explicit command does not mark the controller initialized',()=>{
+ const v=new Video();v.readyState=0;
+ const c=controller(v,settings({defaultMode:'off'}));
+ assert.equal(c.initialized,false);
+ c.writeRate=()=>({status:'unavailable',actualRate:null,defaultRate:null});
+ c.command('set',3);
+ assert.equal(c.initialized,false);
+ c.writeRate=(rate,options)=>{
+  v.value=rate;if(options.maintainDefault)v.defaultPlaybackRate=rate;
+  return {status:'ready',actualRate:v.playbackRate,defaultRate:v.defaultPlaybackRate};
+ };
+ c.command('set',3);
+ assert.equal(c.initialized,true);
+ assert.equal(v.playbackRate,3);
+ c.dispose();
+});
 test('native speed choices stay authoritative through pause, metadata and quality reloads',async()=>{
  const v=new Video(),remembered=[],c=controller(v,settings(),{onRate:(r,source)=>remembered.push({r,source})});
- native(c,v,1.5);await task();v.dispatchEvent(new Event('play'));v.dispatchEvent(new Event('loadedmetadata'));
+ native(c,v,1.5);assert.equal(c.initialized,true);await task();v.dispatchEvent(new Event('play'));v.dispatchEvent(new Event('loadedmetadata'));
  assert.equal(v.playbackRate,1.5);assert.equal(v.defaultPlaybackRate,1.5);assert.deepEqual(remembered.at(-1),{r:1.5,source:'native'});
  c.update(settings({customRate:3}));assert.equal(v.playbackRate,1.5);c.dispose();
 });
@@ -131,8 +228,21 @@ test('rejected or ignored setters cannot announce or persist success',()=>{
  class Ignores extends Video{get playbackRate(){return this.value;}set playbackRate(_){this.writes++;}}
  for(const Type of [Rejects,Ignores]){
   const v=new Type(),rates=[],notices=[],c=controller(v,settings(),{onRate:r=>rates.push(r),onDefaultApplied:r=>notices.push(r)});
-  assert.equal(c.snapshot().rateStatus,'failed');assert.equal(c.snapshot().rate,1);assert.deepEqual(rates,[]);assert.deepEqual(notices,[]);c.dispose();
+  assert.equal(c.initialized,false);assert.equal(c.snapshot().rateStatus,'failed');assert.equal(c.snapshot().rate,1);
+  assert.deepEqual(rates,[]);assert.deepEqual(notices,[]);
+  const writes=v.writes;c.sync(true,'loadedmetadata');c.sync(true,'loadedmetadata');c.select(false);c.select(true);
+  assert.equal(v.writes,writes,'a definitive refusal should not be retried on every media event');
+  assert.equal(c.snapshot().rateError,Type===Rejects?'Player does not accept this speed':'Player did not apply this speed');
+  c.dispose();
  }
+});
+test('unsupported media keeps its specific failure state and does not retry',()=>{
+ const v=new Video();let attempts=0;
+ const c=controller(v,settings(),{writeRate:()=>{attempts++;return {status:'unsupported',actualRate:null,defaultRate:null};}});
+ assert.equal(c.initialized,false);assert.equal(attempts,1);
+ assert.equal(c.snapshot().rateError,'Live streams do not support playback speed');
+ c.sync(true,'loadedmetadata');c.sync(true,'loadedmetadata');
+ assert.equal(attempts,1);assert.equal(c.snapshot().rateOrigin,'unsupported');c.dispose();
 });
 test('storage-follow initialization does not send the same old value back as a new preference',()=>{
  const v=new Video(),rates=[],c=controller(v,settings({defaultMode:'follow'}),{lastRate:2,onRate:r=>rates.push(r)});

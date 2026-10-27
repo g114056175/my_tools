@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.9/VideoSpeed.zip)** · Chrome／Brave · 預覽版
+**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.10/VideoSpeed.zip)** · Chrome／Brave · 預覽版
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -62,6 +62,7 @@ npm run test:browser
 npm run test:activity
 npm run test:stability
 npm run test:language
+npm run test:autostart
 ```
 
 `src/` 為來源，`extension/` 為可直接載入的成品。瀏覽器測試使用隔離環境與本地固定資料；範圍及尚未驗證項目見 [驗證紀錄](docs/validation.md)。

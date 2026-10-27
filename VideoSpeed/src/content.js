@@ -8,8 +8,9 @@ import {settingsForUrls} from './site-rules.js';
 import {RateClient} from './rate-client.js';
 import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
+import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.9',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.10',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -111,7 +112,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   return result;
  }
  function queueQuality(video,id){
-  const state=states.get(id);if(disposed||!state||!ready||id!==activeId||!state.rate.initialized||!eligible(video)||!mediaCanInitialize(video))return;
+  const state=states.get(id);if(disposed||!state||!ready||id!==activeId||!state.rate.initialized&&!state.rate.initializationAttempts||!eligible(video)||!mediaCanInitialize(video))return;
   if(mediaPreviewInfo(video)){state.quality={status:'preview'};return;}
   if(!settings.enabled||!settings.qualityEnabled){state.quality={status:'disabled'};return;}
   if(video.readyState<1||state.timer||state.attempts>qualityDelays.length||['applied','requested','failed','preserved'].includes(state.quality.status))return;
@@ -158,14 +159,19 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   const video=registry.videos.get(id),state=states.get(id);if(!video||!state||!video.isConnected)throw Error("Video changed; select it again");
   if(!eligible(video))throw Error("Return to the video tab first");
   if(!settings.enabled)throw Error("VideoSpeed is disabled");
+  if(activeId!==id){activeId=id;hasTarget=true;for(const [key,item]of states)item.rate.select(key===id);}
   const result=state.rate.command(command,value);state.initialRateNotice=null;interactions.set(video,Date.now());videoToast.show(video,result.rateStatus==='failed'?translateMessage(resolveLanguage(language),result.rateError):result.rate+'×');report();return result;
  }
- listen(window,'keydown',event=>{
-  if(!event.isTrusted)return;
-  if(!alive()){dispose();return;}
-  const command=shortcutAction(event,settings.shortcuts);if(!ready||!settings.enabled||!command||editingEvent(event)||(!hasTarget&&!snapshot().some(video=>video.visible)))return;
-  event.preventDefault();event.stopImmediatePropagation();send({action:'command',command});
- },true);
+ function handleKey(event){
+  if(!event.isTrusted)return false;
+  if(!alive()){dispose();return false;}
+  const command=shortcutAction(event,settings.shortcuts);if(!ready||!settings.enabled||!command||editingEvent(event))return false;
+  if(!hasTarget&&!snapshot().some(video=>video.visible)){
+   if(isRecent())registry.scan(document,true);
+   if(!snapshot().some(video=>video.visible))return false;
+  }
+  event.preventDefault();event.stopImmediatePropagation();send({action:'command',command});return true;
+ }
  listen(document,'pointerdown',event=>{
   if(picker)return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',videos:snapshot()});}
  },true);
@@ -191,7 +197,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   const timer=setTimeout(()=>{cancelPick();send({action:'cancelPick'});},30000);
   picker={cancel(){clearTimeout(timer);overlay.remove();label.remove();document.removeEventListener('pointermove',move,true);document.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);}};
  }
- const api={dispose,snapshot,update,updateLastRate,updateActivity,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
+ const api={dispose,snapshot,update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
   if(deep&&isRecent()){registry.scan(document,true);registry.titleCache=new WeakMap();}
   const items=snapshot(),id=activeId||items.find(item=>item.visible&&item.playing)?.id||items.find(item=>item.visible)?.id;
   const video=registry.videos.get(id),state=states.get(id);
@@ -210,9 +216,10 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   if(message?.scope!==SCOPE)return;
   try{
    if(message.action==='activeTarget'){
+    if(message.id&&!registry.videos.has(message.id)){report();respond({ok:false,activeId:null,error:'Video changed; select it again'});return;}
     activeId=message.id||null;hasTarget=!!message.hasTarget;rateClient.accept(message);updateLastRate(rateClient.rate);
     for(const [id,state]of states){state.rate.lastRate=lastRate;state.rate.select(id===activeId);if(id!==activeId){clearTimeout(state.timer);state.timer=null;}}
-    if(activeId){const video=registry.videos.get(activeId);queueQuality(video,activeId);showInitialRate(video,activeId);}respond({ok:true});
+    if(activeId){const video=registry.videos.get(activeId);queueQuality(video,activeId);showInitialRate(video,activeId);}respond({ok:true,activeId});
    }
    else if(message.action==='highlight')respond({ok:true,...marker(message.options)});
    else if(message.action==='control')respond({ok:true,result:act(message.id,message.command,message.value,message.language||locale)});
@@ -236,8 +243,8 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
 
 
 function boot(){
- let disposed=false,session=null,settings=normalizeSettings({enabled:false}),lastRate=null,lifeline,configuration=0,pageUrl=window===window.top?location.href:'',contextReady=window===window.top,language='en';
- const activity=new ActivityLease();let activityTimer=null,idleQueued=false,rateRefresh=null;
+ let disposed=false,session=null,settings=normalizeSettings({enabled:false}),lastRate=null,lifeline,configuration=0,pageUrl=window===window.top?location.href:'',contextReady=window===window.top,language='en',localPolicyKnown=false;
+ const activity=new ActivityLease();let activityTimer=null,idleQueued=false,rateRefresh=null,bridgeReady=false;
  const isRecent=()=>activity.isRecent();
  const rateClient=new RateClient(rate=>{lastRate=rate;session?.updateLastRate(rate);});
  let stopStorage=()=>{},stopMessages=()=>{},stopDisconnect=()=>{};
@@ -263,23 +270,61 @@ function boot(){
   const localSettings=settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl);
   const recent=isRecent(),keep=localSettings.enabled&&session?.updateActivity(),enabled=localSettings.enabled&&validRate(lastRate)&&(recent||keep);
   if(!enabled){
+   bridgeReady=false;
    const previous=session;session=null;previous?.dispose();
    document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:false})}));
    if(previous)send({action:'report',videos:[]});
    return;
   }
+  bridgeReady=false;
   document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:true,exploring:recent,qualityEnabled:localSettings.qualityEnabled})}));
+  if(!bridgeReady){bridgeStartup.ensure({force:true,reason:'missing-page-bridge'});return;}
   if(session)session.update(localSettings,lastRate);
   else session=startSession(localSettings,lastRate,send,messenger.alive,rateClient,{isRecent,onIdle,language});
  }
- const initial=send({action:'settings'}).then(messenger.guard(response=>{if(response?.ok){language=resolveLanguage(response.language);session?.updateLanguage(language);rateClient.accept(response);if(!acceptActivity(response.activity))return;if(!contextReady||configuration===0)pageUrl=response.pageUrl||pageUrl;contextReady=true;configure(configuration===0?response.settings:settings);}}));
+ function acceptConfiguration(response){
+  if(!response?.settings||!validRate(response.lastRate)||!Number.isSafeInteger(response.rateRevision)||response.rateRevision<0||!Number.isSafeInteger(response.activity?.revision)||response.activity.revision<0||typeof response.activity.focused!=='boolean'||!Number.isSafeInteger(response.activity.until)||response.activity.until<0)return false;
+  language=resolveLanguage(response.language);session?.updateLanguage(language);rateClient.accept(response);
+  const changed=acceptActivity(response.activity);
+  if(!contextReady||configuration===0)pageUrl=response.pageUrl||pageUrl;contextReady=true;localPolicyKnown=true;
+  if(configuration===0)configure(response.settings);else if(changed)reconcile();
+  return true;
+ }
+ const startup=new StartupHandshake({request:()=>send({action:'settings'}),accept:acceptConfiguration,alive:messenger.alive,
+  mayRetry:()=>!disposed&&(isRecent()||document.visibilityState!=='hidden'),onError:error=>console.error('[VideoSpeed] startup failed',error)});
+ const bridgeStartup=new StartupHandshake({request:()=>send({action:'repairBridge'}),accept:()=>{reconcile();return bridgeReady;},alive:messenger.alive,
+  mayRetry:()=>!disposed&&(isRecent()||!!session),delays:[200,800],onError:error=>console.error('[VideoSpeed] page bridge failed',error)});
+ const bridgeAcknowledged=event=>{
+  let value;try{value=JSON.parse(event.detail);}catch{return;}
+  if(value?.owner===rateClient.sessionId&&value.version===VERSION&&value.enabled===true){bridgeReady=true;bridgeStartup.acknowledge();}
+ };
+ document.addEventListener('video-control:bridge-ready-v1',bridgeAcknowledged,true);
+ const wake=()=>{
+  if(disposed||session||document.visibilityState==='hidden'&&!isRecent())return;
+  if(startup.ready&&!settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)return;
+  startup.ensure({force:startup.ready,reason:'page-event'});
+ };
+ for(const type of ['focus','pageshow'])window.addEventListener(type,wake,true);
+ for(const type of ['visibilitychange','loadedmetadata','playing'])document.addEventListener(type,wake,true);
+ const wakeKey=event=>{
+  if(disposed||!event.isTrusted||editingEvent(event))return;
+  if(session){session.handleKey(event);return;}
+  const command=shortcutAction(event,settings.shortcuts);if(!command)return;
+  const enabled=localPolicyKnown&&contextReady&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled;
+  if(localPolicyKnown&&contextReady&&!enabled)return;
+  if(enabled){event.preventDefault();event.stopImmediatePropagation();}
+  startup.ensure({force:true,reason:'shortcut'}).then(async ok=>{if(!session&&bridgeStartup.task)await bridgeStartup.task;if(enabled&&ok&&session&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)send({action:'command',command});});
+ };
+ window.addEventListener('keydown',wakeKey,true);
+ Promise.resolve().then(()=>messenger.call(chrome.storage.local,'get','settings')).then(messenger.guard(data=>{if(configuration===0&&data){settings=normalizeSettings(data.settings);localPolicyKnown=true;}})).catch(()=>{});
+ const initial=startup.ensure();
  const storageChanged=(changes,area)=>{
   if(area!=='local'||disposed)return;
   if(changes.popupLanguage){language=resolveLanguage(changes.popupLanguage.newValue);session?.updateLanguage(language);}
   if(rateClient.acceptStorageChanges(changes,area)==='refresh'&&!rateRefresh){
    rateRefresh=send({action:'settings'}).then(messenger.guard(response=>{if(response?.ok){rateClient.accept(response);if(acceptActivity(response.activity))reconcile();}})).finally(()=>{rateRefresh=null;});
   }
-  if(changes.settings)configure(changes.settings.newValue);
+  if(changes.settings){localPolicyKnown=true;configure(changes.settings.newValue);}
  };
  const receive=(message,sender,respond)=>{
   if(message?.scope!==SCOPE)return;
@@ -288,25 +333,30 @@ function boot(){
    language=resolveLanguage(message.language);session?.updateLanguage(language);
    rateClient.accept(message);
    if(!acceptActivity(message.activity)){respond({ok:true,version:VERSION,enabled:!!session});return;}
-   pageUrl=message.pageUrl||pageUrl;contextReady=true;
+   pageUrl=message.pageUrl||pageUrl;contextReady=true;localPolicyKnown=true;
    if(message.action==='power'||configuration===0)configure(message.settings);else reconcile();
+   if(validRate(lastRate)&&configuration>0)startup.acknowledge();
    respond({ok:true,version:VERSION,enabled:!!session});return;
   }
   if(session)return session.receive(message,sender,respond);
-  respond(message.action==='control'||message.action==='pick'?{ok:false,error:"VideoSpeed is disabled"}:{ok:true,videos:[],highlighted:false});
+  respond(message.action==='control'||message.action==='pick'||message.action==='activeTarget'?{ok:false,error:"Video controls are not ready"}:{ok:true,videos:[],highlighted:false});
  };
  if(disposed)return;
  stopStorage=messenger.guard(()=>messenger.listen(chrome.storage.onChanged,storageChanged))()||(()=>{});
  if(disposed){stopStorage();return;}
  stopMessages=messenger.guard(()=>messenger.listen(chrome.runtime.onMessage,receive))()||(()=>{});
  if(disposed){stopStorage();stopMessages();return;}
- const api={version:VERSION,alive:()=>!disposed&&messenger.alive(),enabled:()=>!!session,dispose,snapshot:()=>session?.snapshot()||[],diagnostics:()=>session?.diagnostics()||[],refresh:async()=>{await initial;return session?session.refresh():[];}};
+ const api={version:VERSION,alive:()=>!disposed&&messenger.alive(),enabled:()=>!!session,dispose,startup:()=>({...startup.snapshot(),bridge:bridgeStartup.snapshot()}),snapshot:()=>session?.snapshot()||[],diagnostics:()=>session?.diagnostics()||[],refresh:async()=>{await initial;if(!session)await startup.ensure({force:true,reason:'refresh'});if(!session)await bridgeStartup.task;return session?session.refresh():[];}};
  globalThis[API]=api;
  lifeline=messenger.guard(()=>messenger.call(chrome.runtime,'connect',{name:'video-control-content'}))();
  if(lifeline&&!disposed)stopDisconnect=messenger.guard(()=>messenger.listen(lifeline.onDisconnect,()=>{if(!messenger.alive())messenger.invalidate();else lifeline=null;}))()||(()=>{});
  if(disposed){stopStorage();stopMessages();stopDisconnect();messenger.cleanup(()=>lifeline?.disconnect());}
  function dispose(){
   if(disposed)return;disposed=true;clearTimeout(activityTimer);session?.dispose();session=null;
+  startup.dispose();bridgeStartup.dispose();document.removeEventListener('video-control:bridge-ready-v1',bridgeAcknowledged,true);
+  for(const type of ['focus','pageshow'])window.removeEventListener(type,wake,true);
+  for(const type of ['visibilitychange','loadedmetadata','playing'])document.removeEventListener(type,wake,true);
+  window.removeEventListener('keydown',wakeKey,true);
   document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,release:true,enabled:false})}));
   stopStorage();stopMessages();stopDisconnect();messenger.cleanup(()=>lifeline?.disconnect());
   if(globalThis[API]?.dispose===dispose)delete globalThis[API];

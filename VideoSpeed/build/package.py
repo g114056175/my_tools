@@ -12,7 +12,7 @@ manifest = json.loads((EXTENSION / 'manifest.json').read_text(encoding='utf-8'))
 package = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
 assert manifest['name'] == manifest['action']['default_title'] == 'VideoSpeed'
 assert manifest['version'] == package['version']
-for relative in ['src/content.js', 'src/page-bridge.js', 'extension/background.js']:
+for relative in ['src/content.js', 'src/page-bridge.js', 'src/background.js']:
     match = re.search(r"\b(?:VERSION|version)=['\"]([\d.]+)['\"]", (ROOT / relative).read_text(encoding='utf-8'))
     assert match and match[1] == manifest['version'], relative
 
@@ -27,10 +27,32 @@ allowed = {
 }
 assert {path.relative_to(EXTENSION).as_posix() for path in runtime} == allowed
 assert not any(path.is_symlink() for path in runtime)
-for script in manifest['content_scripts']:
-    assert all((EXTENSION / filename).is_file() for filename in script['js'])
-assert (EXTENSION / manifest['background']['service_worker']).is_file()
-assert (EXTENSION / manifest['action']['default_popup']).is_file()
+
+background = manifest['background']
+assert 'type' not in background, 'Background service worker must use the classic-script default'
+worker_output = EXTENSION / background['service_worker']
+worker_source = worker_output.read_text(encoding='utf-8')
+assert not re.search(r'(?m)^\s*(?:import\b|export\b)|\bimport\s*\(', worker_source), \
+    'Background service worker output must be bundled without module imports or exports'
+
+referenced_files = [background['service_worker'], manifest['action']['default_popup']]
+for icon_map in [manifest.get('icons', {}), manifest.get('action', {}).get('default_icon', {})]:
+    if isinstance(icon_map, str):
+        referenced_files.append(icon_map)
+    elif isinstance(icon_map, dict):
+        referenced_files.extend(icon_map.values())
+for script in manifest.get('content_scripts', []):
+    for kind in ['js', 'css']:
+        referenced_files.extend(script.get(kind, []))
+for key in ['options_page', 'devtools_page']:
+    if manifest.get(key):
+        referenced_files.append(manifest[key])
+for key in ['options_ui', 'side_panel']:
+    if manifest.get(key, {}).get('page' if key == 'options_ui' else 'default_path'):
+        referenced_files.append(manifest[key]['page' if key == 'options_ui' else 'default_path'])
+referenced_files.extend(manifest.get('chrome_url_overrides', {}).values())
+assert all((EXTENSION / filename).is_file() for filename in referenced_files), \
+    f'Manifest references a missing runtime file: {[name for name in referenced_files if not (EXTENSION / name).is_file()]}'
 
 
 def archive(filename, entries):

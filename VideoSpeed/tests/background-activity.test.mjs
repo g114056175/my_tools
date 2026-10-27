@@ -38,6 +38,9 @@ function createChromeFixture({
   activeByWindow = { 1: 10 },
   sessionSnapshot = { version: 1, focusedWindowId: 1, focusedTabId: 10, revision: 5, untilByTab: {}, activeByWindow },
   delaySessionRead = false,
+  localGetFailures = 0,
+  activeQueryFailures = {},
+  activeTargetResponses = {},
   receivers = [10],
 } = {}) {
   const events = Object.fromEntries([
@@ -73,6 +76,7 @@ function createChromeFixture({
   const receiversSet = new Set(receivers);
   const activeQueries = [];
   const executePlans = [];
+  const activeTargetReplies = new Map(Object.entries(activeTargetResponses).map(([tabId, replies]) => [Number(tabId), [...replies]]));
   const state = {
     focusedWindowId,
     localData,
@@ -82,6 +86,11 @@ function createChromeFixture({
     messages: [],
     executeCalls: [],
     tabQueries: [],
+    runtimeActions: [],
+    popupOpens: 0,
+    localGetCalls: 0,
+    localGetFailures,
+    activeQueryFailures: new Map(Object.entries(activeQueryFailures).map(([windowId, count]) => [Number(windowId), count])),
   };
   const pick = (data, keys) => {
     const requested = Array.isArray(keys) ? keys : [keys];
@@ -99,7 +108,14 @@ function createChromeFixture({
     storage: {
       onChanged: events.storageChanged,
       local: {
-        async get(keys) { return pick(localData, keys); },
+        async get(keys) {
+          state.localGetCalls++;
+          if (state.localGetFailures > 0) {
+            state.localGetFailures--;
+            throw new Error('Injected storage.local.get failure');
+          }
+          return pick(localData, keys);
+        },
         async set(values) { Object.assign(localData, values); },
         onChanged: events.storageChanged,
       },
@@ -136,6 +152,11 @@ function createChromeFixture({
         if (query?.active && Number.isInteger(query.windowId)) {
           const planIndex = activeQueries.findIndex(plan => plan.windowId === query.windowId);
           if (planIndex >= 0) return activeQueries.splice(planIndex, 1)[0].deferred.promise;
+          const failures = state.activeQueryFailures.get(query.windowId) || 0;
+          if (failures > 0) {
+            state.activeQueryFailures.set(query.windowId, failures - 1);
+            throw new Error('Injected active-tab query failure');
+          }
           return activeTabs(query.windowId).map(tab => ({ ...tab }));
         }
         if (query?.url) return [...tabs.values()].filter(tab => /^https?:/.test(tab.url || '')).map(tab => ({ ...tab }));
@@ -148,8 +169,17 @@ function createChromeFixture({
       },
       async sendMessage(tabId, message) {
         const delivered = receiversSet.has(tabId);
-        state.messages.push({ tabId, message, delivered });
+        state.messages.push({ tabId, message, delivered, at: Date.now() });
         if (!delivered) throw new Error('Could not establish connection. Receiving end does not exist.');
+        if (message?.action === 'activeTarget') {
+          const planned = activeTargetReplies.get(tabId)?.shift();
+          if (planned === 'throw') throw new Error('Injected activeTarget transport failure');
+          if (planned === 'missing') return { ok: true, version };
+          if (planned === 'wrong') return { ok: true, version, activeId: message.id === null ? 'unexpected-id' : `wrong-${message.id}` };
+          if (typeof planned === 'function') return planned({ tabId, message, version });
+          if (planned && typeof planned === 'object') return planned;
+          return { ok: true, version, activeId: message.id };
+        }
         return { ok: true, version };
       },
     },
@@ -159,7 +189,7 @@ function createChromeFixture({
       onCommitted: events.navigationCommitted,
       async getAllFrames() { return []; },
     },
-    action: { async setTitle() {}, async setIcon() {}, async openPopup() {} },
+    action: { async setTitle() {}, async setIcon() {}, async openPopup() { state.popupOpens++; } },
     scripting: {
       async executeScript(details) {
         state.executeCalls.push(details);
@@ -185,6 +215,7 @@ function createChromeFixture({
       executePlans.push(value);
       return value;
     },
+    setActiveTargetResponses(tabId, replies) { activeTargetReplies.set(tabId, [...replies]); },
     setReceiver(tabId, enabled = true) {
       if (enabled) receiversSet.add(tabId);
       else receiversSet.delete(tabId);
@@ -208,9 +239,10 @@ function createChromeFixture({
     },
     async importBackground() {
       importId++;
-      await import(`../extension/background.js?test=background-activity-${importId}`);
+      await import(`../src/background.js?test=background-activity-${importId}`);
     },
     async sendRuntime(message, sender) {
+      state.runtimeActions.push(message.action);
       const listener = events.runtimeMessage.listeners[0];
       assert.ok(listener, 'background message listener was not registered');
       return new Promise(resolve => {
@@ -356,4 +388,33 @@ test('cold startup seeds the actual focused window before replaying buffered sam
   const tab20State = await fixture.sendRuntime({ action: 'settings' }, contentSender(20));
   assert.equal(tab20State.activity.focused, false);
   assert.ok(tab20State.activity.until > Date.now(), 'buffered tab 20 activation was not replayed into a grace deadline');
+});
+
+test('selection delivery requires a real acknowledgement and retries without popup', {timeout:10000},async()=>{
+ const fixture=createChromeFixture({activeTargetResponses:{10:['throw','missing']}});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ const sender=contentSender(10),videos=[{id:'media-a',connected:true,visible:true,playing:true,rate:1}];
+ await fixture.sendRuntime({action:'report',videos},sender);
+ await waitFor(()=>fixture.state.messages.filter(item=>item.message.action==='activeTarget'&&item.message.id==='media-a').length>=3,'selection retry acknowledgement');
+ await new Promise(resolve=>setTimeout(resolve,20));
+ const before=fixture.state.messages.filter(item=>item.message.action==='activeTarget'&&item.message.id==='media-a').length;
+ await fixture.sendRuntime({action:'report',videos},sender);
+ await new Promise(resolve=>setTimeout(resolve,40));
+ assert.equal(fixture.state.messages.filter(item=>item.message.action==='activeTarget'&&item.message.id==='media-a').length,before);
+ assert.equal(fixture.state.popupOpens,0);assert.ok(fixture.state.runtimeActions.every(action=>action==='report'));
+});
+
+test('a rejected initial settings read does not poison subsequent content startup', {timeout:10000},async()=>{
+ const fixture=createChromeFixture({localGetFailures:1});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ const result=await fixture.sendRuntime({action:'settings'},contentSender(10));
+ assert.equal(result.ok,true);assert.equal(result.settings.defaultMode,'custom');assert.equal(result.lastRate,2);
+ assert.ok(fixture.state.localGetCalls>=2);assert.equal(fixture.state.popupOpens,0);
+});
+
+test('content startup reconciles focus after an initial active-tab query failure', {timeout:10000},async()=>{
+ const fixture=createChromeFixture({activeQueryFailures:{1:1},sessionSnapshot:undefined});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ const result=await fixture.sendRuntime({action:'settings'},contentSender(10));
+ assert.equal(result.ok,true);assert.equal(result.activity.focused,true);assert.equal(fixture.state.popupOpens,0);
 });

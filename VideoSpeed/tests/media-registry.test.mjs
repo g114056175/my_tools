@@ -4,7 +4,7 @@ import {MediaRegistry} from '../src/media-registry.js';
 
 class FakeMutationObserver{
  constructor(callback,observers){this.callback=callback;this.observers=observers;this.target=null;this.active=true;observers.add(this);}
- observe(target){this.target=target;}
+ observe(target){this.target=target;this.active=true;this.observers.add(this);}
  disconnect(){this.active=false;this.observers.delete(this);}
 }
 
@@ -151,4 +151,50 @@ test('disposal clears only its own registry identity and preserves first-load hi
  const current=new MediaRegistry(document,()=>{},()=>{},{owner:'current'});
  old.dispose();assert.equal(video.getAttribute('data-video-control-id'),'v1');assert.equal(video.getAttribute('data-video-control-registry'),'current');
  current.dispose();assert.equal(video.getAttribute('data-video-control-id'),null);
+});
+
+test('pausing clears queued work, ignores unknown media events, and resumes discovery without duplicates',t=>{
+ const {document,registry,observers,added,changes,notify}=fixture(t);
+ const known=document.createElement('video');document.append(known);registry.add(known);
+ known.setAttribute('data-video-control-initialized','media-known');
+ const pendingNode=document.createElement('section');document.append(pendingNode);
+ registry.queueMutations(document,[{addedNodes:[pendingNode]}]);
+ assert.ok(registry.walkQueue.length>0);assert.ok(registry.mutationQueue.length>0);
+ const documentObserver=registry.observers.get(document);
+ registry.setExploring(false);
+ assert.equal(registry.walkQueue.length,0);assert.equal(registry.walkDeferred.size,0);
+ assert.equal(registry.mutationQueue.length,0);assert.equal(registry.pendingMutationNodes,0);assert.equal(registry.pendingMutationRecords,0);
+ assert.equal(registry.walkTimer,null);assert.equal(documentObserver.active,false);assert.equal(observers.has(documentObserver),false);
+
+ const unknown=document.createElement('video');
+ document.dispatch('play',{type:'play',composedPath:()=>[unknown]});
+ document.dispatch('loadedmetadata',{type:'loadedmetadata',composedPath:()=>[unknown]});
+ assert.equal(added.length,1);assert.equal(changes.length,0);
+ document.dispatch('play',{type:'play',composedPath:()=>[known]});
+ document.dispatch('loadedmetadata',{type:'loadedmetadata',composedPath:()=>[known]});
+ assert.equal(changes.length,2,'known media events still notify while exploration is paused');
+
+ const lightVideo=document.createElement('video'),host=document.createElement('x-player'),shadow=host.attachShadow(),shadowVideo=document.createElement('video');
+ shadow.append(shadowVideo);document.append(lightVideo,host);
+ registry.setExploring(true);
+ assert.equal(documentObserver.active,true);assert.equal(observers.has(documentObserver),true,'a disconnected observer can observe again');
+ drain(registry);
+ assert.equal(added.length,3);
+ assert.equal(added.filter(item=>item.video===known).length,1);
+ assert.equal(added.filter(item=>item.video===lightVideo).length,1);
+ assert.equal(added.filter(item=>item.video===shadowVideo).length,1);
+ assert.equal(registry.videos.size,3);assert.equal(registry.observers.has(shadow),true);
+ assert.equal(known.getAttribute('data-video-control-initialized'),'media-known');
+ notify(document,[lightVideo,host]);drain(registry);
+ assert.equal(added.length,3,'resumed mutation delivery does not duplicate discovered media');
+ registry.dispose();assert.equal(known.getAttribute('data-video-control-initialized'),'media-known');
+});
+
+test('disposed registries cannot resume exploration',t=>{
+ const {document,registry,observers,added}=fixture(t);
+ registry.setExploring(false);registry.dispose();
+ registry.setExploring(true);
+ const later=document.createElement('video');document.append(later);
+ document.dispatch('play',{type:'play',composedPath:()=>[later]});
+ assert.equal(registry.exploring,false);assert.equal(added.length,0);assert.equal(observers.size,0);
 });

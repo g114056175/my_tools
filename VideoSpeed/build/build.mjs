@@ -15,6 +15,7 @@ await mkdir(root+'extension',{recursive:true});
 await build({absWorkingDir:root,tsconfigRaw:{},entryPoints:['./src/content.js','./src/page-bridge.js'],outdir:'extension',bundle:true,format:'iife',platform:'browser',target:'chrome120',minify:true,legalComments:'eof'});
 await copyFile(root+'src/settings.js',root+'extension/settings.js');
 await copyFile(root+'src/rate-memory.js',root+'extension/rate-memory.js');
+await copyFile(root+'src/tab-activity.js',root+'extension/tab-activity.js');
 await copyFile(root+'src/quality-options.js',root+'extension/quality-options.js');
 await copyFile(root+'src/site-rules.js',root+'extension/site-rules.js');
 await build({absWorkingDir:root,entryPoints:['./src/site-domain.js'],outdir:'extension',bundle:true,format:'esm',platform:'browser',target:'chrome120',minify:true,legalComments:'eof'});

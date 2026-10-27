@@ -22,7 +22,7 @@ const EN={
  '速度刻度':'Speed ticks','請按按鍵':'Press a key','未設定':'Unbound','設定{action}快捷鍵':'Set shortcut: {action}','清除{action}快捷鍵':'Clear shortcut: {action}',
  '網域或影片網址':'Domain or video URL','新增停用網域或影片網址':'Add a blocked domain or video URL','新增停用規則':'Add block rule','移除 {rule}':'Remove {rule}',
  '最佳':'Best','{height}p（自動）':'{height}p (Auto)','最佳（{height}p）':'Best ({height}p)',
- '無法連線':'Could not connect','請先開啟有影片的網頁':'Open a page with a video first','影片已切換，請重新選取':'Video changed; select it again',
+ '無法連線':'Could not connect','請先開啟有影片的網頁':'Open a page with a video first','影片已切換，請重新選取':'Video changed; select it again','請先切回影片分頁':'Return to the video tab first',
  'VideoSpeed 已關閉':'VideoSpeed is disabled','影片未回應，請重新整理網頁':'Video did not respond; reload the page','影片控制未能連線':'Could not connect to the video',
  '播放器未套用此速度':'Player did not apply this speed','播放器不接受此速度':'Player does not accept this speed','無效的播放速度':'Invalid playback speed',
  '無法讀取播放速度':'Playback speed unavailable','網站持續改寫播放速度':'The site keeps overriding playback speed',

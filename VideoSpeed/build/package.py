@@ -20,7 +20,7 @@ runtime = sorted(path for path in EXTENSION.rglob('*') if path.is_file())
 allowed = {
     'manifest.json', 'background.js', 'content.js', 'page-bridge.js',
     'popup.html', 'popup.js', 'popup.css', 'settings.js', 'rate-memory.js',
-    'site-domain.js', 'site-rules.js', 'quality-options.js', 'i18n.js',
+    'site-domain.js', 'site-rules.js', 'quality-options.js', 'i18n.js', 'tab-activity.js',
     'LICENSE', 'THIRD_PARTY_LICENSES.txt',
     *('icons/' + name + '.png' for name in ['16', '32', '48', '128', 'off-16', 'off-32', 'off-48', 'off-128']),
     '_locales/en/messages.json', '_locales/zh_TW/messages.json',

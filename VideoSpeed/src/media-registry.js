@@ -74,14 +74,14 @@ export function mediaCanInitialize(video,target=globalThis){
  }catch{return false;}
 }
 export class MediaRegistry{
- constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random())}={}){
-  Object.assign(this,{document,onAdd,onChange,owner,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
+ constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true}={}){
+  Object.assign(this,{document,onAdd,onChange,owner,exploring,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
   const seenEvents=new WeakSet();
-  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video){this.add(video);if(event.type==='play')this.notePlay(video);this.onChange();}};
+  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video))){this.add(video);if(event.type==='play')this.notePlay(video);this.onChange();}};
   this.scan(document);this.enqueue(document);
  }
  add(video){
-  if(this.disposed||!video.isConnected||this.ids.has(video))return;
+  if(this.disposed||!this.exploring||!video.isConnected||this.ids.has(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
   const id='v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }
@@ -92,16 +92,28 @@ export class MediaRegistry{
   if(this.disposed||root.host?.id?.startsWith('video-control-')||this.observers.has(root)||this.observers.size>=64)return;
   for(const event of ['play','loadedmetadata','loadstart'])root.addEventListener(event,this.discover,true);
   const observer=new MutationObserver(records=>{
-   if(this.disposed)return;
+   if(this.disposed||!this.exploring)return;
    const tooManyRecords=records.length>MAX_MUTATION_RECORDS;
    const changed=(tooManyRecords||records.some(record=>record.removedNodes?.length))?this.prune():false;
    if(tooManyRecords)this.deferScope(root);else this.queueMutations(root,records);
    if(changed)this.onChange();
   });
-  observer.observe(root,{childList:true,subtree:true});this.observers.set(root,observer);
+  if(this.exploring)observer.observe(root,{childList:true,subtree:true});this.observers.set(root,observer);
+ }
+ setExploring(enabled){
+  enabled=!!enabled;if(this.disposed||this.exploring===enabled)return;
+  this.exploring=enabled;
+  if(!enabled){
+   clearTimeout(this.walkTimer);this.walkTimer=null;this.walkQueue=[];this.walkDeferred.clear();this.mutationQueue=[];this.pendingMutationNodes=0;this.pendingMutationRecords=0;
+   for(const observer of this.observers.values())observer.disconnect();
+   return;
+  }
+  this.prune();this.walkedRoots=new WeakSet();
+  for(const [root,observer]of this.observers)observer.observe(root,{childList:true,subtree:true});
+  this.scan(this.document);this.enqueue(this.document,{force:true});
  }
  queueMutations(root,records){
-  if(this.disposed||!records?.length)return false;
+  if(this.disposed||!this.exploring||!records?.length)return false;
   if(records.length>MAX_MUTATION_RECORDS||this.mutationQueue.length>=MAX_MUTATION_BATCHES||this.pendingMutationRecords+records.length>MAX_MUTATION_RECORDS){this.deferScope(root);return false;}
   let added=0;
   for(const record of records){
@@ -155,7 +167,7 @@ export class MediaRegistry{
   return scope;
  }
  deferScope(root,{session=null}={}){
-  if(this.disposed)return;
+  if(this.disposed||!this.exploring)return;
   const scope=this.rootScope(root),existing=this.walkDeferred.get(scope);
   if(existing){if(session)existing.session=session;return;}
   const active=this.walkQueue.find(job=>job.root===scope);
@@ -163,7 +175,7 @@ export class MediaRegistry{
   this.walkDeferred.set(scope,{force:true,session});this.scheduleWalk();
  }
  enqueue(root,{force=false,session=null}={}){
-  if(this.disposed||!root||root.id?.startsWith('video-control-')||root.host?.id?.startsWith('video-control-'))return false;
+  if(this.disposed||!this.exploring||!root||root.id?.startsWith('video-control-')||root.host?.id?.startsWith('video-control-'))return false;
   if(!force&&!session&&this.walkedRoots.has(root))return false;
   const deferred=this.walkDeferred.get(root);if(deferred){if(session)deferred.session=session;return true;}
   for(const job of this.walkQueue){
@@ -181,14 +193,14 @@ export class MediaRegistry{
   }
   this.walkQueue.push({root,walker:null,rescan:false,session});this.scheduleWalk();return true;
  }
- scheduleWalk(){if(!this.walkTimer&&!this.disposed)this.walkTimer=setTimeout(()=>this.walkBatch(),120);}
+ scheduleWalk(){if(!this.walkTimer&&!this.disposed&&this.exploring)this.walkTimer=setTimeout(()=>this.walkBatch(),120);}
  promoteDeferred(){
   while(!this.disposed&&this.walkQueue.length<24&&this.walkDeferred.size){
    const [root,options]=this.walkDeferred.entries().next().value;this.walkDeferred.delete(root);this.enqueue(root,options);
   }
  }
  runWalk(maxNodes,maxMs,notify=true){
-  if(this.disposed)return 0;
+  if(this.disposed||!this.exploring)return 0;
   this.promoteDeferred();
   const deadline=performance.now()+maxMs,before=this.serial;let count=0,steps=0;
   while((this.walkQueue.length||this.mutationQueue.length)&&count<maxNodes&&steps<maxNodes&&performance.now()<deadline){
@@ -217,7 +229,7 @@ export class MediaRegistry{
   if(this.walkQueue.length||this.walkDeferred.size||this.mutationQueue.length)this.scheduleWalk();
  }
  scan(root,deep=false){
-  if(!root||this.disposed||root.host?.id?.startsWith('video-control-'))return false;
+  if(!root||this.disposed||!this.exploring||root.host?.id?.startsWith('video-control-'))return false;
   this.prune();const before=this.serial;
   if(root.nodeType===9||root.nodeType===11)this.observe(root);
   if(root.tagName==='VIDEO')this.add(root);

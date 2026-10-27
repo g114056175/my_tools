@@ -8,6 +8,16 @@ export class RateClient{
   if(state.rateRevision===this.revision&&this.rate!==null&&Number(state.lastRate)!==this.rate)return false;
   this.rate=Number(state.lastRate);this.revision=state.rateRevision;this.error='';this.onChange(this.rate);return true;
  }
+ acceptStorageChanges(changes,area='local'){
+  if(area!=='local')return 'ignored';
+  const changed=changes||{},hasRate=Object.hasOwn(changed,'lastRate'),hasRevision=Object.hasOwn(changed,'lastRateRevision');
+  if(!hasRate&&!hasRevision)return 'ignored';
+  if(!hasRate||!hasRevision)return 'refresh';
+  const rate=changes.lastRate?.newValue,rateRevision=changes.lastRateRevision?.newValue;
+  if(typeof rate!=='number'||!Number.isFinite(rate)||!validRate(rate)||!revision(rateRevision))return 'refresh';
+  this.accept({lastRate:rate,rateRevision});
+  return 'handled';
+ }
  begin(rate){
   if(!validRate(rate))throw Error('無效的播放速度');
   const token=++this.serial;this.pending={token,rate:Number(rate)};this.rate=Number(rate);this.error='';this.onChange(this.rate);return token;

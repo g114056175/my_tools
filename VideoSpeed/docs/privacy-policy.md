@@ -6,6 +6,8 @@ VideoSpeed 在瀏覽器本機讀取目前頁面與 frame 網址、影片標題�
 
 本機儲存保存開關、播放與畫質偏好、刻度、快捷鍵、除外規則及類型、最後使用倍速、外觀與語言。關閉功能時，session storage 可暫存當前影片摘要；分頁關閉後移除，瀏覽器 session 結束時清除。
 
+為限制背景探索，session storage 另保存聚焦視窗／分頁 ID 與離開分頁後的短暫期限；不保存瀏覽歷程，瀏覽器 session 結束時清除。
+
 為辨認載入重設與使用者調速，頁面記憶體保留每部目標最近 32 筆速度診斷及最多 4 次程式改速堆疊；堆疊可能包含網站程式檔網址。不記錄一般文字輸入，診斷不持久保存或自動上傳。
 
 擴充功能不使用分析服務，不將頁面、影片、偏好或診斷傳送給開發者或第三方。網站自身的網路活動由該網站負責。
@@ -17,6 +19,8 @@ VideoSpeed 在瀏覽器本機讀取目前頁面與 frame 網址、影片標題�
 VideoSpeed processes page and frame URLs, video titles, source identifiers, playback state, speed, and supported-player quality information locally in the browser to select videos and apply preferences and site exclusions. Media source URLs are used only for in-memory identity checks and are not saved as preferences.
 
 Local storage holds preferences, ticks, shortcuts, exclusion rules and modes, the last confirmed speed, appearance, and language. Session storage may temporarily hold the current video summary while the extension is disabled; the summary is removed when its tab closes or the browser session ends.
+
+To limit background discovery, session storage also holds focused window/tab IDs and a short grace deadline after a tab loses focus. This does not store browsing history and is cleared when the browser session ends.
 
 To distinguish load resets from user speed changes, each target keeps up to 32 recent rate diagnostics and four page-override call stacks in page memory. Stacks may contain website script URLs. Ordinary text input is not recorded. Diagnostics are not stored persistently or uploaded automatically.
 

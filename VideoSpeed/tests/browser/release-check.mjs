@@ -24,14 +24,14 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '../..');
 const extensionDirectory = path.join(projectRoot, 'extension');
 const fixturePath = path.join(projectRoot, 'tests', 'fixtures', 'tiny.webm');
-const reportDirectory = path.join(projectRoot, 'work', 'qa-067-exclusion');
+const reportDirectory = path.join(projectRoot, 'work', 'qa-069-exclusion');
 const reportPath = path.join(reportDirectory, 'report.md');
 const resultsPath = path.join(reportDirectory, 'results.json');
 const screenshotDirectory = path.join(reportDirectory, 'screenshots');
 const extensionRuntimeFiles = [
   'manifest.json', 'background.js', 'content.js', 'page-bridge.js',
   'popup.html', 'popup.js', 'popup.css', 'settings.js', 'site-rules.js', 'site-domain.js',
-  'i18n.js', 'rate-memory.js', 'quality-options.js',
+  'i18n.js', 'rate-memory.js', 'quality-options.js', 'tab-activity.js',
   'icons/16.png', 'icons/32.png', 'icons/48.png', 'icons/128.png',
 ];
 const checks = [];
@@ -656,7 +656,7 @@ try {
   const manifest = JSON.parse(await readFile(path.join(extensionDirectory, 'manifest.json'), 'utf8'));
   productVersion = manifest.version;
   assert.equal(manifest.name, 'VideoSpeed');
-  assert.equal(manifest.version, '0.6.6');
+  assert.equal(manifest.version, JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8')).version);
   const hash = createHash('sha256');
   for (const filename of extensionRuntimeFiles) {
     const bytes = await readFile(path.join(extensionDirectory, filename));

@@ -1,5 +1,7 @@
 export const TAB_ACTIVITY_GRACE_MS=10_000;
-export const TAB_LOADING_GRACE_MS=60_000;
+// Upper bound for finishing already discovered media (and a pending initial
+// document response). This does not authorize 30 seconds of DOM discovery.
+export const TAB_LOADING_GRACE_MS=30_000;
 
 const validId=value=>Number.isInteger(value)&&value>=0;
 
@@ -123,6 +125,6 @@ export class TabActivity{
  blurFocusedTab(now,affected){
   const tabId=this.focusedTabId;
   if(tabId===null)return;
-  this.focusedTabId=null;this.untilByTab.set(tabId,now+this.graceMs);affected.push(tabId);
+  this.focusedTabId=null;this.untilByTab.set(tabId,now+this.graceMs);this.loadingUntilByTab.set(tabId,now+this.loadingMs);affected.push(tabId);
  }
 }

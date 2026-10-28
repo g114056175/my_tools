@@ -4,7 +4,7 @@ import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS,TAB_LOADING_GRACE_MS} from './tab-activity.js';
 import {consumeRuntimeError} from './runtime.js';
-const SCOPE='video-control',VERSION='0.6.15',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.17',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
@@ -137,11 +137,10 @@ chrome.tabs.onCreated?.addListener(tab=>{const at=Date.now();if(tab.active){queu
 chrome.windows.onFocusChanged.addListener(windowId=>queueActivityEvent({type:'focus',windowId,at:Date.now()}));
 chrome.windows.onRemoved?.addListener(windowId=>{const at=Date.now();activityReady.then(()=>{for(const tabId of tabActivity.forgetWindow(windowId,at))notifyActivity(tabId);saveActivity().catch(()=>{});}).catch(()=>{});});
 async function activityFor(tabId){await activityReady;return tabActivity.activity(tabId);}
-function hasPlayingMedia(tabId){return [...(frames.get(tabId)?.values()||[])].some(frame=>frame.videos.some(video=>video.connected!==false&&video.playing));}
+function hasPendingMedia(tabId){return [...(frames.get(tabId)?.values()||[])].some(frame=>frame.pendingUntil>Date.now()&&frame.videos.some(video=>video.connected!==false));}
 async function mayContactPage(tabId){
  const activity=await activityFor(tabId);
- const pendingMedia=activity.loadingUntil>Date.now()&&[...(frames.get(tabId)?.values()||[])].some(frame=>frame.videos.some(video=>video.connected!==false));
- return activity.focused||activity.until>Date.now()||pendingMedia||hasPlayingMedia(tabId)||[...ports.values()].some(item=>item.tabId===tabId);
+ return activity.focused||activity.until>Date.now()||activity.loadingUntil>Date.now()&&hasPendingMedia(tabId)||[...ports.values()].some(item=>item.tabId===tabId);
 }
 let activityRecheck=null;
 async function ensureStartupActivity(tabId){
@@ -186,7 +185,7 @@ function syncPower(settings){
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{
   const enabled=settings.enabled,signature=JSON.stringify([enabled,settings.disabledSites,settings.siteModes]);if(powerSignature===signature)return;powerSignature=signature;
   const cached=await chrome.storage.session.get('pausedTargets'),frozen={...cached.pausedTargets};
-  const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger)),playingTabs=new Set([...tabs].filter(hasPlayingMedia));
+  const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger)),pendingTabs=new Set([...tabs].filter(hasPendingMedia));
   if(!enabled){
    for(const tabId of selectionDeliveries.keys())clearSelectionDelivery(tabId);
    for(const tabId of frames.keys()){const target=targetFor(tabId);if(target)frozen[tabId]=target;}
@@ -194,15 +193,15 @@ function syncPower(settings){
    frames.clear();announced.clear();pinned.clear();
   }
   const rate=await optionalRateState();
-  await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate,playingTabs.has(tabId))));
+  await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate,pendingTabs.has(tabId))));
   await chrome.action.setIcon({path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
   await chrome.action.setTitle({title:titleFor(settings)});
   for(const [port,item]of ports)try{port.postMessage({action:'updated',tabId:item.tabId});}catch{}
  });return powerQueue;
 }
-async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPlaying=false){
+async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPending=false){
  settings=settings||await stored();if(pageUrl===undefined)pageUrl=(await chrome.tabs.get(tabId)).url||'';
- const contact=wasPlaying||await mayContactPage(tabId);
+ const contact=wasPending||await mayContactPage(tabId);
  const blocked=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes),enabled=settings.enabled&&!blocked;
  if(!enabled){clearSelectionDelivery(tabId);frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);}
  if(rate===undefined)rate=await optionalRateState();
@@ -268,14 +267,14 @@ async function announce(tabId,force=false){
  if([...ports.values()].some(item=>item.tabId===tabId)&&(markedTargets.get(tabId)?.key!==key||markedTargets.get(tabId)?.title!==target?.title))highlight(tabId);
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
-function record(tabId,frameId,documentId,videos){
+function record(tabId,frameId,documentId,videos,pendingUntil=0){
  const items=Array.isArray(videos)?videos.slice(0,64):[];
  // An empty child frame has no media to select. Keeping every ad/analytics
  // frame here made later reports contact documents that had already gone away.
  if(frameId>0&&!items.length){if(frames.get(tabId)?.delete(frameId))announce(tabId,true);return;}
  if(!frames.has(tabId))frames.set(tabId,new Map());
  const fresh=frames.get(tabId).get(frameId)?.documentId!==documentId;
- frames.get(tabId).set(frameId,{frameId,documentId,videos:items});announce(tabId,fresh);
+ frames.get(tabId).set(frameId,{frameId,documentId,videos:items,pendingUntil});announce(tabId,fresh);
 }
 async function refresh(tabId,force=false){
  const settings=await stored();if(!settings.enabled||disabledOnUrl((await chrome.tabs.get(tabId)).url,settings.disabledSites,settings.siteModes))return;
@@ -365,21 +364,17 @@ async function run(message,sender){
  if(message.action==='repairBridge'){
   const tabId=sender.tab?.id;if(!Number.isInteger(tabId))throw Error('Video page required');
   const settings=await stored(),activity=await activityFor(tabId);
-  const frame=frames.get(tabId)?.get(sender.frameId||0),playing=frame?.documentId===sender.documentId&&frame?.videos.some(video=>video.playing&&video.connected!==false);
-  if(!settings.enabled||disabledOnUrl(sender.tab.url,settings.disabledSites,settings.siteModes)||disabledOnUrl(sender.url,settings.disabledSites,settings.siteModes)||!activity.focused&&activity.until<=Date.now()&&!(activity.loadingUntil>Date.now())&&!playing)throw Error('Video controls are not active on this page');
+  if(!settings.enabled||disabledOnUrl(sender.tab.url,settings.disabledSites,settings.siteModes)||disabledOnUrl(sender.url,settings.disabledSites,settings.siteModes)||!activity.focused&&activity.until<=Date.now()&&!(activity.loadingUntil>Date.now()))throw Error('Video controls are not active on this page');
   await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,...(sender.documentId?{documentIds:[sender.documentId]}:{frameIds:[sender.frameId||0]})},world:'MAIN',files:['page-bridge.js']});
   return {};
  }
  if(message.action==='settings'){if(Number.isInteger(sender.tab?.id))await ensureStartupActivity(sender.tab.id);const settings=await stored(),rate=await rateState();return {settings,lastRate:rate.lastRate,rateRevision:rate.rateRevision,pageUrl:sender.tab?.url||'',language,activity:await activityFor(sender.tab?.id)};}
- if(message.action==='initialized'){
-  const target=targetFor(sender.tab?.id);
-  if(target?.id===message.id&&target.frameId===sender.frameId&&target.documentId===sender.documentId&&tabActivity.finishLoading(sender.tab.id)){await saveActivity();notifyActivity(sender.tab.id);}
-  return {};
- }
  if(message.action==='report'){
   const hint=message.rememberedRate,token=hint?rateWriteLedger.begin(hint,sender):null,settings=await stored();let targetMatches=false;
   if(settings.enabled&&sender.tab?.id&&!disabledOnUrl(sender.tab.url,settings.disabledSites,settings.siteModes)&&!disabledOnUrl(sender.url,settings.disabledSites,settings.siteModes)){
-   record(sender.tab.id,sender.frameId,sender.documentId,message.videos);const target=targetFor(sender.tab.id);
+   const activity=await activityFor(sender.tab.id),pendingUntil=Number.isSafeInteger(message.pendingUntil)?Math.min(message.pendingUntil,activity.loadingUntil||0):0;
+   const eligible=activity.focused||activity.until>Date.now()||pendingUntil>Date.now();
+   record(sender.tab.id,sender.frameId,sender.documentId,eligible?message.videos:[],eligible?pendingUntil:0);const target=targetFor(sender.tab.id);
    targetMatches=!!hint&&target?.id===hint.id&&target.frameId===sender.frameId&&target.documentId===sender.documentId;
   }
   return token?persistRateMessage(hint,token,targetMatches):{};
@@ -509,7 +504,7 @@ async function restoreOpenTabs(){
    if(changed)await saveActivity();
   }catch{}
  }
- const snapshot=tabActivity.snapshot(),candidates=new Set([snapshot.focusedTabId,...Object.keys(snapshot.untilByTab).map(Number),...Object.keys(snapshot.loadingUntilByTab).map(Number),...[...frames.keys()].filter(hasPlayingMedia)]);
+ const snapshot=tabActivity.snapshot(),candidates=new Set([snapshot.focusedTabId,...Object.keys(snapshot.untilByTab).map(Number),...Object.keys(snapshot.loadingUntilByTab).map(Number)]);
  const tabs=[...candidates].filter(Number.isInteger);
  for(let index=0;index<tabs.length;index+=4)await Promise.allSettled(tabs.slice(index,index+4).map(tabId=>restoreOpenTab(tabId,{allowLoading:true})));
 }

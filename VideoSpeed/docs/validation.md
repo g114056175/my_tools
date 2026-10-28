@@ -1,3 +1,89 @@
+# VideoSpeed 0.6.17 驗證
+
+2026-10-28。修正 Bilibili 影片頁右側推薦預覽誤入控制目標。VideoPocket 未修改。
+
+## 原因與修正
+
+Bilibili 首頁卡片與影片頁右側推薦使用不同容器。0.6.16 的明確預覽規則只有 `bili-video-card,.bili-video-card`，漏掉 `.video-page-card-small` 與 `.v-recommend-inline-player`。側欄內的播放器因此先命中 `.bpx-player-container`，被當作正式影片登記，後續自動倍速與目標選取便會接手它。
+
+這種預覽也會取得主影片路由身份；首次提示以身份去重，所以可能沒有新的自動提示，實際速度卻已被修改。手動快捷鍵依被選中的影片執行，仍會在預覽上顯示提示。
+
+本輪把這兩個官方容器加入登記前的預覽排除，優先於一般播放器容器。初始化、品質橋接、指標選取及目標清理共用此判定。判斷只限 Bilibili 網域，不依靜音、尺寸或動態新增來排除影片；FB 等社群動態內容繼續使用原流程。探索頻率、載入期限、UI 與權限沿用 0.6.16。
+
+來源核對：Bilibili [官方影片頁程式](https://s1.hdslb.com/bfs/static/jinkela/video/video.10e8c86797efac5e5b578ffb54ae963b5a928508.js) 的推薦卡元件與 `inline-player` 指令，以及[官方樣式](https://s1.hdslb.com/bfs/static/jinkela/video/css/video.0.10e8c86797efac5e5b578ffb54ae963b5a928508.css)。指令在滑鼠進入時建立／啟動預覽，離開時關閉；預覽有明確容器可識別。這是原始碼核對，未把它當作使用者實站 DOM 的直接擷取。
+
+## 驗證
+
+- 舊版 0.6.16 在相同推薦結構 fixture 重現：預覽取得第二個 registry 身份，playbackRate 與 defaultPlaybackRate 被套為 1.75；測試以 `1.75 !== 1` 失敗。新增單元案例也在修正前失敗。
+- 新版 304 項單元／整合通過；包含側欄、獨立 inline 容器、預覽內含主播放器 class、shadow boundary，以及一般正式播放器和社群內容對照。
+- Chromium、Brave 各 25 項瀏覽器檢查通過。側欄與 inline 預覽在無來源時、載入後皆不取得身份；原速度與 defaultPlaybackRate 維持 1，沒有新增自動提示或跟隨記憶寫入。
+- 滑鼠移至預覽並實際點擊後，`< >` 修改主影片，提示仍在主片。主影片暫停、預覽繼續播放時亦通過。移開、卸載預覽後，主影片立即可控；只有預覽的頁面不攔快捷鍵。
+- YouTube 主片提示／換片／重載、既有首頁預覽及 FB／Instagram／TikTok 動態換片、快捷鍵回歸通過。這些項目包含在各瀏覽器的 25 項內。
+- 本次兩個瀏覽器皆未新增頁面錯誤；專用 profile 已清理。未操作個人瀏覽器。
+
+成品 SHA-256（大小寫敏感相對路徑排序，各檔 path + NUL + bytes + NUL）：`11f926264736b2e52a73b0a53e22c54defbdf4b943416fe653ce02bbef6bee39`。
+
+本機證據：`work/qa-079-preview/`、`work/qa-075-main-baseline-0616-sidebar/results.json`、`work/qa-075-main-release-0617-chromium/results.json`、`work/qa-075-main-release-0617-brave/results.json`。輸出摘要為 `VideoSpeed-validation.json`。
+
+## 驗證界線
+
+瀏覽器操作使用真實本機影片與對應容器 fixture；官方 JS／CSS 另行唯讀核對。尚未完成使用者當前 Bilibili 實站頁面的操作驗收，也未重新執行 0.6.16 的全部長時間／生命週期測試。先前 context invalidation、長播卡死與 worker-fetch 的原始觸發條件仍未全數定位，不能以本輪預覽修正宣稱全部解決。
+
+<details>
+<summary>0.6.16 歷史驗證</summary>
+
+# VideoSpeed 0.6.16 驗證
+
+2026-10-28。依新活動規則分開「補查元素」「等待首次設定」「一般背景播放」。VideoPocket 未修改。
+
+## 行為與計時
+
+| 階段 | 處理方式 |
+| --- | --- |
+| 初次聚焦／切回 | 立即直接查詢影片，並做最多 6000 節點／12ms 的初始遍歷；剩餘工作分批接續。 |
+| 留在前景 | 媒體事件直接登記；DOM 變動併批，最多每 500ms 處理 128 節點／4ms，沒有變動不重掃。 |
+| 離開後 10 秒內 | 斷開探索用 MutationObserver，每 2 秒只查文件與已知 shadow root 中的 video；媒體事件可即時登記。 |
+| 已找到但尚未完成的影片 | 以元素及媒體身份記錄待處理資格，最多等至離開後 30 秒；首次倍速與畫質處理結束後提前釋放。 |
+| 已完成首次設定的背景影片 | 解除控制，保留目前倍速；不持續修復、不攔快捷鍵、不更新跟隨記憶。切回後採納同片目前速度，不重套預設。 |
+
+10／30 秒從真正切離分頁／視窗的事件時間起算；從活躍頁新開背景分頁則以建立時間起算。重導、loadstart、playing、ratechange 和 worker 重啟都不續期。這些數字是產品的工作預算，並非網站平均載入時間或瀏覽器標準。
+
+初份 HTTP 文件可能直到離開後才送達：沿用原 30 秒上限，允許該文件的第一次解析／DOMContentLoaded 補查；不把已載入的空白 SPA 頁面延長為 30 秒探索。影片到期仍未就緒、元素被移除或已變成另一媒體，終止該筆等待。下一次切回才恢復探索。
+
+## 修正的缺口
+
+- 移除背景正在播放就永久保留控制與重注入資格的條件。
+- 移除整頁共用的 loadingComplete／initialized 通知；每個元素各自完成，不會由第一支影片提早終止其他待載入影片。
+- 背景首次套用保留一次 500ms 的載入回呼收尾期，畫質重試仍有固定次數；不因網站持續改速延長期限。關閉畫質設定會結束已完成倍速的等待。
+- 背景釋放保留目前 playbackRate／defaultPlaybackRate。最多 64 筆 WeakRef 保存原預設值的歸屬，不保留影片強引用、事件監聽或計時器；總關閉／Full 除外可還原仍屬擴充功能的 defaultPlaybackRate，不改當下 playbackRate。
+- 畫質請求在轉換 adapter 前重新確認元素身份、請求、政策及廣告狀態；舊請求不延後套到已替換的影片。
+- 待載入元素記錄媒體身份及原截止時間，速度與畫質完成狀態分開保存。十秒後重新注入腳本只恢復原標記；不把新出現的未知影片納入，也不重套已完成的畫質。
+- 舊 60 秒廣泛等待的測試入口改為新生命週期回歸；歷史驗證保留於舊版本 tag。
+
+## 驗證
+
+- 301 項單元／整合通過。
+- 4 項分頁活動、17 項主影片／預覽與提示回歸通過。
+- 不開 popup 的 4 次新文件、2 次 SPA、本地快捷鍵、啟動故障恢復及 worker 冷啟動通過。
+- Chromium 新生命週期 12 項通過：已知元素 15 秒後首播成功；12 秒後新插入未知影片不接手；已知元素 31 秒後開始則不套預設，切回後才初始化。事件及 route 不延長期限、已知 shadow root 有界補查、當前頁動態插入可發現、已初始化背景影片改成 1×不被修復且不污染記憶。
+- 離開約 12.76 秒後重新注入 content 腳本，原待載入元素的身份與期限保持一致，15 秒首播後套 8×及一次畫質；同時插入的陌生影片保持 1×且未登記。
+- 停用復原：影片原預設 1×，擴充套 8×，離開後保持 8×；總開關關閉後 defaultPlaybackRate 恢復 1×，當前 playbackRate 仍為 8×。
+- 真實 HTTP 分別延遲媒體與整份文件 16 秒，切到另一視窗後仍套 4×及一次 1080p 畫質。
+- Chromium 與 Brave 擴充更新／BFCache 回歸通過：閒置空頁探查為零，更新不延長原期限，返回快取頁可再次控制，新增 runtime error／warning 為零。回歸中的手動控制改為先切回目標分頁，符合這版規則。
+
+成品 SHA-256（大小寫敏感的相對路徑排序，各檔 path + NUL + bytes + NUL）：`4a3ba1a83bbed142f00e4ba2647f83a75728e1560eb1dcb8250b710391c467df`。
+
+## 驗證界線
+
+以上使用隔離瀏覽器、真實本機影片及 HTTP，但播放器介面為 fixture，不代表 YouTube／Facebook 實站驗收。Chromium headless 跨視窗回焦 API 曾同時回報兩窗 focused；測試在離開階段完成後關閉 away 測試窗，再驗證剩餘視窗真正回焦及分頁切換。Brave 本輪新生命週期 fixture 未成功載入，0 項執行，不列為通過。所有測試 profile／瀏覽器／server 已清理，未操作個人瀏覽器。
+
+已提交的網站畫質 setter 無法強制取消其網站內部異步工作；本輪防止在提交前使用過期目標。先前持續 context invalidation、長播卡死及 worker-fetch 的完整原始條件仍未全數定位，不以本輪結果宣稱全部解決。
+
+本機證據：work/qa-078-focus/results-chromium.json、work/qa-077-network/results.json、work/qa-078-unit.txt；成品摘要見 VideoSpeed-validation.json。
+
+<details>
+<summary>0.6.15 歷史驗證（背景政策已由 0.6.16 取代）</summary>
+
 # VideoSpeed 0.6.15 驗證
 
 2026-10-28。修正剛開影片後立即切走、影片超過十秒才開始播放時漏套預設速度／畫質的問題。VideoPocket 未修改。
@@ -169,6 +255,10 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
+
+</details>
 
 </details>
 

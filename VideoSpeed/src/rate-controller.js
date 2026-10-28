@@ -34,9 +34,9 @@ export class RateController{
    if(!this.disposed&&this.revision===revision&&this.mediaKey===key&&!this.initialized&&this.selected)this.sync(false,'initialization-retry');
   },this.initializationAttempts===1?100:400);
  }
- release(){
+ release({preserveDefault=false}={}){
   this.cancelRepair();this.cancelInitialization();
-  try{if(this.releaseRate)this.releaseRate();else if(this.localDefault&&same(this.video.defaultPlaybackRate,this.localDefault.owned))this.video.defaultPlaybackRate=this.localDefault.baseline;}catch{}
+  try{if(this.releaseRate)this.releaseRate({preserveDefault});else if(!preserveDefault&&this.localDefault&&same(this.video.defaultPlaybackRate,this.localDefault.owned))this.video.defaultPlaybackRate=this.localDefault.baseline;}catch{}
   this.localDefault=null;this.managedRate=null;this.mediaResetPending=false;
  }
  sync(mediaEvent=false,eventName='',initialize=true){
@@ -160,5 +160,5 @@ export class RateController{
  }
  snapshot(){return {rate:this.actualRate,desiredRate:this.desired,rateStatus:this.rateStatus,rateOrigin:this.rateOrigin,rateError:this.error};}
  diagnostics(){return {...this.snapshot(),key:this.mediaKey,managedRate:this.managedRate,automaticWrites:this.automaticWrites,events:[...this.events]};}
- dispose(){if(this.disposed)return;this.disposed=true;this.release();for(const [name,handler]of Object.entries(this.handlers))this.video.removeEventListener(name,handler);}
+ dispose(options){if(this.disposed)return;this.disposed=true;this.release(options);for(const [name,handler]of Object.entries(this.handlers))this.video.removeEventListener(name,handler);}
 }

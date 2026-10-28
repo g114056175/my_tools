@@ -1,21 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {TabActivity,replayTabActivityEvents} from '../src/tab-activity.js';
+import {TabActivity,replayTabActivityEvents,TAB_LOADING_GRACE_MS} from '../src/tab-activity.js';
 
 function clockAt(start=0){let value=start;return {now:()=>value,set:next=>{value=next;}};}
 
-test('loading has an independent fixed deadline without extending DOM exploration',()=>{
+test('loading is bounded to thirty seconds from blur and background redirects cannot renew it',()=>{
  const clock=clockAt(1000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
  assert.equal(activity.startLoading(10),true);activity.setActiveTab(1,11,1100);
- clock.set(12_000);assert.equal(activity.activity(10).until,0);assert.equal(activity.activity(10).loadingUntil,61_000);
+ const deadline=1100+TAB_LOADING_GRACE_MS;
+ clock.set(12_000);assert.equal(activity.activity(10).until,0);assert.equal(activity.activity(10).loadingUntil,deadline);
  assert.equal(activity.startLoading(10),false,'background redirects cannot renew loading');
- const restored=new TabActivity({now:clock.now}).restore(activity.snapshot());assert.equal(restored.activity(10).loadingUntil,61_000);
- clock.set(61_000);assert.equal(restored.activity(10).loadingUntil,undefined);assert.deepEqual(restored.snapshot().loadingUntilByTab,{});
+ assert.equal(activity.activity(10).loadingUntil,deadline,'a redirect after blur does not extend the fixed deadline');
+ const restored=new TabActivity({now:clock.now}).restore(activity.snapshot());assert.equal(restored.activity(10).loadingUntil,deadline);
+ clock.set(deadline);assert.equal(restored.activity(10).loadingUntil,undefined);assert.deepEqual(restored.snapshot().loadingUntilByTab,{});
 });
 
 test('unknown background pages never acquire loading permission; completion and close revoke it',()=>{
  const clock=clockAt(1000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
- assert.equal(activity.startLoading(20),false);activity.openFrom(10,20);assert.equal(activity.activity(20).loadingUntil,61_000);
+ assert.equal(activity.startLoading(20),false);activity.openFrom(10,20);assert.equal(activity.activity(20).loadingUntil,31_000);
  clock.set(12_000);assert.equal(activity.finishLoading(20),true);assert.equal(activity.activity(20).loadingUntil,undefined);
  activity.openFrom(10,30);activity.forget(30);assert.equal(activity.activity(30).loadingUntil,undefined);
  activity.restore({loadingUntilByTab:{40:12_001,41:72_001,42:11_999}});assert.deepEqual(activity.snapshot().loadingUntilByTab,{'40':12_001});
@@ -33,7 +35,7 @@ test('starts unvisited tabs inactive and tracks only the focused window active t
 
 test('a new background tab from a recent opener gets one bounded loading grace',()=>{
  const clock=clockAt(1_000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
- assert.deepEqual(activity.openFrom(10,20),[20]);assert.equal(activity.activity(20).until,11_000);
+ assert.deepEqual(activity.openFrom(10,20),[20]);assert.equal(activity.activity(20).until,11_000);assert.equal(activity.activity(20).loadingUntil,31_000);
  assert.equal(activity.activity(10).focused,true);clock.set(11_000);assert.equal(activity.activity(20).until,0);
  assert.deepEqual(activity.openFrom(30,40),[],'an unvisited opener cannot activate a background tab');
  activity.setActiveTab(1,11);clock.set(21_001);assert.deepEqual(activity.openFrom(10,21),[],'an expired opener cannot grant activity');
@@ -56,10 +58,10 @@ test('tab switch grants the previous tab ten seconds and expires at the deadline
  const clock=clockAt(1_000),activity=new TabActivity({now:clock.now});
  activity.reconcile({windowId:2,tabId:10});
  clock.set(2_000);assert.deepEqual(activity.setActiveTab(2,11),[10,11]);
- assert.deepEqual(activity.activity(10),{focused:false,until:12_000,revision:3});
+ assert.deepEqual(activity.activity(10),{focused:false,until:12_000,revision:3,loadingUntil:32_000});
  assert.deepEqual(activity.activity(11),{focused:true,until:0,revision:3});
- clock.set(11_999);assert.deepEqual(activity.activity(10),{focused:false,until:12_000,revision:3});
- clock.set(12_000);assert.deepEqual(activity.activity(10),{focused:false,until:0,revision:3});
+ clock.set(11_999);assert.deepEqual(activity.activity(10),{focused:false,until:12_000,revision:3,loadingUntil:32_000});
+ clock.set(12_000);assert.deepEqual(activity.activity(10),{focused:false,until:0,revision:3,loadingUntil:32_000});
  assert.equal(activity.snapshot().revision,3,'expiry does not advance the focus revision');
 });
 
@@ -68,7 +70,7 @@ test('window focus loss blurs its active tab; activation in another window canno
  activity.reconcile({windowId:1,tabId:5});
  clock.set(100);assert.deepEqual(activity.setFocusedWindow(null),[5]);
  assert.deepEqual(activity.setActiveTab(2,8),[]);
- assert.deepEqual(activity.activity(5),{focused:false,until:10_100,revision:3});
+ assert.deepEqual(activity.activity(5),{focused:false,until:10_100,revision:3,loadingUntil:30_100});
  assert.deepEqual(activity.activity(8),{focused:false,until:0,revision:3});
  clock.set(200);activity.setFocusedWindow(2);activity.setActiveTab(2,8);
  assert.deepEqual(activity.activity(8),{focused:true,until:0,revision:5});
@@ -103,7 +105,7 @@ test('restores tabId deadlines from session, drops expired entries, and reconcil
  assert.deepEqual(activity.activity(58),{focused:false,until:0,revision:5});
  const affected=activity.reconcile({windowId:7,tabId:70});
  assert.deepEqual(affected,[60,70]);
- assert.deepEqual(activity.activity(60),{focused:false,until:11_000,revision:7});
+ assert.deepEqual(activity.activity(60),{focused:false,until:11_000,revision:7,loadingUntil:31_000});
  assert.deepEqual(activity.activity(70),{focused:true,until:0,revision:7});
  assert.deepEqual(activity.snapshot().untilByTab,{'59':1_500,'60':11_000});
  assert.equal(activity.snapshot().revision,7);
@@ -118,7 +120,7 @@ test('restored revision remains monotonic when the focused context matches',()=>
  assert.deepEqual(activity.reconcile({windowId:9,tabId:90}),[]);
  assert.deepEqual(activity.activity(90),{focused:true,until:0,revision:12});
  clock.set(4_500);activity.setActiveTab(9,91);
- assert.deepEqual(activity.activity(90),{focused:false,until:14_500,revision:13});
+ assert.deepEqual(activity.activity(90),{focused:false,until:14_500,revision:13,loadingUntil:34_500});
 });
 
 test('window focus transitions without an active tab still persist their revision',()=>{
@@ -141,10 +143,10 @@ test('caches a pre-focus activation and applies it only when that window gains f
  ];
  assert.deepEqual(replayTabActivityEvents(activity,events),[10,11,12,99,20]);
  assert.deepEqual(activity.reconcile({windowId:2,tabId:20},400),[]);
- assert.deepEqual(activity.activity(10),{focused:false,until:10_100,revision:13});
- assert.deepEqual(activity.activity(11),{focused:false,until:10_200,revision:13});
- assert.deepEqual(activity.activity(12),{focused:false,until:10_300,revision:13});
- assert.deepEqual(activity.activity(99),{focused:false,until:10_350,revision:13});
+ assert.deepEqual(activity.activity(10),{focused:false,until:10_100,revision:13,loadingUntil:30_100});
+ assert.deepEqual(activity.activity(11),{focused:false,until:10_200,revision:13,loadingUntil:30_200});
+ assert.deepEqual(activity.activity(12),{focused:false,until:10_300,revision:13,loadingUntil:30_300});
+ assert.deepEqual(activity.activity(99),{focused:false,until:10_350,revision:13,loadingUntil:30_350});
  assert.deepEqual(activity.activity(20),{focused:true,until:0,revision:13});
 });
 
@@ -155,7 +157,7 @@ test('background activation is cached without granting a lease before window foc
  assert.deepEqual(activity.activity(20,100),{focused:false,until:0,revision:5});
  assert.deepEqual(activity.snapshot(100).activeByWindow,{'1':10,'2':20});
  assert.deepEqual(activity.setFocusedWindow(2,200),[10,20]);
- assert.deepEqual(activity.activity(10,200),{focused:false,until:10_200,revision:7});
+ assert.deepEqual(activity.activity(10,200),{focused:false,until:10_200,revision:7,loadingUntil:30_200});
  assert.deepEqual(activity.activity(20,200),{focused:true,until:0,revision:7});
 });
 
@@ -178,8 +180,8 @@ test('a newly focused cached tab receives a blur deadline when focus leaves befo
   {type:'focus',windowId:3,at:120},
  ]);
  assert.deepEqual(affected,[10,20]);
- assert.deepEqual(activity.activity(20,120),{focused:false,until:10_120,revision:11});
- assert.deepEqual(activity.activity(10,120),{focused:false,until:10_110,revision:11});
+ assert.deepEqual(activity.activity(20,120),{focused:false,until:10_120,revision:11,loadingUntil:30_120});
+ assert.deepEqual(activity.activity(10,120),{focused:false,until:10_110,revision:11,loadingUntil:30_110});
 });
 
 test('snapshot restores per-window candidates and forget/prune remove stale cache entries',()=>{
@@ -202,7 +204,7 @@ test('forgetWindow removes its cached candidate and blurs its current tab',()=>{
  assert.deepEqual(activity.forgetWindow(2,100),[]);
  assert.deepEqual(activity.snapshot(100).activeByWindow,{'1':10});
  assert.deepEqual(activity.forgetWindow(1,100),[10]);
- assert.deepEqual(activity.activity(10,200),{focused:false,until:10_100,revision:6});
+ assert.deepEqual(activity.activity(10,200),{focused:false,until:10_100,revision:6,loadingUntil:30_100});
  assert.equal(activity.focusedWindowId,null);
  assert.deepEqual(activity.snapshot(200).activeByWindow,{});
 });
@@ -215,8 +217,8 @@ test('a later stable focus query does not refresh leases for intermediate tabs',
   {type:'activated',windowId:3,tabId:32,at:200},
  ]);
  assert.deepEqual(activity.reconcile({windowId:3,tabId:32},20_000),[]);
- assert.deepEqual(activity.activity(30,20_000),{focused:false,until:0,revision:4});
- assert.deepEqual(activity.activity(31,20_000),{focused:false,until:0,revision:4});
+ assert.deepEqual(activity.activity(30,20_000),{focused:false,until:0,revision:4,loadingUntil:30_100});
+ assert.deepEqual(activity.activity(31,20_000),{focused:false,until:0,revision:4,loadingUntil:30_200});
  assert.deepEqual(activity.activity(32,20_000),{focused:true,until:0,revision:4});
  assert.deepEqual(activity.snapshot(20_000).untilByTab,{});
  assert.equal(activity.snapshot(20_000).revision,4);

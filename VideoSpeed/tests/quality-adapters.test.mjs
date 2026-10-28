@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPreferredQuality, chooseHeight } from '../src/quality-adapters.js';
 
+test('media identity or policy invalidation between adapters cancels the pending setter',async()=>{
+ let current=true,writes=0;
+ const player={getAvailableQualityLevels:()=>['hd1080'],setPlaybackQualityRange:()=>writes++};
+ const video={parentElement:player,videoWidth:1920,videoHeight:1080};
+ const pending=applyPreferredQuality(video,1080,{}, {isCurrent:()=>current});current=false;
+ assert.equal((await pending).reason,'cancelled');assert.equal(writes,0);
+});
+
 test('chooseHeight prefers exact 1080', () => assert.equal(chooseHeight([360, 1080, 2160]), 1080));
 test('chooseHeight follows the nearest lower available quality', () => {assert.equal(chooseHeight([360,720]),720);assert.equal(chooseHeight([720,2160],1080),720);assert.equal(chooseHeight([720,1080],240),720);});
 test('chooseHeight handles one quality and no qualities', () => {

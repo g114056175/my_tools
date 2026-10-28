@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip)** · Chrome／Brave
+**[下載 ZIP（約 151 KB）](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip)** · 解壓約 475 KB · Chromium 120 以上
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -17,9 +17,9 @@
 <summary><strong>安裝方式</strong></summary>
 
 1. 下載並解壓 ZIP。
-2. 開啟 `chrome://extensions/`，啟用「開發人員模式」。Brave 使用 `brave://extensions/`。
-3. 點「載入未封裝項目」，選擇包含 `manifest.json` 的 `VideoSpeed` 資料夾。
-4. 開啟影片網頁即可使用快捷鍵；工具列圖示可開啟調速面板。
+2. 開啟擴充功能管理頁，啟用「開發人員模式」。
+3. 點「載入未封裝項目」，選擇解壓後的 `VideoSpeed` 資料夾。
+4. 重新整理影片網頁，使用快捷鍵或工具列圖示調速。
 
 更新時以新版覆蓋原資料夾，再於擴充功能管理頁重新載入。
 
@@ -83,10 +83,7 @@ npm run test:network-loading
 
 採用 [MIT License](LICENSE)。離線網域解析使用 [tldts](https://github.com/remusao/tldts)，第三方授權隨附於 [THIRD_PARTY_LICENSES.txt](extension/THIRD_PARTY_LICENSES.txt)。
 
-</details>
-
-<details>
-<summary><strong>已知問題</strong></summary>
+**已知問題**
 
 - 暫不支援縮圖預覽視窗調速；特殊播放器相容性仍待補強。
 - 曾出現更新後舊分頁報錯、長播卡死，完整觸發條件仍待追查。

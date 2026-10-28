@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VideoSpeed",
-  "version": "0.6.15",
+  "version": "0.6.16",
   "minimum_chrome_version": "120",
   "description": "__MSG_extensionDescription__",
   "permissions": [

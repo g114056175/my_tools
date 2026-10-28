@@ -14,6 +14,17 @@ const controller=(video,s=settings(),options={})=>new RateController(video,s,{se
 function observe(c,v,origin,extra={}){c.observe({origin,status:'ready',actualRate:v.playbackRate,defaultRate:v.defaultPlaybackRate,mediaKey:c.mediaKey,...extra});}
 function native(c,v,rate){v.playbackRate=rate;observe(c,v,'user',{evidence:'native-rate-option'});}
 
+test('background suspension keeps the applied rate but releases all control',async()=>{
+ const video=new Video(),saved=[],c=controller(video,settings(),{onRate:rate=>saved.push(rate)});
+ assert.equal(video.playbackRate,2);c.dispose({preserveDefault:true});
+ assert.equal(video.defaultPlaybackRate,2);
+ video.playbackRate=1;video.dispatchEvent(new Event('playing'));await task();
+ assert.equal(video.playbackRate,1);assert.deepEqual(saved,[2]);
+ const resumed=controller(video,settings(),{initializedKey:video.currentSrc});
+ assert.equal(video.playbackRate,1,'focus return must adopt this initialized media, not reapply the preset');
+ resumed.command('faster');assert.equal(video.playbackRate,1.25);resumed.dispose();
+});
+
 test('off leaves website speed and declaration untouched, including after loading',async()=>{
  const v=new Video();v.value=1.7;v.defaultPlaybackRate=1.7;const rates=[],c=controller(v,settings({defaultMode:'off'}),{onRate:r=>rates.push(r)});
  v.dispatchEvent(new Event('loadstart'));v.dispatchEvent(new Event('loadedmetadata'));await task();

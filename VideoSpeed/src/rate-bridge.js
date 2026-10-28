@@ -95,6 +95,7 @@ export class RateBridge{
   this.epoch=0;
   this.records=new WeakMap();
   this.references=new Set();
+  this.suspendedDefaults=new Map();
   this.nativeDescriptors=new Map();
   this.restorers=[];
   this.globalListeners=[];
@@ -123,8 +124,8 @@ export class RateBridge{
   return true;
  }
 
- stop(){
-  if(!this.started)return;
+ stop({preserveDefaults=false}={}){
+  if(!this.started){if(!preserveDefaults)this.restoreSuspendedDefaults();return;}
   for(const record of [...this.references])this._releaseDefault(record,'stop',true);
   for(const record of [...this.references]){this._detachMedia(record);this.records.delete(record.video);}
   this.references.clear();
@@ -142,10 +143,26 @@ export class RateBridge{
   this.pointerOwner=null;
   this.vcContext=null;
   this.onObservation=()=>{};
+  if(!preserveDefaults)this.restoreSuspendedDefaults();
  }
 
- execute(video,{op='read',rate,mediaKey,reason,selected,maintainDefault=true,retain=false}={}){
+ restoreSuspendedDefaults(){
+  for(const [reference,saved]of this.suspendedDefaults){
+   const video=reference.deref();if(!video)continue;
+   const current=this._readNative(video,'defaultPlaybackRate');
+   if(!current.error&&equalRate(current.value,saved.owned))try{this._callNativeSetter(video,'defaultPlaybackRate',saved.baseline);}catch{}
+  }
+  this.suspendedDefaults.clear();
+ }
+
+ execute(video,{op='read',rate,mediaKey,reason,selected,maintainDefault=true,retain=false,preserveDefault=false}={}){
   if(!video||!this.started)return this._result('read-error',null,null,'bridge-not-started',this.seq,this.epoch);
+  // A fresh controller calls release before its first read. There is no
+  // active ownership to release then; suspended metadata is adopted on read.
+  if(op==='release'&&!this.records.has(video)){
+   const actual=this._readNative(video,'playbackRate'),value=this._readNative(video,'defaultPlaybackRate');
+   return this._result(actual.error||value.error?'read-error':'ready',actual.value,value.value,actual.error||value.error,this.seq,this.epoch);
+  }
   const record=this._register(video);
   if(mediaKey!==undefined&&mediaKey!==record.mediaKey){
    record.mediaKey=shortMediaKey(mediaKey);
@@ -156,7 +173,7 @@ export class RateBridge{
   if(op==='read')return this._readResult(record,this._nextSeq());
   if(op==='release'){
    const seq=this._nextSeq();
-   return this._releaseDefault(record,reason||'release',retain===true,seq);
+   return this._releaseDefault(record,reason||'release',retain===true,seq,preserveDefault===true);
   }
   if(op!=='apply'&&op!=='adopt')return this._result('write-error',null,null,'invalid-operation',this._nextSeq(),record.epoch);
   const seq=this._nextSeq();
@@ -287,6 +304,12 @@ export class RateBridge{
    lastInput:null,tokens:[],pendingEvents:[],diagnostics:[],overrideStacks:0,
    attached:false,mediaHandlers:[],lastLoadObservation:null,
   };
+  for(const [reference,saved]of this.suspendedDefaults){
+   const previous=reference.deref();if(!previous){this.suspendedDefaults.delete(reference);continue;}
+   if(previous!==video)continue;
+   if(!currentDefault.error&&equalRate(currentDefault.value,saved.owned)){record.defaultBaseline=saved.baseline;record.ownedDefault=saved.owned;}
+   this.suspendedDefaults.delete(reference);break;
+  }
   const actual=this._readNative(video,'playbackRate');record.lastActual=actual.value;
   this.records.set(video,record);this.references.add(record);this._attachMedia(record);
   this._observeSourceMutations(record);
@@ -614,11 +637,11 @@ export class RateBridge{
   return false;
  }
 
- _releaseDefault(record,reason,fromStop,providedSeq){
+ _releaseDefault(record,reason,fromStop,providedSeq,preserveDefault=false){
   const seq=providedSeq||this._nextSeq();
   const before=this._readValues(record);
   let thrown=null,evidence='default-not-owned';
-  if(record.ownedDefault!==null){
+  if(record.ownedDefault!==null&&!preserveDefault){
    if(before.default!==null&&equalRate(before.default,record.ownedDefault)){
     if(finite(record.defaultBaseline)&&!equalRate(before.default,record.defaultBaseline)){
      const previous=this.vcContext;
@@ -627,6 +650,15 @@ export class RateBridge{
      finally{this.vcContext=previous;}
     }else evidence='default-already-baseline';
    }else evidence='default-ownership-changed';
+  }
+  if(preserveDefault&&record.ownedDefault!==null){
+   for(const [reference]of this.suspendedDefaults)if(!reference.deref()||reference.deref()===record.video)this.suspendedDefaults.delete(reference);
+   if(this.suspendedDefaults.size>=MAX_REFERENCES){
+    const [reference,saved]=this.suspendedDefaults.entries().next().value,video=reference.deref();
+    if(video&&equalRate(this._readNative(video,'defaultPlaybackRate').value,saved.owned))try{this._callNativeSetter(video,'defaultPlaybackRate',saved.baseline);}catch{}
+    this.suspendedDefaults.delete(reference);
+   }
+   this.suspendedDefaults.set(new WeakRef(record.video),{baseline:record.defaultBaseline,owned:record.ownedDefault});
   }
   record.ownedDefault=null;
   const after=this._readValues(record);

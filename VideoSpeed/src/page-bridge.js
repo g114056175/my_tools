@@ -1,9 +1,9 @@
 import {applyPreferredQuality,inspectQuality} from './quality-adapters.js';
 import {syncPlayerRate} from './player-rate.js';
-import {isMediaPreview} from './media-registry.js';
+import {isMediaPreview,mediaSignature,mediaCanInitialize} from './media-registry.js';
 import {RateBridge} from './rate-bridge.js';
 const marker=Symbol.for('video-control.page-bridge-v3');
-const version='0.6.15',previous=globalThis[marker];
+const version='0.6.16',previous=globalThis[marker];
 if(previous?.version!==version){
  try{if(previous?.dispose)previous.dispose();else previous?.stop?.();}catch{}
  let active=false,exploring=true,waiting=false,qualityEnabled=false,abort,restore=[],generation=0,rateBridge=null,bridgeOwner=null,refreshBindings=()=>{},bindTimer=null;
@@ -43,8 +43,8 @@ if(previous?.version!==version){
     }catch{}
   };
 
- const stop=()=>{
-  rateBridge?.stop();rateBridge=null;
+ const stop=({preserveDefaults=false}={})=>{
+  rateBridge?.stop({preserveDefaults});if(!preserveDefaults)rateBridge=null;
   active=false;generation++;clearTimeout(bindTimer);bindTimer=null;abort?.abort();abort=null;refreshBindings=()=>{};
   for(const item of youtubePlayers.values())item.observer.disconnect();youtubePlayers.clear();for(const timer of retryTimers.values())clearTimeout(timer);retryTimers.clear();
   for(const undo of restore.reverse())undo();restore=[];
@@ -52,7 +52,7 @@ if(previous?.version!==version){
  const start=()=>{
   if(active)return;active=true;generation++;abort=new AbortController();
   const listen=(target,type,handler)=>target.addEventListener(type,handler,{capture:true,signal:abort.signal});
-  rateBridge=new RateBridge(globalThis,{syncPlayerRate});
+  rateBridge??=new RateBridge(globalThis,{syncPlayerRate});
   rateBridge.start((video,info)=>{
    if(active&&video.getAttribute('data-video-control-id'))video.dispatchEvent(new CustomEvent('video-control:rate-observation-v1',{detail:JSON.stringify({owner:bridgeOwner,videoId:video.getAttribute('data-video-control-id'),info}),bubbles:true,composed:true}));
   });
@@ -71,7 +71,9 @@ if(previous?.version!==version){
    if(!data||data.owner!==bridgeOwner||typeof data.requestId!=='string'||data.requestId.length>100||!Number.isFinite(data.preferred)||(data.preferred!==0&&data.preferred<144)||data.preferred>8640||(!data.inspect&&!qualityEnabled))return;
    const video=event.composedPath().find(node=>node?.tagName==='VIDEO');
    if(!video||isMediaPreview(video)||video.getAttribute('data-video-control-id')!==data.videoId)return;
-   const token=generation,value=data.inspect?inspectQuality(video,globalThis):await applyPreferredQuality(video,data.preferred,globalThis);
+   const token=generation;
+   const isCurrent=()=>active&&token===generation&&qualityEnabled&&video.getAttribute('data-video-control-id')===data.videoId&&video.getAttribute('data-video-control-quality-request')===data.requestId&&mediaSignature(video)===data.mediaKey&&mediaCanInitialize(video);
+   const value=data.inspect?inspectQuality(video,globalThis):await applyPreferredQuality(video,data.preferred,globalThis,{isCurrent});
    if(!active||token!==generation)return;
    const result={status:value.status,adapter:value.adapter,requestedHeight:value.requestedHeight,selectedHeight:value.selectedHeight,availableHeights:value.availableHeights?.slice(0,32)||[]};
    video.dispatchEvent(new CustomEvent('video-control:quality-result-v3',{detail:JSON.stringify({owner:bridgeOwner,requestId:data.requestId,videoId:data.videoId,result}),bubbles:true,composed:true}));
@@ -107,7 +109,7 @@ if(previous?.version!==version){
   const changed=exploring!==(state?.exploring!==false);exploring=state?.exploring!==false;
   waiting=state?.waiting===true;
   if(!exploring&&!waiting){for(const timer of retryTimers.values())clearTimeout(timer);retryTimers.clear();}
-  qualityEnabled=state?.qualityEnabled===true;if(state?.enabled===true){if(active&&changed)refreshBindings();else start();}else stop();
+  qualityEnabled=state?.qualityEnabled===true;if(state?.enabled===true){if(active&&changed)refreshBindings();else start();}else stop({preserveDefaults:state?.suspended===true});
   document.dispatchEvent(new CustomEvent('video-control:bridge-ready-v1',{detail:JSON.stringify({owner:bridgeOwner,version,enabled:active})}));
  };
  document.addEventListener('video-control:bridge-state-v4',configure,true);

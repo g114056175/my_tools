@@ -509,7 +509,7 @@
 
   // src/tab-activity.js
   var TAB_ACTIVITY_GRACE_MS = 1e4;
-  var TAB_LOADING_GRACE_MS = 6e4;
+  var TAB_LOADING_GRACE_MS = 3e4;
   var validId = (value) => Number.isInteger(value) && value >= 0;
   function replayTabActivityEvents(activity, events, { windowIdNone = -1 } = {}) {
     const affected = /* @__PURE__ */ new Set();
@@ -676,6 +676,7 @@
       if (tabId === null) return;
       this.focusedTabId = null;
       this.untilByTab.set(tabId, now + this.graceMs);
+      this.loadingUntilByTab.set(tabId, now + this.loadingMs);
       affected.push(tabId);
     }
   };
@@ -699,7 +700,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.15";
+  var VERSION = "0.6.16";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();
@@ -944,13 +945,12 @@
     await activityReady;
     return tabActivity.activity(tabId);
   }
-  function hasPlayingMedia(tabId) {
-    return [...frames.get(tabId)?.values() || []].some((frame) => frame.videos.some((video) => video.connected !== false && video.playing));
+  function hasPendingMedia(tabId) {
+    return [...frames.get(tabId)?.values() || []].some((frame) => frame.pendingUntil > Date.now() && frame.videos.some((video) => video.connected !== false));
   }
   async function mayContactPage(tabId) {
     const activity = await activityFor(tabId);
-    const pendingMedia = activity.loadingUntil > Date.now() && [...frames.get(tabId)?.values() || []].some((frame) => frame.videos.some((video) => video.connected !== false));
-    return activity.focused || activity.until > Date.now() || pendingMedia || hasPlayingMedia(tabId) || [...ports.values()].some((item) => item.tabId === tabId);
+    return activity.focused || activity.until > Date.now() || activity.loadingUntil > Date.now() && hasPendingMedia(tabId) || [...ports.values()].some((item) => item.tabId === tabId);
   }
   var activityRecheck = null;
   async function ensureStartupActivity(tabId) {
@@ -1039,7 +1039,7 @@
       if (powerSignature === signature) return;
       powerSignature = signature;
       const cached = await chrome.storage.session.get("pausedTargets"), frozen = { ...cached.pausedTargets };
-      const tabs = new Set([...frames.keys(), ...[...contentPorts].map((port) => port.sender?.tab?.id), ...[...ports.values()].map((item) => item.tabId)].filter(Number.isInteger)), playingTabs = new Set([...tabs].filter(hasPlayingMedia));
+      const tabs = new Set([...frames.keys(), ...[...contentPorts].map((port) => port.sender?.tab?.id), ...[...ports.values()].map((item) => item.tabId)].filter(Number.isInteger)), pendingTabs = new Set([...tabs].filter(hasPendingMedia));
       if (!enabled) {
         for (const tabId of selectionDeliveries.keys()) clearSelectionDelivery(tabId);
         for (const tabId of frames.keys()) {
@@ -1052,7 +1052,7 @@
         pinned.clear();
       }
       const rate = await optionalRateState();
-      await Promise.allSettled([...tabs].map((tabId) => applyPagePolicy(tabId, void 0, settings, rate, playingTabs.has(tabId))));
+      await Promise.allSettled([...tabs].map((tabId) => applyPagePolicy(tabId, void 0, settings, rate, pendingTabs.has(tabId))));
       await chrome.action.setIcon({ path: Object.fromEntries([16, 32, 48, 128].map((size) => [size, "icons/" + (enabled ? "" : "off-") + size + ".png"])) });
       await chrome.action.setTitle({ title: titleFor(settings) });
       for (const [port, item] of ports) try {
@@ -1062,10 +1062,10 @@
     });
     return powerQueue;
   }
-  async function applyPagePolicy(tabId, pageUrl, settings, rate, wasPlaying = false) {
+  async function applyPagePolicy(tabId, pageUrl, settings, rate, wasPending = false) {
     settings = settings || await stored2();
     if (pageUrl === void 0) pageUrl = (await chrome.tabs.get(tabId)).url || "";
-    const contact = wasPlaying || await mayContactPage(tabId);
+    const contact = wasPending || await mayContactPage(tabId);
     const blocked = disabledOnUrl(pageUrl, settings.disabledSites, settings.siteModes), enabled = settings.enabled && !blocked;
     if (!enabled) {
       clearSelectionDelivery(tabId);
@@ -1188,7 +1188,7 @@
     } catch {
     }
   }
-  function record(tabId, frameId, documentId, videos) {
+  function record(tabId, frameId, documentId, videos, pendingUntil = 0) {
     const items = Array.isArray(videos) ? videos.slice(0, 64) : [];
     if (frameId > 0 && !items.length) {
       if (frames.get(tabId)?.delete(frameId)) announce(tabId, true);
@@ -1196,7 +1196,7 @@
     }
     if (!frames.has(tabId)) frames.set(tabId, /* @__PURE__ */ new Map());
     const fresh = frames.get(tabId).get(frameId)?.documentId !== documentId;
-    frames.get(tabId).set(frameId, { frameId, documentId, videos: items });
+    frames.get(tabId).set(frameId, { frameId, documentId, videos: items, pendingUntil });
     announce(tabId, fresh);
   }
   async function refresh(tabId, force = false) {
@@ -1337,8 +1337,7 @@
       const tabId2 = sender.tab?.id;
       if (!Number.isInteger(tabId2)) throw Error("Video page required");
       const settings2 = await stored2(), activity = await activityFor(tabId2);
-      const frame = frames.get(tabId2)?.get(sender.frameId || 0), playing = frame?.documentId === sender.documentId && frame?.videos.some((video) => video.playing && video.connected !== false);
-      if (!settings2.enabled || disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) || disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes) || !activity.focused && activity.until <= Date.now() && !(activity.loadingUntil > Date.now()) && !playing) throw Error("Video controls are not active on this page");
+      if (!settings2.enabled || disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) || disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes) || !activity.focused && activity.until <= Date.now() && !(activity.loadingUntil > Date.now())) throw Error("Video controls are not active on this page");
       await chrome.scripting.executeScript({ injectImmediately: true, target: { tabId: tabId2, ...sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId || 0] } }, world: "MAIN", files: ["page-bridge.js"] });
       return {};
     }
@@ -1347,19 +1346,13 @@
       const settings2 = await stored2(), rate = await rateState();
       return { settings: settings2, lastRate: rate.lastRate, rateRevision: rate.rateRevision, pageUrl: sender.tab?.url || "", language, activity: await activityFor(sender.tab?.id) };
     }
-    if (message.action === "initialized") {
-      const target = targetFor(sender.tab?.id);
-      if (target?.id === message.id && target.frameId === sender.frameId && target.documentId === sender.documentId && tabActivity.finishLoading(sender.tab.id)) {
-        await saveActivity();
-        notifyActivity(sender.tab.id);
-      }
-      return {};
-    }
     if (message.action === "report") {
       const hint = message.rememberedRate, token = hint ? rateWriteLedger.begin(hint, sender) : null, settings2 = await stored2();
       let targetMatches = false;
       if (settings2.enabled && sender.tab?.id && !disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) && !disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes)) {
-        record(sender.tab.id, sender.frameId, sender.documentId, message.videos);
+        const activity = await activityFor(sender.tab.id), pendingUntil = Number.isSafeInteger(message.pendingUntil) ? Math.min(message.pendingUntil, activity.loadingUntil || 0) : 0;
+        const eligible = activity.focused || activity.until > Date.now() || pendingUntil > Date.now();
+        record(sender.tab.id, sender.frameId, sender.documentId, eligible ? message.videos : [], eligible ? pendingUntil : 0);
         const target = targetFor(sender.tab.id);
         targetMatches = !!hint && target?.id === hint.id && target.frameId === sender.frameId && target.documentId === sender.documentId;
       }
@@ -1592,7 +1585,7 @@
       } catch {
       }
     }
-    const snapshot = tabActivity.snapshot(), candidates = /* @__PURE__ */ new Set([snapshot.focusedTabId, ...Object.keys(snapshot.untilByTab).map(Number), ...Object.keys(snapshot.loadingUntilByTab).map(Number), ...[...frames.keys()].filter(hasPlayingMedia)]);
+    const snapshot = tabActivity.snapshot(), candidates = /* @__PURE__ */ new Set([snapshot.focusedTabId, ...Object.keys(snapshot.untilByTab).map(Number), ...Object.keys(snapshot.loadingUntilByTab).map(Number)]);
     const tabs = [...candidates].filter(Number.isInteger);
     for (let index = 0; index < tabs.length; index += 4) await Promise.allSettled(tabs.slice(index, index + 4).map((tabId) => restoreOpenTab(tabId, { allowLoading: true })));
   }

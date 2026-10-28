@@ -9,9 +9,10 @@ import {settingsForUrls} from './site-rules.js';
 import {RateClient} from './rate-client.js';
 import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
+import {PendingMediaLease} from './pending-media-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.15',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.16',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -19,7 +20,7 @@ if(!reuse){
  try{previous?.dispose?.();}catch{}
  try{boot();}catch(error){if(!isContextInvalidatedError(error))throw error;}
 }
-function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecent,isLoading,onIdle,language='en'}){
+function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocused,isRecent,isLoading,loadingDeadline,onIdle,initialDocument=false,language='en'}){
  const qualityDelays=[250,600,1200,2400];
  const videoToast=new VideoToast(document);
  const shownNotice={key:null};
@@ -28,11 +29,32 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  const listen=(target,type,handler,options={})=>target.addEventListener(type,handler,{...(typeof options==='boolean'?{capture:options}:options),signal:abort.signal});
  let settings=initialSettings,ready=true,reportTimer,activeId=null,hasTarget=false,lastRate=initialRate,requestSerial=0,picker=null,rememberedRate=null;
  const states=new Map(),interactions=new WeakMap(),pending=new Map(),rateResponses=new Map();
- let trustedRateInput=null,retained=new WeakMap(),loadingComplete=false;
- const waiting=()=>!loadingComplete&&isLoading();
- const eligible=video=>video.isConnected&&!isMediaPreview(video)&&(isRecent()||waiting()||retained.get(video)===mediaSignature(video)&&!video.paused&&!video.ended);
- const hasRetained=()=>[...registry.videos.values()].some(eligible);
- const report=()=>{if(disposed)return;if(!isRecent()&&!waiting()&&!hasRetained()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!waiting()&&!hasRetained()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
+ let trustedRateInput=null,registry,graceTimer=null,initialScan=true,documentPending=initialDocument&&document.readyState==='loading',focused=isFocused();
+ const canDiscover=()=>initialScan||isRecent()||documentPending&&isLoading();
+ const clearPending=video=>{video.removeAttribute('data-video-control-pending-until');video.removeAttribute('data-video-control-pending-key');};
+ const pendingMarker=video=>Number(video.getAttribute('data-video-control-pending-until'))>Date.now()&&(!video.getAttribute('data-video-control-pending-key')||video.getAttribute('data-video-control-pending-key')===mediaSignature(video));
+ const qualityDone=state=>!settings.qualityEnabled||['applied','requested','failed','preserved','disabled'].includes(state.quality.status)||state.attempts>qualityDelays.length;
+ function eligible(video){
+  if(!video?.isConnected||isMediaPreview(video))return false;
+  if(isFocused())return true;
+  const state=states.get(video.getAttribute('data-video-control-id'));if(!state)return false;
+  if(!state.load.started){
+   if(state.rate?.initialized&&qualityDone(state)&&state.video.readyState>=2&&(!state.backgroundApplied||state.settled))state.load.finish();
+   else state.load.start(mediaSignature(video),Math.min(loadingDeadline(),Number(video.getAttribute('data-video-control-pending-until'))||Infinity));
+  }
+  const accepted=state.load.accepts(mediaSignature(video));
+  if(accepted){
+   for(const [name,value]of [['until',state.load.until],['key',state.load.key]])if(video.getAttribute('data-video-control-pending-'+name)!==String(value))video.setAttribute('data-video-control-pending-'+name,String(value));
+  }else clearPending(video);
+  return accepted;
+ }
+ const pendingUntil=()=>Math.max(0,...[...states.values()].filter(state=>eligible(state.video)).map(state=>state.load.until));
+ const waiting=()=>documentPending&&isLoading()||pendingUntil()>Date.now();
+ const report=()=>{if(disposed)return;if(!isRecent()&&!waiting()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!waiting()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),pendingUntil:pendingUntil(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
+ function finishPending(state){
+  if(isFocused()||!state.rate?.initialized||!state.settled||!qualityDone(state)||state.video.paused||state.video.readyState<2||state.rate.repairTimer!==null)return;
+  state.load.finish();clearPending(state.video);onIdle();
+ }
  listen(document,'video-control:rate-result-v3',event=>{
   let data;try{data=JSON.parse(event.detail);}catch{return;}
   const job=rateResponses.get(data?.requestId);if(data?.owner===rateClient.sessionId&&job&&data.videoId===job.id&&event.composedPath().includes(job.video))job.result=data.result;
@@ -64,19 +86,22 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   const state=id&&states.get(id);
   if(data?.owner===rateClient.sessionId&&state?.rate&&!isMediaPreview(video)&&id===data.videoId&&data.info?.mediaKey===state.rateKeyToken&&(data.info?.origin!=='user'||trustedRateInput?.consume(video,data.info))){if(data.info.origin==='user')state.notice?.cancel();state.rate.observe({...data.info,mediaKey:state.rateKey});}
  },true);
- const registry=new MediaRegistry(document,(video,id)=>{
+ registry=new MediaRegistry(document,(video,id)=>{
   const signature=mediaSignature(video),initializedKey=video.getAttribute('data-video-control-initialized')||'';
   const preserved=initializedKey===signature;
-  const state={quality:{status:preserved?'preserved':'pending'},attempts:0,qualityKey:preserved?signature:null,timer:null,revision:0,rateKey:null,rateKeyToken:'',keySerial:0};states.set(id,state);
+  const qualityPreserved=video.getAttribute('data-video-control-quality-initialized')===signature||preserved&&!pendingMarker(video);
+  const state={video,load:new PendingMediaLease(),settled:preserved,backgroundApplied:false,settleTimer:null,quality:{status:qualityPreserved?'preserved':'pending'},attempts:0,qualityKey:qualityPreserved?signature:null,timer:null,revision:0,rateKey:null,rateKeyToken:'',keySerial:0};states.set(id,state);
   state.notice=new InitialRateNotice(video,{shown:shownNotice,identity:()=>state.rate?.mediaKey,canShow:()=>!disposed&&settings.enabled&&settings.defaultMode!=='off'&&id===activeId&&state.rate?.initialized&&eligible(video)&&mediaCanInitialize(video),show:()=>videoToast.show(video,video.playbackRate+'×')});
   state.rate=new RateController(video,{...settings,enabled:ready&&settings.enabled},{
    readRate:()=>rateOperation(video,id,{op:'read'}),
    writeRate:(_rate,options)=>rateOperation(video,id,options),
-   releaseRate:()=>rateOperation(video,id,{op:'release'}),
+   releaseRate:options=>rateOperation(video,id,{op:'release',...options}),
    signature:()=>mediaSignature(video),canInitialize:()=>eligible(video)&&mediaCanInitialize(video),initializedKey,onInitialize:key=>{
     video.setAttribute('data-video-control-initialized',key);
-    if(!isRecent()&&!video.paused&&!video.ended)retained.set(video,key);
-    loadingComplete=true;send({action:'initialized',id});
+    // Give the initial play/load callbacks one bounded settling period. It is
+    // never renewed by page rate writes and never becomes ongoing background control.
+    clearTimeout(state.settleTimer);state.settled=false;state.backgroundApplied=!isFocused();
+    state.settleTimer=setTimeout(()=>{state.settleTimer=null;state.settled=true;finishPending(state);},500);
    },lastRate,selected:id===activeId,onChange:report,
    onDefaultApplied:()=>state.notice.request(),
    onRate:(rate,source)=>{
@@ -86,21 +111,27 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    },
    onMedia:()=>queueMicrotask(()=>{
     if(disposed||!states.has(id))return;
-    if(!isRecent()&&!eligible(video)){onIdle();return;}
+    if(!isFocused()&&!eligible(video)){onIdle();return;}
     state.notice.wake();
     if(state.qualityKey!==state.rate.mediaKey){state.qualityKey=state.rate.mediaKey;state.attempts=0;state.revision++;clearTimeout(state.timer);state.timer=null;state.quality={status:'pending'};}
-    queueQuality(video,id);
+    queueQuality(video,id);finishPending(state);
    }),
   });
   for(const name of ['pause','play','ended','resize','loadedmetadata'])listen(video,name,report);
-  state.onPlayback=()=>state.notice.wake();
+  state.onPlayback=()=>{state.notice.wake();finishPending(state);};
   state.onNoticeSource=()=>state.notice.cancelFrame();
   for(const name of ['play','playing'])listen(video,name,state.onPlayback);
   for(const name of ['loadstart','emptied'])listen(video,name,state.onNoticeSource);
   queueMicrotask(()=>{if(!disposed&&video.isConnected&&states.has(id))video.dispatchEvent(new Event('video-control:media-bind-v1',{bubbles:true,composed:true}));});
- },report,{exploring:isRecent(),allowMediaEvents:waiting});
+ },report,{exploring:isFocused(),allowMediaEvents:canDiscover,acceptVideo:video=>{
+  if(isFocused())return true;
+  if(!isRecent()&&!initialDocument&&!pendingMarker(video))return false;
+  return pendingMarker(video)||!mediaSignature(video)||video.getAttribute('data-video-control-initialized')!==mediaSignature(video);
+ }});
+ initialScan=false;
  registry.onRemove=(id,video)=>{
-  const state=states.get(id);state?.notice.dispose();state?.rate.dispose();clearTimeout(state?.timer);states.delete(id);
+  clearPending(video);
+  const state=states.get(id);state?.notice.dispose();state?.rate.dispose({preserveDefault:!isFocused()&&settings.enabled});clearTimeout(state?.timer);clearTimeout(state?.settleTimer);states.delete(id);
   if(videoToast.video===video)videoToast.clear();
   if(id===activeId){activeId=null;hasTarget=false;marker({clear:true});report();}
   for(const name of ['pause','play','ended','resize','loadedmetadata'])video.removeEventListener(name,report);
@@ -129,10 +160,11 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    const result=await new Promise(resolve=>{
     const timer=setTimeout(()=>{pending.delete(requestId);resolve({status:'failed',reason:'bridge-timeout'});},1800);
     pending.set(requestId,{video,id,resolve,timer});
-    video.dispatchEvent(new CustomEvent('video-control:quality-request-v3',{detail:JSON.stringify({owner:rateClient.sessionId,requestId,videoId:id,preferred:settings.preferredQuality,revision}),bubbles:true,composed:true}));
+    video.setAttribute('data-video-control-quality-request',requestId);
+    video.dispatchEvent(new CustomEvent('video-control:quality-request-v3',{detail:JSON.stringify({owner:rateClient.sessionId,requestId,videoId:id,mediaKey:generation,preferred:settings.preferredQuality,revision}),bubbles:true,composed:true}));
    });
    if(disposed||states.get(id)!==state||state.rate.mediaKey!==generation||state.revision!==revision)return;
-   state.quality={...result,attempts:state.attempts};report();
+   state.quality={...result,attempts:state.attempts};if(qualityDone(state))video.setAttribute('data-video-control-quality-initialized',generation);report();finishPending(state);
    // Retry discovery only. A submitted quality change is never submitted twice.
    if(['unsupported','unavailable'].includes(result.status)&&state.attempts<=qualityDelays.length){state.timer=setTimeout(()=>{state.timer=null;queueQuality(video,id);},qualityDelays[state.attempts-1]);}
   },0);
@@ -147,33 +179,36 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   settings=normalizeSettings(next);updateLastRate(rate);
   for(const [id,video]of registry.videos){
    const state=states.get(id);state.rate.update(settings,lastRate);
-   if(!settings.qualityEnabled){clearTimeout(state.timer);state.timer=null;state.quality={...state.quality,status:'disabled'};}
+   if(!settings.qualityEnabled){video.removeAttribute('data-video-control-quality-request');clearTimeout(state.timer);state.timer=null;state.quality={...state.quality,status:'disabled'};}
    if(state.quality.status==='pending')queueQuality(video,id);
+   finishPending(state);
   }
   report();
  }
  function updateLastRate(rate){if(!validRate(rate))return;lastRate=Number(rate);for(const state of states.values())state.rate.lastRate=lastRate;}
  function updateActivity(){
-  if(isRecent()){retained=new WeakMap();registry.setExploring(true);return true;}
-  for(const [id,video]of registry.videos){const rate=states.get(id)?.rate,key=mediaSignature(video);if(rate?.initialized&&rate.mediaKey===key&&!video.paused&&!video.ended)retained.set(video,key);}
-  registry.setExploring(false);
+  const next=isFocused();
+  if(next!==focused){focused=next;clearTimeout(graceTimer);graceTimer=null;for(const state of states.values()){state.load.reset();clearPending(state.video);}}
+  registry.setExploring(next);
+  if(next)return true;
   for(const [id,video]of [...registry.videos])if(!eligible(video))registry.remove(id,video);
-  return waiting()||hasRetained();
+  if(isRecent()&&graceTimer===null)graceTimer=setTimeout(()=>{graceTimer=null;if(disposed)return;if(isRecent()&&!isFocused())registry.probe();onIdle();},2000);
+  return isRecent()||waiting();
  }
  function act(id,command,value,language=locale){
   registry.prune();
   const video=registry.videos.get(id),state=states.get(id);if(!video||!state||!video.isConnected)throw Error("Video changed; select it again");
-  if(!eligible(video))throw Error("Return to the video tab first");
+  if(!isFocused()||!eligible(video))throw Error("Return to the video tab first");
   if(!settings.enabled)throw Error("VideoSpeed is disabled");
   if(activeId!==id){activeId=id;hasTarget=true;for(const [key,item]of states)item.rate.select(key===id);}
   state.notice.cancel();const result=state.rate.command(command,value);interactions.set(video,Date.now());videoToast.show(video,result.rateStatus==='failed'?translateMessage(resolveLanguage(language),result.rateError):result.rate+'×');report();return result;
  }
  function handleKey(event){
-  if(!event.isTrusted)return false;
+  if(!event.isTrusted||!isFocused())return false;
   if(!alive()){dispose();return false;}
   const command=shortcutAction(event,settings.shortcuts);if(!ready||!settings.enabled||!command||editingEvent(event))return false;
   if(!hasTarget&&!snapshot().some(video=>video.visible)){
-   if(isRecent())registry.scan(document,true);
+   if(isFocused())registry.scan(document,true);
    if(!snapshot().some(video=>video.visible))return false;
   }
   event.preventDefault();event.stopImmediatePropagation();
@@ -186,17 +221,18 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   return true;
  }
  listen(document,'pointerdown',event=>{
-  if(picker)return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',videos:snapshot()});}
+  if(picker||!isFocused())return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',videos:snapshot()});}
  },true);
  listen(document,'fullscreenchange',report,true);listen(window,'resize',report,{passive:true});
  let scrollTimer;listen(window,'scroll',()=>{if(!scrollTimer)scrollTimer=setTimeout(()=>{scrollTimer=null;report();},250);},{passive:true,capture:true});
  let routeQueued=false;
  function route(){if(routeQueued)return;routeQueued=true;queueMicrotask(()=>{routeQueued=false;if(disposed)return;for(const state of states.values())state.rate.sync();if(!isRecent())onIdle();report();});}
- listen(document,'video-control:media-ready-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(!video||!eligible(video))return;registry.add(video,{mediaEvent:true});const id=registry.ids.get(video),state=states.get(id);state?.rate.sync(true);if(state)queueQuality(video,id);report();},true);
+ listen(document,'video-control:media-ready-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(!video)return;registry.add(video,{mediaEvent:true});if(!eligible(video))return;const id=registry.ids.get(video),state=states.get(id);state?.rate.sync(true);if(state)queueQuality(video,id);report();},true);
  for(const name of ['popstate','hashchange','yt-navigate-finish','video-control:route'])listen(window,name,route,true);
  listen(window,'pagehide',()=>{clearTimeout(reportTimer);if(rememberedRate){send({action:'report',videos:snapshot(),rememberedRate});rememberedRate=null;}marker({clear:true});send({action:'report',videos:[]});});
  listen(window,'pageshow',report);
- listen(document,'video-control:shadow',event=>{for(const node of event.composedPath())if(node.shadowRoot){if(isRecent())registry.scan(node.shadowRoot);else if(waiting())registry.observe(node.shadowRoot);}},true);
+ listen(document,'video-control:shadow',event=>{for(const node of event.composedPath())if(node.shadowRoot){if(isFocused())registry.scan(node.shadowRoot);else if(canDiscover())registry.observe(node.shadowRoot);}},true);
+ listen(document,'DOMContentLoaded',()=>{if(!documentPending)return;if(!isFocused()&&canDiscover())registry.probe();documentPending=false;onIdle();},{once:true});
  function cancelPick(){picker?.cancel();picker=null;}
  function startPick(language=locale){
   cancelPick();registry.scan(document,true);marker({clear:true});
@@ -210,8 +246,8 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   const timer=setTimeout(()=>{cancelPick();send({action:'cancelPick'});},30000);
   picker={cancel(){clearTimeout(timer);overlay.remove();label.remove();document.removeEventListener('pointermove',move,true);document.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);}};
  }
- const api={dispose,snapshot,update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
-  if(deep&&isRecent()){registry.scan(document,true);registry.titleCache=new WeakMap();}
+ const api={dispose,snapshot,update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,pendingUntil:state.load.until,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
+  if(deep&&isFocused()){registry.scan(document,true);registry.titleCache=new WeakMap();}
   const items=snapshot(),id=activeId||items.find(item=>item.visible&&item.playing)?.id||items.find(item=>item.visible)?.id;
   const video=registry.videos.get(id),state=states.get(id);
   if(video&&state){
@@ -243,23 +279,24 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    else if(message.action==='refreshTarget'){api.refresh(false).then(videos=>respond({ok:true,videos}),error=>respond({ok:false,error:error.message}));return true;}
   }catch(error){respond({ok:false,error:error.message});}
  };
- function dispose(){
+ function dispose({preserveDefault=false}={}){
   if(disposed)return;disposed=true;ready=false;abort.abort();
-  clearTimeout(reportTimer);clearTimeout(scrollTimer);videoToast.clear();cancelPick();
-  for(const state of states.values()){clearTimeout(state.timer);state.notice.dispose();state.rate?.dispose();}
+  clearTimeout(reportTimer);clearTimeout(scrollTimer);clearTimeout(graceTimer);videoToast.clear();cancelPick();
+  for(const state of states.values()){clearTimeout(state.timer);clearTimeout(state.settleTimer);state.notice.dispose();state.rate?.dispose({preserveDefault});}
   for(const job of pending.values()){clearTimeout(job.timer);job.resolve(null);}pending.clear();
   trustedRateInput?.dispose();registry.dispose();marker({clear:true});document.getElementById('video-control-toast')?.remove();
 
  }
- report();return {...api,receive};
+ updateActivity();report();return {...api,receive};
 }
 
 
 
 function boot(){
+ const initialDocument=document.readyState==='loading';
  let disposed=false,session=null,settings=normalizeSettings({enabled:false}),lastRate=null,lifeline,configuration=0,pageUrl=window===window.top?location.href:'',contextReady=window===window.top,language='en',localPolicyKnown=false;
- const activity=new ActivityLease();let activityTimer=null,idleQueued=false,rateRefresh=null,bridgeReady=false;
- const isRecent=()=>activity.isRecent(),isLoading=()=>activity.isLoading();
+ const activity=new ActivityLease();let activityTimer=null,idleQueued=false,rateRefresh=null,bridgeReady=false,initialCatchupUsed=false;
+ const isFocused=()=>activity.focused,isRecent=()=>activity.isRecent(),isLoading=()=>activity.isLoading();
  const rateClient=new RateClient(rate=>{lastRate=rate;session?.updateLastRate(rate);});
  let stopStorage=()=>{},stopMessages=()=>{},stopDisconnect=()=>{};
  delete globalThis[Symbol.for('video-control.recovering')];
@@ -283,19 +320,19 @@ function boot(){
   if(disposed)return;
   if(!contextReady)return;
   const localSettings=settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl);
-  const recent=isRecent(),keep=localSettings.enabled&&session?.updateActivity(),enabled=localSettings.enabled&&validRate(lastRate)&&(recent||keep||!session&&isLoading());
+  const recent=isRecent(),keep=localSettings.enabled&&session?.updateActivity(),enabled=localSettings.enabled&&validRate(lastRate)&&(recent||keep||!session&&!initialCatchupUsed&&isLoading());
   if(!enabled){
    bridgeReady=false;
-   const previous=session;session=null;previous?.dispose();
-   document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:false})}));
+   const previous=session;session=null;previous?.dispose({preserveDefault:localSettings.enabled&&!isFocused()});
+   document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:false,suspended:localSettings.enabled&&localSettings.defaultMode!=='off'&&!isFocused()})}));
    if(previous)send({action:'report',videos:[]});
    return;
   }
   bridgeReady=false;
-  document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:true,exploring:recent,waiting:isLoading(),qualityEnabled:localSettings.qualityEnabled})}));
+  document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:true,exploring:isFocused(),waiting:isLoading(),qualityEnabled:localSettings.qualityEnabled})}));
   if(!bridgeReady){bridgeStartup.ensure({force:true,reason:'missing-page-bridge'});return;}
   if(session)session.update(localSettings,lastRate);
-  else session=startSession(localSettings,lastRate,send,messenger.alive,rateClient,{isRecent,isLoading,onIdle,language});
+  else {const firstDocument=!initialCatchupUsed&&initialDocument;initialCatchupUsed=true;session=startSession(localSettings,lastRate,send,messenger.alive,rateClient,{isFocused,isRecent,isLoading,loadingDeadline:()=>activity.loadingUntil,onIdle,initialDocument:firstDocument,language});}
  }
  function acceptConfiguration(response){
   if(!response?.settings||!validRate(response.lastRate)||!Number.isSafeInteger(response.rateRevision)||response.rateRevision<0||!Number.isSafeInteger(response.activity?.revision)||response.activity.revision<0||typeof response.activity.focused!=='boolean'||!Number.isSafeInteger(response.activity.until)||response.activity.until<0)return false;
@@ -315,7 +352,7 @@ function boot(){
  };
  document.addEventListener('video-control:bridge-ready-v1',bridgeAcknowledged,true);
  const wake=event=>{
-  if(disposed||document.visibilityState==='hidden'&&!isRecent()&&!isLoading())return;
+  if(disposed||!isRecent()&&(initialCatchupUsed||!isLoading())&&document.visibilityState==='hidden')return;
   connectLifeline();
   if(event?.type==='pageshow'&&event.persisted){startup.ensure({force:true,reason:'page-restored'});return;}
   if(session)return;

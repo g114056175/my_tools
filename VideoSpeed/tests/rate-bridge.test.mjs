@@ -123,6 +123,24 @@ test('apply syncs player and native actual/default; release restores only owned 
  bridge.stop();
 });
 
+test('suspending a background element preserves values and detaches the rate bridge record',()=>{
+ const env=makeEnvironment(),bridge=new RateBridge(env.target);bridge.start(()=>{});
+ bridge.execute(env.video,{op:'apply',rate:2,mediaKey:'film'});
+ const released=bridge.execute(env.video,{op:'release',preserveDefault:true});
+ assert.equal(released.status,'ready');assert.equal(env.video.defaultPlaybackRate,2);
+ bridge.stop({preserveDefaults:true});assert.equal(env.video.defaultPlaybackRate,2);assert.equal(env.video.playbackRate,2);
+ bridge.stop();assert.equal(env.video.defaultPlaybackRate,1,'power off restores the original default even while suspended');
+});
+
+test('returning from suspension retains original ownership, but preserves later page-owned defaults',()=>{
+ const env=makeEnvironment(),bridge=new RateBridge(env.target);bridge.start(()=>{});
+ bridge.execute(env.video,{op:'apply',rate:2});bridge.execute(env.video,{op:'release',preserveDefault:true});bridge.stop({preserveDefaults:true});
+ bridge.start(()=>{});bridge.execute(env.video,{op:'release'});bridge.execute(env.video,{op:'read'});
+ bridge.stop();assert.equal(env.video.defaultPlaybackRate,1);
+ bridge.start(()=>{});bridge.execute(env.video,{op:'apply',rate:2});bridge.execute(env.video,{op:'release',preserveDefault:true});bridge.stop({preserveDefaults:true});
+ env.video.defaultPlaybackRate=1.5;bridge.stop();assert.equal(env.video.defaultPlaybackRate,1.5);
+});
+
 test('maintainDefault false still synchronizes an explicit command but bridge does not write or own default',()=>{
  const env=makeEnvironment(),calls=[];
  const bridge=new RateBridge(env.target,{syncPlayerRate:(video,rate)=>calls.push([video,rate])});

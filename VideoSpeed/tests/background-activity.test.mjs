@@ -421,14 +421,13 @@ test('content startup reconciles focus after an initial active-tab query failure
  assert.equal(result.ok,true);assert.equal(result.activity.focused,true);assert.equal(fixture.state.popupOpens,0);
 });
 
-test('extension update restores focused, recent and known-playing tabs without querying every page',async()=>{
- const now=Date.now(),fixture=createChromeFixture({tabs:[20,30,40,50].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30,40,50],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{20:now+10_000,30:now-100},activeByWindow:{1:10,2:40}}});
+test('extension update restores only focused and recent activity without querying every page',async()=>{
+ const now=Date.now(),fixture=createChromeFixture({tabs:[20,30,40].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30,40],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{20:now+10_000,30:now-100},activeByWindow:{1:10,2:40}}});
  await fixture.importBackground();await waitForInitialSnapshot(fixture);
- await fixture.sendRuntime({action:'report',videos:[{id:'background-player',connected:true,playing:true,visible:false,rate:2}]},contentSender(50));
  fixture.events.runtimeInstalled.listeners[0]({reason:'update'});
- await waitFor(()=>fixture.state.executeCalls.length>=3,'scoped update restore probes');
+ await waitFor(()=>fixture.state.executeCalls.length>=2,'scoped update restore probes');
  await new Promise(resolve=>setTimeout(resolve,25));
- assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20,50]);
+ assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20]);
  assert.ok(!fixture.state.tabQueries.some(query=>query?.url),'update enumerated all HTTP tabs');
 });
 
@@ -452,13 +451,20 @@ test('idle empty pages receive no policy messages or child-route probes on other
  assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0);assert.equal(fixture.state.executeCalls.filter(call=>call.target.tabId===30).length,0);
 });
 
-test('power off still stops a known background player after its activity deadline expired',async()=>{
+test('playing-only idle reports cannot authorize power messages, selection, or recovery injection',async()=>{
  const fixture=createChromeFixture({tabs:[{id:50,windowId:1,active:false,url:'https://example.test/50',status:'complete'}],receivers:[10,50]});
  await fixture.importBackground();await waitForInitialSnapshot(fixture);
  await fixture.sendRuntime({action:'report',videos:[{id:'background-player',connected:true,playing:true,visible:false,rate:2}]},contentSender(50));
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===50&&item.message.action==='activeTarget').length,0,'playing alone must not receive selection');
  fixture.state.messages=[];const next={...fixture.state.localData.settings,enabled:false};fixture.state.localData.settings=next;
  fixture.events.storageChanged.listeners[0]({settings:{newValue:next}},'local');
- await waitFor(()=>fixture.state.messages.some(item=>item.tabId===50&&item.message.action==='power'&&item.message.settings.enabled===false),'background player power-off');
+ await new Promise(resolve=>setTimeout(resolve,40));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===50&&item.message.action==='power').length,0,'an idle playing report must not receive power traffic');
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});
+ await waitFor(()=>fixture.state.executeCalls.length>0,'focused update restore probe');
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.executeCalls.filter(call=>call.target.tabId===50).length,0,'playing alone must not authorize reinjection');
 });
 
 test('both background port disconnect callbacks consume the runtime error synchronously',async()=>{
@@ -512,17 +518,27 @@ test('committed child frames in an idle empty page cannot trigger selection or h
  assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0,'closed popup scheduled an idle-page clear highlight');
 });
 
-test('pending loading permits one update recovery but ordinary notifications still require a video',async()=>{
- const deadline=Date.now()+40_000,fixture=createChromeFixture({tabs:[20,30].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{},loadingUntilByTab:{20:deadline},activeByWindow:{1:10}}});
+test('pending loading permits one update recovery; pending reports need a connected video and stay bounded',async()=>{
+ const deadline=Date.now()+25_000,fixture=createChromeFixture({tabs:[20,30].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{},loadingUntilByTab:{20:deadline},activeByWindow:{1:10}}});
  await fixture.importBackground();await waitForInitialSnapshot(fixture);
  assert.ok(fixture.state.messages.every(item=>item.tabId!==20),'empty pending tab received routine traffic');
  fixture.events.runtimeInstalled.listeners[0]({reason:'update'});await waitFor(()=>fixture.state.executeCalls.length>=2,'focused and pending update probes');
  assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20]);
  const response=await fixture.sendRuntime({action:'settings'},contentSender(20));assert.equal(response.activity.until,0);assert.equal(response.activity.loadingUntil,deadline);
- await fixture.sendRuntime({action:'report',videos:[{id:'pending',connected:true,playing:false,visible:true,rate:1}]},contentSender(20));
+ const pendingVideo={id:'pending',connected:true,playing:false,visible:true,rate:1};
+ await fixture.sendRuntime({action:'report',videos:[pendingVideo]},contentSender(20));
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===20&&item.message.id==='pending').length,0,'a media report without pendingUntil cannot use loading grace');
+ await fixture.sendRuntime({action:'report',pendingUntil:deadline+60_000,videos:[{...pendingVideo,connected:false}]},contentSender(20));
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===20&&item.message.id==='pending').length,0,'a disconnected element cannot keep a pending report eligible');
+ await fixture.sendRuntime({action:'report',pendingUntil:deadline+60_000,videos:[pendingVideo]},contentSender(20));
  await waitFor(()=>fixture.state.messages.some(item=>item.tabId===20&&item.message.id==='pending'),'late selected media');
- await fixture.sendRuntime({action:'initialized',id:'unrelated'},contentSender(20));assert.equal(fixture.state.sessionData.tabActivity.loadingUntilByTab[20],deadline);
- await fixture.sendRuntime({action:'initialized',id:'pending'},contentSender(20));assert.equal(fixture.state.sessionData.tabActivity.loadingUntilByTab[20],undefined);
+ const afterPendingReport=await fixture.sendRuntime({action:'settings'},contentSender(20));
+ assert.equal(afterPendingReport.activity.loadingUntil,deadline,'a successful pending report does not extend or finish loading grace');
+ await fixture.sendRuntime({action:'report',pendingUntil:deadline+60_000,videos:[pendingVideo]},contentSender(30));
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===30&&item.message.id==='pending').length,0,'pendingUntil is clamped to the tab loading deadline');
  fixture.updateStatus(30,'loading');const old=await fixture.sendRuntime({action:'settings'},contentSender(30));assert.equal(old.activity.loadingUntil,undefined);
  assert.ok(fixture.state.executeCalls.every(call=>call.target.tabId!==30));
 });

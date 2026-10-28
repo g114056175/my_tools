@@ -249,14 +249,17 @@ async function applyHls(video, preferred, target) {
   }
 }
 
-export async function applyPreferredQuality(video, preferred = 1080, target = globalThis) {
+export async function applyPreferredQuality(video, preferred = 1080, target = globalThis, {isCurrent=()=>true}={}) {
   const requestedHeight = Number(preferred) === 0 ? 0 : numberHeight(preferred) ?? 1080;
   if (!video) return result('unavailable', 'unknown', requestedHeight, { availableHeights: [] });
   try {
+    if(!isCurrent())return result('unavailable','unknown',requestedHeight,{reason:'cancelled'});
     const hls = await applyHls(video, requestedHeight, target);
     if (hls) return hls;
+    if(!isCurrent())return result('unavailable','unknown',requestedHeight,{reason:'cancelled'});
     const youtube = await applyYoutube(video, requestedHeight, target);
     if (youtube) return youtube;
+    if(!isCurrent())return result('unavailable','unknown',requestedHeight,{reason:'cancelled'});
     const bilibili = await applyBilibili(video, requestedHeight, target);
     if (bilibili) return bilibili;
     return result('unsupported', 'unknown', requestedHeight, { availableHeights: [], reason: 'No supported quality control is exposed for this video' });

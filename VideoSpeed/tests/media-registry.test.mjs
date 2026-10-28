@@ -47,12 +47,12 @@ class FakeDocument extends FakeNode{
  }
 }
 
-function fixture(t){
+function fixture(t,registryOptions={}){
  const observers=new Set(),prior=globalThis.MutationObserver;
  globalThis.MutationObserver=class extends FakeMutationObserver{constructor(callback){super(callback,observers);}};
  t.after(()=>{globalThis.MutationObserver=prior;for(const observer of [...observers])observer.disconnect();});
  const document=new FakeDocument(observers),added=[],changes=[];
- const registry=new MediaRegistry(document,(video,id)=>added.push({video,id}),()=>changes.push(1));
+ const registry=new MediaRegistry(document,(video,id)=>added.push({video,id}),()=>changes.push(1),registryOptions);
  const notify=(root,nodes=[],removedNodes=[])=>{
   const record={target:root,addedNodes:nodes,removedNodes};
   for(const observer of [...observers])if(observer.active&&observer.target?.contains(root))observer.callback([record],[observer]);
@@ -76,6 +76,34 @@ test('passive loading registers only direct media events without restarting DOM 
  document.dispatch('play',{type:'play',composedPath:()=>[video,document]});assert.equal(registry.ids.has(video),true);
  assert.equal(registry.exploring,false);assert.equal(registry.walkQueue.length,0);assert.equal(document.walkerRoots.length,walks);
  permitted=false;const late=document.createElement('video');document.append(late);document.dispatch('play',{type:'play',composedPath:()=>[late,document]});assert.equal(registry.ids.has(late),false);
+ registry.dispose();
+});
+
+test('passive probes require media permission, scan known roots only, and respect initialized media',t=>{
+ let permitted=false;
+ const {document,registry,observers,added,notify}=fixture(t,{
+  allowMediaEvents:()=>permitted,
+  acceptVideo:video=>video.getAttribute('data-video-control-initialized')!==(video.getAttribute('data-video-id')||''),
+ });
+ const player=document.createElement('x-player'),knownShadow=player.attachShadow(),initialized=document.createElement('video');
+ initialized.setAttribute('data-video-id','media-known');initialized.setAttribute('data-video-control-initialized','media-known');knownShadow.append(initialized);document.append(player);notify(document,[player]);drain(registry);
+ assert.equal(registry.observers.has(knownShadow),true,'the shadow root is known before passive probing');
+ assert.equal(registry.ids.has(initialized),false,'an initialized background video is rejected by the acceptance predicate');
+ registry.setExploring(false);
+
+ const direct=document.createElement('video'),lateKnown=document.createElement('video'),shadowHost=document.createElement('x-late-player'),unknownShadow=shadowHost.attachShadow(),unknown=document.createElement('video');
+ knownShadow.append(lateKnown);unknownShadow.append(unknown);document.append(direct,shadowHost);
+ const walkerCount=document.walkerRoots.length,rootCount=registry.observers.size;
+ registry.probe();assert.equal(added.length,0,'probing without media permission is a no-op');
+ permitted=true;registry.probe();
+ assert.ok(registry.ids.has(direct),'an authorized probe finds a video in a known document root');
+ assert.ok(registry.ids.has(lateKnown),'an authorized probe can catch up in a previously known shadow root');
+ assert.equal(registry.ids.has(unknown),false,'a new shadow root is not discovered by a passive probe');
+ assert.equal(registry.ids.has(initialized),false,'the initialized element stays excluded');
+ assert.equal(registry.observers.size,rootCount,'a passive probe does not attach observers to new roots');
+ assert.equal(observers.size,0,'exploration observers remain disconnected');
+ assert.equal(document.walkerRoots.length,walkerCount,'passive probing does not run a DOM walker');
+ assert.equal(registry.walkQueue.length,0);assert.equal(registry.mutationQueue.length,0);
  registry.dispose();
 });
 
@@ -192,6 +220,7 @@ test('pausing clears queued work, ignores unknown media events, and resumes disc
  known.setAttribute('data-video-control-initialized','media-known');
  const pendingNode=document.createElement('section');document.append(pendingNode);
  registry.queueMutations(document,[{addedNodes:[pendingNode]}]);
+ registry.enqueue(document,{force:true});
  assert.ok(registry.walkQueue.length>0);assert.ok(registry.mutationQueue.length>0);
  const documentObserver=registry.observers.get(document);
  registry.setExploring(false);

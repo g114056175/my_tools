@@ -46,23 +46,33 @@ export function mediaCanInitialize(video,target=globalThis){
  }catch{return false;}
 }
 export class MediaRegistry{
- constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true,allowMediaEvents=()=>false}={}){
-  Object.assign(this,{document,onAdd,onChange,owner,exploring,allowMediaEvents,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
+ constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true,allowMediaEvents=()=>false,acceptVideo=()=>true}={}){
+  Object.assign(this,{document,onAdd,onChange,owner,exploring,allowMediaEvents,acceptVideo,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
   const seenEvents=new WeakSet();
   this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video)||this.allowMediaEvents())){this.add(video,{mediaEvent:true});if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
-  this.observe(document);this.scan(document);this.enqueue(document);
+  this.observe(document);this.scan(document,true);this.enqueue(document);
   // A slow document/worker may start after the media's first events. Catch up
   // once on direct videos; passive waiting never queues a DOM/shadow walk.
-  if(!exploring&&allowMediaEvents()){let count=0;for(const video of document.querySelectorAll?.('video')||[]){this.add(video,{mediaEvent:true});if(++count>=64)break;}}
+  if(!exploring&&allowMediaEvents())this.probe();
  }
  add(video,{mediaEvent=false}={}){
   if(this.disposed||!video.isConnected)return;
   if(isMediaPreview(video,this.document.defaultView)){const id=this.ids.get(video);if(id)this.remove(id,video);return;}
-  if(!this.exploring&&!(mediaEvent&&this.allowMediaEvents())||this.ids.has(video))return;
+  if(!this.exploring&&!(mediaEvent&&this.allowMediaEvents())||this.ids.has(video)||!this.acceptVideo(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
   const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }
  notePlay(video){video.setAttribute('data-video-control-last-played',String(Date.now()));}
+ // Background grace checks only direct videos in already known roots. No
+ // mutation observer, DOM walk, or search for additional shadow hosts runs.
+ probe(){
+  if(this.disposed||!this.allowMediaEvents())return;
+  this.prune();const before=this.serial;
+  for(const root of this.observers.keys()){
+   let count=0;for(const video of root.querySelectorAll?.('video')||[]){this.add(video,{mediaEvent:true});if(++count>=64)break;}
+  }
+  if(this.serial!==before)this.onChange();
+ }
  clearIdentity(id,video){if(video.getAttribute('data-video-control-registry')===this.owner&&video.getAttribute('data-video-control-id')===id){video.removeAttribute('data-video-control-id');video.removeAttribute('data-video-control-registry');}}
  remove(id,video){this.videos.delete(id);this.ids.delete(video);this.titleCache.delete(video);this.onRemove?.(id,video);this.clearIdentity(id,video);}
  observe(root){
@@ -87,7 +97,7 @@ export class MediaRegistry{
   }
   this.prune();this.walkedRoots=new WeakSet();
   for(const [root,observer]of this.observers)observer.observe(root,{childList:true,subtree:true});
-  this.scan(this.document);this.enqueue(this.document,{force:true});
+  this.scan(this.document,true);
  }
  queueMutations(root,records){
   if(this.disposed||!this.exploring||!records?.length)return false;
@@ -170,7 +180,7 @@ export class MediaRegistry{
   }
   this.walkQueue.push({root,walker:null,rescan:false,session});this.scheduleWalk();return true;
  }
- scheduleWalk(){if(!this.walkTimer&&!this.disposed&&this.exploring)this.walkTimer=setTimeout(()=>this.walkBatch(),120);}
+ scheduleWalk(){if(!this.walkTimer&&!this.disposed&&this.exploring)this.walkTimer=setTimeout(()=>this.walkBatch(),500);}
  promoteDeferred(){
   while(!this.disposed&&this.walkQueue.length<24&&this.walkDeferred.size){
    const [root,options]=this.walkDeferred.entries().next().value;this.walkDeferred.delete(root);this.enqueue(root,options);

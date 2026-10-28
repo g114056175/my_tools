@@ -26,6 +26,21 @@ test('Bilibili thumbnail previews are excluded without a BV ID or source',()=>{
  }
 });
 
+test('Bilibili recommendation shells win over embedded player classes',()=>{
+ for(const shell of ['.video-page-card-small','.v-recommend-inline-player']){
+  for(const source of ['', 'blob:sidebar-preview']){
+   const item=video([shell,'.bpx-player-container','bwp-video'],source);
+   assert.equal(isMediaPreview(item,target('https://www.bilibili.com/video/BV1main')),true,shell);
+   assert.equal(mediaCanInitialize(item,target('https://www.bilibili.com/video/BV1main')),false,shell);
+  }
+ }
+});
+
+test('Bilibili recommendation preview classification survives a shadow boundary',()=>{
+ const host=video(['.v-recommend-inline-player']),item=video(['bwp-video']);item.getRootNode=()=>({host});
+ assert.equal(isMediaPreview(item,target('https://www.bilibili.com/video/BV1main')),true);
+});
+
 test('real YouTube players and Shorts take precedence over generic card ancestors',()=>{
  for(const route of ['watch?v=main','shorts/main','embed/main','live/main']){
   const item=video(['#movie_player','ytd-rich-item-renderer'],'blob:main');
@@ -51,7 +66,7 @@ test('a preview shell across an open shadow boundary is still excluded',()=>{
 
 test('social feeds and unrelated hosts are never excluded by thumbnail-like classes',()=>{
  for(const host of ['www.facebook.com','www.instagram.com','www.tiktok.com','www.youtube.com.example.test','example.test']){
-  const item=video(['.video-card','ytd-video-preview'],'blob:feed');
+  const item=video(['.video-card','ytd-video-preview','.video-page-card-small','.v-recommend-inline-player'],'blob:feed');
   assert.equal(isMediaPreview(item,target('https://'+host+'/feed')),false,host);
   assert.equal(mediaCanInitialize(item,target('https://'+host+'/feed')),true,host);
  }

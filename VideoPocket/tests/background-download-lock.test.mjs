@@ -13,6 +13,8 @@ import {createDestinationMonitor} from '../extension/destination-monitor.js';
 import {pageMediaLease,createPageMediaGuard} from '../extension/page-media-guard.js';
 import {BUILD_ID} from '../extension/build-info.js';
 import {createYoutubeSourceSessions,preferYoutubeSession} from '../extension/youtube-source-session.js';
+import {VideoPlaybackAbrRequest} from '../extension/vendor/sabr.js';
+import {readYoutubePageSession,youtubePageSession} from '../extension/youtube-page-session.js';
 import {pageMediaPresence} from '../extension/media-presence.js';
 import {createDiscoveryIntent,existingMediaResources,renewPageObservation,stopPageObservation} from '../extension/discovery-intent.js';
 import {createPopupMarkerController} from '../extension/popup-marker.js';
@@ -27,7 +29,7 @@ import {genericPlayerSnapshot} from '../extension/generic-player.js';
 import {createYoutubeCaptionReader,youtubeCaptionAssist} from '../extension/youtube-caption-assist.js';
 import {isExpiredSourceAuth,matchesRecoverySelection,refreshedSourceDescriptor,sourceContentIdentity,sourceRecoveryTarget} from '../extension/source-recovery.js';
 
-async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserDownloadItem={},browserDownloadItems,browserSaveError,inspectHandler,genericSnapshots=[],tabUrl,recoveryValidation,downloadGate,acceptHandler,initialStorage={},initialTabs=[],destinationHandles=new Map(),getYoutubeSession=async()=>null,captionRead,offscreenPresent=false,leaseResults=[]}={}) {
+async function loadBackground({frames=[],frameSnapshots=[],youtubePageSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserDownloadItem={},browserDownloadItems,browserSaveError,inspectHandler,genericSnapshots=[],tabUrl,recoveryValidation,downloadGate,acceptHandler,initialStorage={},initialTabs=[],destinationHandles=new Map(),getYoutubeSession=async()=>null,captionRead,offscreenPresent=false,leaseResults=[]}={}) {
   const source=await fs.readFile(new URL('../extension/background.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const stored={...initialStorage};let listener,tabUpdateListener,tabRemovedListener,windowRemovedListener,connectListener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,destinationClearCount=0,destinationMonitor,clockNow=Date.now(),portNo=0,windowCount=1;const retainReleases=[];
@@ -65,6 +67,13 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
     scripting:{executeScript:async request=>{
       scriptRequests.push(request);
       if(request.files)return [];
+      if(request.func===readYoutubePageSession){
+        const snapshot=typeof youtubePageSnapshots==='function'?await youtubePageSnapshots(request):youtubePageSnapshots.shift();
+        if(!snapshot)return [];
+        const targetDocument=request.target?.documentIds?.[0];
+        if(snapshot.documentId!==undefined&&snapshot.documentId!==targetDocument)return [];
+        return [{frameId:snapshot.frameId??(targetDocument==='child'?2:0),documentId:snapshot.documentId??targetDocument,result:snapshot.result??snapshot}];
+      }
       if(request.func===pageMediaLease)return [{documentId:request.target.documentIds[0],result:leaseResults.shift() || {valid:true}}];
       if(request.func===genericPlayerSnapshot){genericCalls.push(request);return [{documentId:request.target.documentIds[0],result:genericSnapshots.shift() || {valid:false}}];}
       if(request.func===pageSubtitlesMock&&captionRead)return [{documentId:request.target.documentIds[0],result:await captionRead(request.args)}];
@@ -79,7 +88,7 @@ async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],
   const scriptRequests=[];
   const context={createDownloadStallGuard:timedDownloadStallGuard,chrome,BUILD_ID,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,Date:RuntimeDate,console,setTimeout,clearTimeout,setInterval:()=>0,createDiscoveryIntent:options=>createDiscoveryIntent({...options,setTimer:()=>0,clearTimer:()=>{}}),existingMediaResources,renewPageObservation,stopPageObservation,beginYoutubeSessionObservation:()=>{},endYoutubeSessionObservation:async()=>{},beginYoutubeCaptionObservation:()=>{},endYoutubeCaptionObservation:async()=>{},createGenericFallback,genericFallbackEligible,earlyPlayerEligible,earlyPlayerPlatform,genericPageUrl,genericPlayerSnapshot,createYoutubeCaptionReader,youtubeCaptionAssist,preferYoutubeSession,isExpiredSourceAuth,matchesRecoverySelection,refreshedSourceDescriptor,sourceContentIdentity,sourceRecoveryTarget,
     pageSnapshot:pageSnapshotMock,pageMediaPresence,pageMediaLease,createPageMediaGuard,createDestinationMonitor:options=>{destinationMonitor=createDestinationMonitor({...options,setTimer:()=>0,clearTimer:()=>{}});return destinationMonitor;},pageSubtitles:pageSubtitlesMock,createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
-    ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:getYoutubeSession,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
+    ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:getYoutubeSession,youtubePageSession,readYoutubePageSession,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,mediaRequestHeaders:()=>[],
     VideoPocketDestinations:{remove:async id=>destinationHandles.delete(id),clear:async()=>{destinationClearCount++;destinationHandles.clear();},get:async id=>destinationHandles.get(id)||false},
     downloadKey,createDownloadClaims,createJobAdmission,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates,enableTab(){},disableTab(){},seed(){}}),attachNetworkSources,networkFallbackReason,socialPageFetch:()=>{}};
@@ -114,6 +123,15 @@ test('popup request ownership order follows request arrival even when an older i
 });
 function activitySnapshots(rt){return rt.engineMessages.filter(message=>message.action==='sourceActivity').map(message=>JSON.parse(JSON.stringify(message.activeSourceTabs||[])));}
 function popupSender(port){return {id:'ext',url:'chrome-extension://ext/popup.html',documentId:port.documentId};}
+function youtubePageSnapshot(descriptor,{videoId=descriptor.platform.id,documentId=descriptor.documentId,frameId=descriptor.frameId,config=Uint8Array.of(3,7,11,19),poToken=Uint8Array.of(5,8,13),candidates}={}){
+ const body=VideoPlaybackAbrRequest.encode({
+  initializationFormatIds:[],bufferedRanges:[],selectedAudioFormatIds:[],selectedVideoFormatIds:[],selectedCaptionFormatIds:[],ssapPlaybackInfos:[],field1000:[],
+  streamerContext:{clientInfo:{},sabrContexts:[],unsentSabrContexts:[],poToken},videoPlaybackUstreamerConfig:config,
+ }).finish();
+ const bodyText=Buffer.from(body).toString('base64'),url=descriptor.platform.streamingData.serverAbrStreamingUrl;
+ const result={videoId,streamId:new URL(url).searchParams.get('id'),url,config:Buffer.from(config).toString('base64'),candidates:candidates??[bodyText]};
+ return {documentId,frameId,result,body:bodyText};
+}
 
 test('popup presence checks retain document and frame ownership without starting discovery or the engine',async()=>{
  const targets=[{frameId:0,documentId:'doc',mediaKey:1},{frameId:0,documentId:'doc',mediaKey:2},{frameId:2,documentId:'child',mediaKey:1},{frameId:3,documentId:'gone',mediaKey:1}];
@@ -236,10 +254,71 @@ test('YouTube downloads cannot use a live observation from a different frame',as
  const descriptor={tabId:1,frameId:0,documentId:'frame-doc',mediaKey:1,title:'Frame owned title',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=frame-stream'}}};
  const capture={tabId:1,frameId:1,documentId:'frame-doc',streamId:'frame-stream',body:'wrong-frame-session',createdAt:Date.now()};
  let rt,used='not-requested';
- rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{used=await rt.call({action:'youtubeSession',descriptor},{id:'ext',url:'chrome-extension://ext/offscreen.html'});return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};}});
+ rt=await loadBackground({getYoutubeSession:async()=>capture,youtubePageSnapshots:()=>youtubePageSnapshot(descriptor,{candidates:[]}),downloadGate:async()=>{used=await rt.call({action:'youtubeSession',descriptor},{id:'ext',url:'chrome-extension://ext/offscreen.html'});return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};}});
  const close=rt.connect(),source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
  for(let i=0;i<100&&rt.jobs().find(j=>j.id===job.id)?.state!=='error';i++)await new Promise(resolve=>setImmediate(resolve));
- assert.equal(used,null);assert.equal(rt.jobs().find(j=>j.id===job.id)?.errorCode,'SOURCE_UNAVAILABLE');close();
+ assert.equal(used,null);assert.equal(rt.jobs().find(j=>j.id===job.id)?.errorCode,'SOURCE_UNAVAILABLE');
+ assert.ok(rt.scriptRequests.some(request=>request.func===readYoutubePageSession),'the miss path checks the selected page after rejecting the wrong-frame live capture');close();
+});
+
+test('a paused YouTube download can build its session from the selected document when live and source caches miss',async()=>{
+ const descriptor={tabId:1,frameId:2,documentId:'paused-doc',mediaKey:33,title:'Paused YouTube title',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=paused-stream'}}};
+ const snapshot=youtubePageSnapshot(descriptor);let rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>null,youtubePageSnapshots:[snapshot],downloadGate:async()=>{
+  used=await rt.call({action:'youtubeSession',descriptor},engineSender);
+  return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor});
+ const readerRequest=rt.scriptRequests.find(request=>request.func===readYoutubePageSession);
+ assert.ok(readerRequest);assert.equal(readerRequest.world,'MAIN');assert.deepEqual(Array.from(readerRequest.target.documentIds),[descriptor.documentId]);
+ const lookups=rt.engineMessages.filter(message=>message.action==='youtubeSourceSession');
+ assert.ok(lookups.some(message=>!message.capture),'the test begins without a live or offscreen session');
+ assert.ok(lookups.some(message=>message.capture?.body===snapshot.body),'the real youtubePageSession result is saved to the source cache');
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'}),finished=await completedJob(rt,job.id);
+ assert.equal(finished.state,'done');assert.equal(used?.body,snapshot.body);
+ assert.equal(used?.documentId,descriptor.documentId);assert.equal(used?.frameId,descriptor.frameId);
+ assert.equal(used?.streamId,'paused-stream');
+ const decoded=VideoPlaybackAbrRequest.decode(Uint8Array.from(atob(used.body),character=>character.charCodeAt(0)));
+ assert.deepEqual([...decoded.videoPlaybackUstreamerConfig],[3,7,11,19]);
+ close();
+});
+
+test('a YouTube page snapshot for another video is never used as a download session',async()=>{
+ const descriptor={tabId:1,frameId:0,documentId:'video-bound-doc',mediaKey:9,title:'Bound video',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=bound-stream'}}};
+ const snapshot=youtubePageSnapshot(descriptor,{videoId:'different-video'});let rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>null,youtubePageSnapshots:()=>snapshot,downloadGate:async()=>{
+  used=await rt.call({action:'youtubeSession',descriptor},engineSender);
+  return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'}),finished=await completedJob(rt,job.id);
+ assert.equal(used,null);assert.equal(finished.state,'error');assert.equal(finished.errorCode,'SOURCE_UNAVAILABLE');
+ assert.equal(rt.engineMessages.some(message=>message.action==='youtubeSourceSession'&&message.capture),false);
+ close();
+});
+
+test('a page snapshot from a different document is not used for a YouTube download',async()=>{
+ const descriptor={tabId:1,frameId:2,documentId:'selected-doc',mediaKey:19,title:'Selected document',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=selected-stream'}}};
+ const snapshot=youtubePageSnapshot(descriptor,{documentId:'other-document'}),rt=await loadBackground({getYoutubeSession:async()=>null,youtubePageSnapshots:[snapshot]});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor});
+ await assert.rejects(rt.call({action:'download',sourceId:source.id,kind:'video'}));
+ const requests=rt.scriptRequests.filter(request=>request.func===readYoutubePageSession);
+ assert.ok(requests.length);assert.ok(requests.every(request=>request.target.documentIds[0]==='selected-doc'));
+ assert.equal(rt.engineMessages.some(message=>message.action==='youtubeSourceSession'&&message.capture),false);
+ assert.equal(rt.engineMessages.some(message=>message.action==='download'),false);
+ close();
+});
+
+test('an existing live YouTube capture remains preferred over the page snapshot',async()=>{
+ const descriptor={tabId:1,frameId:0,documentId:'live-priority-doc',mediaKey:7,title:'Live capture priority',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=priority-stream'}}};
+ const liveSnapshot=youtubePageSnapshot(descriptor,{poToken:Uint8Array.of(1)}),fallbackSnapshot=youtubePageSnapshot(descriptor,{poToken:Uint8Array.of(1,2,3,4)});
+ const liveCapture=youtubePageSession(descriptor,liveSnapshot.result,Date.now());let rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>liveCapture,youtubePageSnapshots:[fallbackSnapshot],downloadGate:async()=>{
+  used=await rt.call({action:'youtubeSession',descriptor},engineSender);return {ok:true,result:{saved:true}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used?.body,liveSnapshot.body);assert.equal(used?.poLength,1);
+ assert.equal(rt.scriptRequests.some(request=>request.func===readYoutubePageSession),false);
+ close();
 });
 
 const captionVideo={tabId:1,frameId:0,documentId:'caption-doc',mediaKey:8,title:'Captioned video',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=caption-stream'}}};

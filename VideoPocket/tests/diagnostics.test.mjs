@@ -26,7 +26,7 @@ test('range-processing timeout stays a merge failure and retains only an allowed
 test('a missing YouTube playback session remains actionable and distinct from a source or verification failure',()=>{
  const failure=classifyFailure({code:'YOUTUBE_SESSION_UNAVAILABLE',sourceStage:'youtube-session',message:'private request body'});
  assert.equal(failure.code,'YOUTUBE_SESSION_UNAVAILABLE');assert.equal(classifyFailure(failure).sourceStage,'youtube-session');
- assert.deepEqual(briefFailure(failure),{code:'E02',message:'Play the video briefly, then retry'});
+ assert.deepEqual(briefFailure(failure),{code:'E02',message:'Could not read video playback data. Refresh the page and retry.'});
  assert.deepEqual(briefFailure({code:'STREAM_VERIFICATION'}),{code:'E02',message:'Stream verification failed. Refresh the page and retry.'});
  assert.ok(!JSON.stringify(failure).includes('private request body'));
 });

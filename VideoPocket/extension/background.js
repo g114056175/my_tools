@@ -9,6 +9,7 @@ import {normalizeCues,parseSubtitles} from './subtitles.js';
 import {ACTIVE_STATES} from './jobs.js';
 import {youtubeSession,beginYoutubeSessionObservation,endYoutubeSessionObservation} from './youtube-session.js';
 import {preferYoutubeSession} from './youtube-source-session.js';
+import {readYoutubePageSession,youtubePageSession} from './youtube-page-session.js';
 import {youtubeCaptionRequest,beginYoutubeCaptionObservation,endYoutubeCaptionObservation} from './youtube-captions.js';
 import {createYoutubeCaptionReader,youtubeCaptionAssist} from './youtube-caption-assist.js';
 import {classifyFailure,ERROR_RETENTION_MS} from './diagnostics.js';
@@ -242,7 +243,14 @@ async function youtubeDownloadSession(meta,sourceId){
  if(meta?.platform!=='youtube'||!meta.descriptor?.platform?.streamingData?.serverAbrStreamingUrl)return null;
  const live=await youtubeSession(meta.descriptor);
  const cached=await engine('youtubeSourceSession',{sourceId,...(live?{capture:live}:{})});
- return cached || null;
+ if(cached)return cached;
+ // Opening after playback was paused may produce no new network request.
+ // Read the selected player's already prepared request before giving up.
+ const descriptor=meta.descriptor,streamId=new URL(descriptor.platform.streamingData.serverAbrStreamingUrl).searchParams.get('id');
+ const page=await script(descriptor.tabId,readYoutubePageSession,[{videoId:descriptor.platform.id,streamId,mediaKey:descriptor.mediaKey}],descriptor.documentId);
+ if(page?.changed)throw Object.assign(new Error('影片已變更，請重新選取'),{code:'SOURCE_CHANGED'});
+ const capture=youtubePageSession(descriptor,page);
+ return capture?await engine('youtubeSourceSession',{sourceId,capture}):null;
 }
 async function inspectSourceDescriptor(descriptor,inspectionId,alreadyVerified=false,force=false){
  if(!alreadyVerified)await verifyMetadataPlan(descriptor);

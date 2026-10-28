@@ -169,7 +169,12 @@ export async function youtubeCaptionAssist(options){
  const exactUrl=raw=>{
   try{const url=new URL(raw,location.href),p=params(url.href);return url.protocol==='https:'&&/(^|\.)youtube\.com$/.test(url.hostname)&&url.pathname==='/api/timedtext'&&p.get('v')===expectedId&&norm(p.get('lang'))===norm(target.languageCode)&&!p.has('tlang')&&(p.get('kind')==='asr')===(target.kind==='asr')&&(p.get('name') || '')===targetName;}catch{return false;}
  };
- const keep=raw=>{if(!finished&&!state.cancelled&&same()&&typeof raw==='string'&&raw.length<=4*1024*1024){state.raw=raw;state.hasResponse=true;state.failure=null;state.reloaded=true;}};
+ const keep=raw=>{if(!finished&&!state.cancelled&&same()&&typeof raw==='string'&&raw.length<=4*1024*1024){
+  // A second response for the same track must not erase a body still waiting
+  // for the reader. Empty bodies remain observable when no body was retained.
+  if(state.hasResponse&&state.raw?.trim()&&!raw.trim())return;
+  state.raw=raw;state.hasResponse=true;state.failure=null;state.reloaded=true;
+ }};
  const fail=(code,status)=>{
   if(finished||state.cancelled||state.hasResponse||!same())return;
   state.reloaded=true;
@@ -190,8 +195,8 @@ export async function youtubeCaptionAssist(options){
  // A previously loaded track may be served entirely from the player's cache,
  // producing no response for our temporary observer. Reload it at most once;
  // do not duplicate an in-flight request or a response already captured.
- state.reload=async()=>{
-  if(state.reloaded||!state.applied||Date.now()-state.appliedAt<350||state.hasResponse||state.failure||nativePending||xhrs.size||!state.owns()||!allowed(false,state.intent))return;
+ state.reload=async(immediate=false)=>{
+  if(state.reloaded||!state.applied||(!immediate&&Date.now()-state.appliedAt<350)||state.hasResponse||state.failure||nativePending||xhrs.size||!state.owns()||!allowed(false,state.intent))return;
   state.reloaded=true;await control('setOption',['captions','reload',true]);
  };
  state.finish=(restore=true)=>{
@@ -307,7 +312,7 @@ export async function youtubeCaptionAssist(options){
    await new Promise(resolve=>setTimeout(resolve,100));
   }
   if(!state.applied){await state.finish();return {started:false};}
-  if(matches(beforeTrack)){state.reloaded=true;await control('setOption',['captions','reload',true]);}
+  if(matches(beforeTrack))await state.reload(true);
   if(state.phase!=='capturing'||state.cancelled){await state.finish();return {started:false};}
   return {started:true};
  }catch{

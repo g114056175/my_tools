@@ -109,6 +109,49 @@ test('a slow native response is not duplicated by the cache recovery reload',asy
  await w.run({action:'finish',token:'one'});assert.equal(w.state.enabled,false);
 });
 
+test('selecting the remembered track does not reload while its native request is still in flight',async()=>{
+ const pending=[],w=world({active:zh,makeResponse:()=>new Promise(resolve=>pending.push(resolve))});
+ try{
+  assert.equal((await start(w)).started,true);
+  assert.equal(pending.length,1);
+  assert.equal(w.calls.filter(c=>c[0]==='reload').length,0);
+  pending[0](new Response(body('native')));await w.flush();
+  assert.equal(JSON.parse((await w.run({action:'poll',token:'one'})).raw).events[0].segs[0].utf8,'native');
+ }finally{
+  for(const resolve of pending)resolve(new Response(body('native')));
+  await w.run({action:'finish',token:'one'});
+ }
+ assert.equal(w.state.enabled,false);assert.equal(w.context.fetch,w.originalFetch);
+});
+
+test('a later empty native response cannot overwrite a caption body waiting to be consumed',async()=>{
+ const pending=[],w=world({makeResponse:()=>new Promise(resolve=>pending.push(resolve))});
+ try{
+  assert.equal((await start(w)).started,true);
+  void w.context.fetch(zh.baseUrl);
+  assert.equal(pending.length,2);
+  pending[0](new Response(body('keep this caption')));await w.flush();
+  pending[1](new Response(''));await w.flush();
+  const state=await w.run({action:'poll',token:'one'});
+  assert.equal(state.hasResponse,true);
+  assert.equal(JSON.parse(state.raw).events[0].segs[0].utf8,'keep this caption');
+ }finally{
+  for(const resolve of pending)resolve(new Response(''));
+  await w.run({action:'finish',token:'one'});
+ }
+ assert.equal(w.state.enabled,false);assert.equal(w.state.active.vssId,en.vssId);
+});
+
+test('an empty recovery poll still accepts a later non-empty native response',async()=>{
+ let tick=0,polls=0;
+ const capture=createYoutubeCaptionReader({
+  read:async()=>{throw failure();},
+  command:async(_request,options)=>options.action==='start'?{started:true}:options.action==='finish'?{restored:true}:++polls===1?{hasResponse:true,raw:''}:{hasResponse:true,raw:body('later')},
+  request:async()=>undefined,now:()=>tick,sleep:async ms=>{tick+=ms;},waitMs:200
+ });
+ assert.equal((await capture(input)).cues[0].text,'later');assert.equal(polls,2);
+});
+
 test('restoration also confirms captions are off when unloading alone leaves the native toggle on',async()=>{
  const w=world();await start(w);
  w.player.unloadModule=()=>{w.calls.push(['unload-only']);};

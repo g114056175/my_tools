@@ -1,6 +1,6 @@
 # VideoPocket - 網頁媒體下載與擷取 <img src="extension/icons/48.png" width="32" height="32" alt="VideoPocket icon">
 
-**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=4f1e080f00ea)** · 解壓約 7.1 MB · Chrome 120 以上
+**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=7fc1e1527ef4)** · 解壓約 7.1 MB · Chrome 120 以上
 
 在網頁中選擇影片，下載影片、音檔或字幕；所有處理都在本機瀏覽器完成。
 
@@ -62,6 +62,7 @@
 
 - **Chrome Manifest V3**：popup 提供介面，service worker 管理工作，offscreen document 與 worker 執行下載及影音處理。
 - **選片與解析**：讀取影片元素、Shadow DOM、播放器設定及播放中繼資料；以文件、播放器與媒體識別配對來源，避免混用廣告或其他影片。
+- **播放器與檔案配對**：影片元素不一定直接包含檔案網址；動態換片、迷你視窗或廣告也可能重用元素。須核對文件、播放器及媒體身分，不能只靠畫面位置、順序或名稱配對。
 - **通用探索**：借鑑 [yt-dlp Generic](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/generic.py) 的分層探索方式，辨識 JW Player、Video.js 與 JSON-LD，並核對來源是否屬於所選影片。
 - **按需探索**：開啟工具或執行選片、字幕擷取、來源重驗時才觀察與解析；操作結束後停止並清除觀察紀錄。讀取現存播放器資料及瀏覽器資源紀錄有數量與時間上限。播放器已丟棄的一次性來源可能無法事後補抓，不保存播放緩衝或建立網域學習紀錄。
 - **共同流程**：平台來源正規化後，共用畫質選擇、HLS／DASH 解析、傳輸、合併及儲存流程；YouTube／Bilibili 等特殊協定由各自模組處理。
@@ -82,7 +83,7 @@
 
 HLS／DASH 依時間取得所需分段與解碼前置資料。一般 MP4 在具備可靠 sample table／SIDX 且來源支援 HTTP Range 時，可局部下載；否則在片長與格式可確認時，提供完整下載後裁切，並顯示提醒。
 
-切點合適時直接複製；相容的 H.264／MP4 或部分 VP9／WebM 可重編邊界並複製中段。輸出核對時間軸並解碼驗證；不適用或驗證失敗時，回退為整個所選區間的精準轉碼。
+時間戳通常可由清單或索引取得，但切點影格可能依賴區間外的畫面。裁切須保留必要的解碼前置資料並對齊影音時間軸；切點合適時直接複製，相容的 H.264／MP4 或部分 VP9／WebM 可重編邊界並複製中段。輸出核對時間軸並解碼驗證；不適用或驗證失敗時，回退為整個所選區間的精準轉碼。
 
 短片段、長 GOP、高解析度及瀏覽器編碼支援都可能增加處理成本。精度受原始影格與音訊封包間隔限制，局部下載不保證裁切處理比下載快。跨播放器的編碼參數切換與邊界相容性仍需持續驗證。
 

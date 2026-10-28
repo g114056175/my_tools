@@ -178,10 +178,29 @@
     if (!values.length || values.length > 64 || values.some((value) => !validRate(value))) throw Error("Use 1\u201364 ticks between 0.06 and 16");
     return normalizeSteps(values);
   }
-  function rankTargets(items, pinned2) {
+  var TARGET_PREFERENCE_MS = 4e3;
+  function targetIsProminent(item) {
+    if (!item?.visible) return false;
+    const area = Math.max(0, Number(item.visibleArea ?? item.area ?? 1)), ratio = Number(item.visibleRatio ?? (item.area ? area / item.area : 1));
+    return area > 0 && (ratio >= 0.25 || item.viewportArea > 0 && area / item.viewportArea >= 0.2);
+  }
+  function targetScore(item, now) {
+    if (!item.visible) return 0;
+    const area = Math.max(0, Number(item.visibleArea ?? item.area ?? 1)), ratio = Math.max(0, Math.min(1, Number(item.visibleRatio ?? (item.area ? area / item.area : 1)))), center = Math.max(0, Math.min(1, Number(item.centrality ?? 1)));
+    const age = now - Number(item.interactedAt || 0), recent = Number(item.interactedAt) > 0 && age >= 0 && age < TARGET_PREFERENCE_MS;
+    return Math.sqrt(area) * (0.65 + 0.35 * ratio) * (0.7 + 0.3 * center) * (item.playing ? 1.03 : 1) * (recent ? 1.12 : 1);
+  }
+  function rankTargets(items, preference, { now = Date.now(), currentKey = null } = {}) {
     const connected = items.filter((item) => item.connected !== false);
-    if (connected.length <= 1) return connected;
-    return connected.sort((a, b) => Number(b.key === pinned2) - Number(a.key === pinned2) || Number(!!b.playing) - Number(!!a.playing) || (a.playing && b.playing ? Number(!!b.visible) - Number(!!a.visible) : 0) || (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0) || Number(!!b.visible) - Number(!!a.visible) || (b.visibleArea ?? b.area ?? 0) - (a.visibleArea ?? a.area ?? 0));
+    const fullscreen = connected.filter((item) => item.fullscreen), prominent = connected.filter(targetIsProminent), visible = connected.filter((item) => item.visible);
+    const pool = fullscreen.length ? fullscreen : prominent.length ? prominent : visible.length ? visible : connected;
+    const scored = pool.map((item) => ({ item, score: targetScore(item, now) })).sort((a, b) => b.score - a.score || Number(!!b.item.playing) - Number(!!a.item.playing) || (b.item.lastPlayedAt || 0) - (a.item.lastPlayedAt || 0));
+    if (!scored.length) return [];
+    const preferredKey = typeof preference === "string" ? preference : preference?.until > now ? preference.key : null;
+    const preferred = scored.find((value) => value.item.key === preferredKey && targetIsProminent(value.item));
+    const current = scored.find((value) => value.item.key === currentKey && targetIsProminent(value.item));
+    const first = preferred || current && current.score * 1.15 >= scored[0].score && current || scored[0];
+    return [first.item, ...scored.filter((value) => value !== first).map((value) => value.item)];
   }
 
   // extension/locale-zh.js
@@ -700,7 +719,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.17";
+  var VERSION = "0.6.18";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();
@@ -709,6 +728,9 @@
   var markerQueues = /* @__PURE__ */ new Map();
   var markedTargets = /* @__PURE__ */ new Map();
   var refreshTasks = /* @__PURE__ */ new Map();
+  var currentTargets = /* @__PURE__ */ new Map();
+  var selectionEpoch = Date.now();
+  var selectionRevision = 0;
   var keyOf = (frame, id) => frame.frameId + ":" + (frame.documentId || "") + ":" + id;
   var optionsOf = (target) => target.documentId ? { documentId: target.documentId } : { frameId: target.frameId };
   var tabGenerations = /* @__PURE__ */ new Map();
@@ -725,9 +747,9 @@
     clearTimeout(delivery?.timer);
     selectionDeliveries.delete(tabId);
   }
-  function sendSelection(tabId, message, options) {
+  function sendSelection(tabId, message, options, timeoutMs = 1e3) {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), 1e3);
+      const timer = setTimeout(() => resolve(null), timeoutMs);
       Promise.resolve().then(() => chrome.tabs.sendMessage(tabId, message, options)).then((response) => {
         clearTimeout(timer);
         resolve(response);
@@ -1050,6 +1072,7 @@
         frames.clear();
         announced.clear();
         pinned.clear();
+        currentTargets.clear();
       }
       const rate = await optionalRateState();
       await Promise.allSettled([...tabs].map((tabId) => applyPagePolicy(tabId, void 0, settings, rate, pendingTabs.has(tabId))));
@@ -1072,6 +1095,7 @@
       frames.delete(tabId);
       announced.delete(tabId);
       pinned.delete(tabId);
+      currentTargets.delete(tabId);
     }
     if (rate === void 0) rate = await optionalRateState();
     const message = { scope: SCOPE, action: "power", settings, pageUrl, language, activity: await activityFor(tabId) };
@@ -1089,7 +1113,12 @@
     return [...frames.get(tabId)?.values() || []].flatMap((frame) => frame.videos.map((video) => ({ ...video, frameId: frame.frameId, documentId: frame.documentId, key: keyOf(frame, video.id) })));
   }
   function targetFor(tabId) {
-    return rankTargets(itemsFor(tabId), pinned.get(tabId))[0] || null;
+    const items = itemsFor(tabId), preference = pinned.get(tabId);
+    if (preference && (preference.until <= Date.now() || !items.some((item) => item.key === preference.key && targetIsProminent(item)))) pinned.delete(tabId);
+    const target = rankTargets(items, pinned.get(tabId), { currentKey: currentTargets.get(tabId) })[0] || null;
+    if (target) currentTargets.set(tabId, target.key);
+    else currentTargets.delete(tabId);
+    return target;
   }
   function highlight(tabId, scroll = false, clear = false) {
     const previous = markerQueues.get(tabId) || Promise.resolve();
@@ -1121,14 +1150,15 @@
       return;
     }
     const target = targetFor(tabId), key = target?.key || "";
-    const recipients = [...frames.get(tabId)?.values() || []], signature = JSON.stringify([key, recipients.map((frame) => [frame.frameId, frame.documentId])]);
+    const recipients = [...frames.get(tabId)?.values() || []], signature = JSON.stringify([key, pinned.get(tabId)?.until || 0, recipients.map((frame) => [frame.frameId, frame.documentId, frame.videos.length > 0])]);
     let delivery = selectionDeliveries.get(tabId);
-    if (delivery?.signature !== signature) {
+    const signatureChanged = delivery?.signature !== signature;
+    if (signatureChanged) {
       clearTimeout(delivery?.timer);
-      delivery = { signature, key, attempts: 0, pending: false, timer: null };
+      delivery = { signature, key, revision: ++selectionRevision, attempts: 0, pending: false, timer: null };
       selectionDeliveries.set(tabId, delivery);
     }
-    if ((force || announced.get(tabId) !== key) && !delivery.pending) {
+    if ((force || signatureChanged || announced.get(tabId) !== key) && !delivery.pending) {
       clearTimeout(delivery.timer);
       delivery.timer = null;
       delivery.pending = true;
@@ -1140,11 +1170,13 @@
           clearSelectionDelivery(tabId);
           return;
         }
-        const message = { scope: SCOPE, action: "activeTarget", hasTarget: !!target };
+        const message = { scope: SCOPE, action: "activeTarget", hasTarget: !!target, selectionEpoch, selectionRevision: delivery.revision, preference: pinned.get(tabId) || null };
         if (rate) Object.assign(message, { lastRate: rate.lastRate, rateRevision: rate.rateRevision });
         const responses = await Promise.allSettled(recipients.map(async (frame) => {
           const id = frame.documentId === target?.documentId && frame.frameId === target?.frameId ? target.id : null;
-          const response = await sendSelection(tabId, { ...message, id }, optionsOf(frame));
+          const hasOtherFrames = recipients.some((other) => other.frameId !== frame.frameId && other.videos.length > 0);
+          const preference = message.preference && id ? { key: id, until: message.preference.until } : null;
+          const response = await sendSelection(tabId, { ...message, id, hasOtherFrames, preference }, optionsOf(frame));
           return response?.ok === true && response.activeId === id;
         }));
         if (selectionDeliveries.get(tabId) !== delivery) return;
@@ -1188,7 +1220,16 @@
     } catch {
     }
   }
-  function record(tabId, frameId, documentId, videos, pendingUntil = 0) {
+  function record(tabId, frameId, documentId, videos, pendingUntil = 0, snapshotRevision = 0, snapshotEpoch = 0) {
+    const previous = frames.get(tabId)?.get(frameId);
+    if (previous?.documentId === documentId) {
+      if (snapshotEpoch > 0 && previous.snapshotEpoch > snapshotEpoch) return;
+      if (snapshotEpoch === previous.snapshotEpoch && snapshotRevision > 0 && previous.snapshotRevision > snapshotRevision) return;
+      if (!snapshotEpoch) {
+        snapshotEpoch = previous.snapshotEpoch || 0;
+        if (!snapshotRevision) snapshotRevision = previous.snapshotRevision || 0;
+      }
+    }
     const items = Array.isArray(videos) ? videos.slice(0, 64) : [];
     if (frameId > 0 && !items.length) {
       if (frames.get(tabId)?.delete(frameId)) announce(tabId, true);
@@ -1196,8 +1237,20 @@
     }
     if (!frames.has(tabId)) frames.set(tabId, /* @__PURE__ */ new Map());
     const fresh = frames.get(tabId).get(frameId)?.documentId !== documentId;
-    frames.get(tabId).set(frameId, { frameId, documentId, videos: items, pendingUntil });
+    frames.get(tabId).set(frameId, { frameId, documentId, videos: items, pendingUntil, snapshotRevision, snapshotEpoch });
     announce(tabId, fresh);
+  }
+  async function resampleTargets(tabId, sender, skipSender = false) {
+    if (!await mayContactPage(tabId)) return;
+    const all = frames.get(tabId), target = targetFor(tabId);
+    if (!all) return;
+    const candidates = [all.get(sender?.frameId), all.get(target?.frameId), ...[...all.values()].filter((frame) => frame.videos.length)].filter(Boolean);
+    const unique = [...new Map(candidates.map((frame) => [frame.frameId, frame])).values()].filter((frame) => !skipSender || frame.frameId !== sender.frameId || frame.documentId !== sender.documentId).slice(0, 8);
+    await Promise.allSettled(unique.map(async (frame) => {
+      const response = await sendSelection(tabId, { scope: SCOPE, action: "snapshot", verify: true }, optionsOf(frame), 160);
+      if (all.get(frame.frameId) !== frame || !response?.ok || !Array.isArray(response.videos)) return;
+      record(tabId, frame.frameId, frame.documentId, response.videos, response.pendingUntil || 0, response.snapshotRevision || 0, response.snapshotEpoch || 0);
+    }));
   }
   async function refresh(tabId, force = false) {
     const settings = await stored2();
@@ -1297,6 +1350,11 @@
       await refresh(tabId, true);
       return dispatch(tabId, message, false);
     }
+    if (result?.staleTarget && retry) {
+      record(tabId, target.frameId, target.documentId, result.videos, result.pendingUntil || 0, result.snapshotRevision || 0, result.snapshotEpoch || 0);
+      await announce(tabId);
+      return dispatch(tabId, { ...message, key: void 0 }, false);
+    }
     if (!result?.ok) throw Error(result?.error || "Video did not respond; reload the page");
     const frame = frames.get(tabId)?.get(target.frameId);
     if (frame?.documentId === target.documentId) {
@@ -1352,7 +1410,7 @@
       if (settings2.enabled && sender.tab?.id && !disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) && !disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes)) {
         const activity = await activityFor(sender.tab.id), pendingUntil = Number.isSafeInteger(message.pendingUntil) ? Math.min(message.pendingUntil, activity.loadingUntil || 0) : 0;
         const eligible = activity.focused || activity.until > Date.now() || pendingUntil > Date.now();
-        record(sender.tab.id, sender.frameId, sender.documentId, eligible ? message.videos : [], eligible ? pendingUntil : 0);
+        record(sender.tab.id, sender.frameId, sender.documentId, eligible ? message.videos : [], eligible ? pendingUntil : 0, message.snapshotRevision || 0, message.snapshotEpoch || 0);
         const target = targetFor(sender.tab.id);
         targetMatches = !!hint && target?.id === hint.id && target.frameId === sender.frameId && target.documentId === sender.documentId;
       }
@@ -1368,7 +1426,8 @@
     if (message.action === "picked") {
       if (!(await stored2()).enabled) return {};
       if (!sender.tab?.id) return {};
-      pinned.set(sender.tab.id, keyOf(sender, message.id));
+      if (Array.isArray(message.videos)) record(sender.tab.id, sender.frameId, sender.documentId, message.videos, message.pendingUntil || 0, message.snapshotRevision || 0, message.snapshotEpoch || 0);
+      pinned.set(sender.tab.id, { key: keyOf(sender, message.id), until: Date.now() + TARGET_PREFERENCE_MS });
       await chrome.tabs.sendMessage(sender.tab.id, { scope: SCOPE, action: "cancelPick" }).catch(() => {
       });
       await announce(sender.tab.id);
@@ -1397,7 +1456,7 @@
     if (disabledOnUrl(tab.url, settings.disabledSites, settings.siteModes)) throw Error("Disabled on this site");
     if (message.action === "select") {
       if (!itemsFor(tabId).some((item) => item.key === message.key)) throw Error("Video changed; select it again");
-      pinned.set(tabId, message.key);
+      pinned.set(tabId, { key: message.key, until: Date.now() + TARGET_PREFERENCE_MS });
       await announce(tabId);
       await highlight(tabId, true);
       return {};
@@ -1413,6 +1472,11 @@
       return {};
     }
     if (message.action === "command") {
+      if (fromPage && Array.isArray(message.videos)) record(tabId, sender.frameId, sender.documentId, message.videos, message.pendingUntil || 0, message.snapshotRevision || 0, message.snapshotEpoch || 0);
+      if (message.reselect || !fromPage) {
+        await resampleTargets(tabId, sender, fromPage && Array.isArray(message.videos));
+        await announce(tabId);
+      }
       if (!targetFor(tabId)) await refresh(tabId);
       return { result: await dispatch(tabId, message) };
     }
@@ -1461,6 +1525,7 @@
     frameGenerations.delete(tabId);
     frames.delete(tabId);
     pinned.delete(tabId);
+    currentTargets.delete(tabId);
     announced.delete(tabId);
     markedTargets.delete(tabId);
     markerQueues.delete(tabId);

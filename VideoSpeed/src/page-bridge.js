@@ -3,7 +3,7 @@ import {syncPlayerRate} from './player-rate.js';
 import {isMediaPreview,mediaSignature,mediaCanInitialize} from './media-registry.js';
 import {RateBridge} from './rate-bridge.js';
 const marker=Symbol.for('video-control.page-bridge-v3');
-const version='0.6.17',previous=globalThis[marker];
+const version='0.6.18',previous=globalThis[marker];
 if(previous?.version!==version){
  try{if(previous?.dispose)previous.dispose();else previous?.stop?.();}catch{}
  let active=false,exploring=true,waiting=false,qualityEnabled=false,abort,restore=[],generation=0,rateBridge=null,bridgeOwner=null,refreshBindings=()=>{},bindTimer=null;

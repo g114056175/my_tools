@@ -1,4 +1,4 @@
-import {normalizeSettings,shortcutAction,editingEvent,validRate} from './settings.js';
+import {normalizeSettings,shortcutAction,editingEvent,validRate,rankTargets} from './settings.js';
 import {RateController} from './rate-controller.js';
 import {MediaRegistry,mediaSignature,isMediaPreview,mediaCanInitialize} from './media-registry.js';
 import {highlightMedia} from './media-highlight.js';
@@ -11,8 +11,9 @@ import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
 import {PendingMediaLease} from './pending-media-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
+import {SelectionOrder} from './selection-order.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.17',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.18',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -28,6 +29,8 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  let disposed=false,locale=resolveLanguage(language);
  const listen=(target,type,handler,options={})=>target.addEventListener(type,handler,{...(typeof options==='boolean'?{capture:options}:options),signal:abort.signal});
  let settings=initialSettings,ready=true,reportTimer,activeId=null,hasTarget=false,lastRate=initialRate,requestSerial=0,picker=null,rememberedRate=null;
+ const snapshotEpochKey=Symbol.for('video-control.snapshot-epoch'),snapshotEpoch=Math.max(Date.now(),Number(globalThis[snapshotEpochKey]||0)+1);globalThis[snapshotEpochKey]=snapshotEpoch;
+ let preference=null,hasOtherFrames=false,snapshotRevision=0;const selectionOrder=new SelectionOrder();
  const states=new Map(),interactions=new WeakMap(),pending=new Map(),rateResponses=new Map();
  let trustedRateInput=null,registry,graceTimer=null,initialScan=true,documentPending=initialDocument&&document.readyState==='loading',focused=isFocused();
  const canDiscover=()=>initialScan||isRecent()||documentPending&&isLoading();
@@ -50,7 +53,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  }
  const pendingUntil=()=>Math.max(0,...[...states.values()].filter(state=>eligible(state.video)).map(state=>state.load.until));
  const waiting=()=>documentPending&&isLoading()||pendingUntil()>Date.now();
- const report=()=>{if(disposed)return;if(!isRecent()&&!waiting()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!waiting()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),pendingUntil:pendingUntil(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
+ const report=()=>{if(disposed)return;if(!isRecent()&&!waiting()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!waiting()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',...snapshotPacket(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
  function finishPending(state){
   if(isFocused()||!state.rate?.initialized||!state.settled||!qualityDone(state)||state.video.paused||state.video.readyState<2||state.rate.repairTimer!==null)return;
   state.load.finish();clearPending(state.video);onIdle();
@@ -141,7 +144,9 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  trustedRateInput=new TrustedRateInput(document,{getRecords:()=>[...registry.videos].map(([id,video])=>({video,selected:id===activeId,mediaKey:states.get(id)?.rateKeyToken}))});
  trustedRateInput.start();
  globalThis[Symbol.for('video-control.identities')]={keys:registry.ids};
- const snapshot=(details=false)=>registry.snapshot(states,interactions,{details,activeId});
+ const snapshot=(details=false,verify=false)=>registry.snapshot(states,interactions,{details,activeId,verify});
+ const snapshotPacket=(verify=false)=>({videos:snapshot(false,verify),pendingUntil:pendingUntil(),snapshotEpoch,snapshotRevision:++snapshotRevision});
+ const localTarget=(items,currentKey=activeId)=>rankTargets(items.map(item=>({...item,key:item.id})),preference,{currentKey})[0]||null;
  function marker(options){
   globalThis[Symbol.for('video-control.selection')]={videos:[...registry.videos.values()]};
   const result=highlightMedia(options);
@@ -211,17 +216,19 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
    if(isFocused())registry.scan(document,true);
    if(!snapshot().some(video=>video.visible))return false;
   }
+  const packet=snapshotPacket(true),target=localTarget(packet.videos);
+  if(!target&&!hasTarget)return false;
   event.preventDefault();event.stopImmediatePropagation();
   const video=registry.videos.get(activeId);
-  if(video&&states.has(activeId)&&eligible(video)){
+  if(!hasOtherFrames&&target?.id===activeId&&video&&states.has(activeId)&&eligible(video)){
    // The selected media and MAIN bridge are in this frame. Apply and paint
    // before waiting for the worker; remembering the choice stays asynchronous.
    try{act(activeId,command);}catch(error){videoToast.show(video,translateMessage(locale,error.message));}
-  }else send({action:'command',command});
+  }else send({action:'command',command,reselect:true,...packet});
   return true;
  }
  listen(document,'pointerdown',event=>{
-  if(picker||!isFocused())return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',videos:snapshot()});}
+  if(picker||!isFocused())return;const video=registry.fromEvent(event);if(video){interactions.set(video,Date.now());send({action:'report',...snapshotPacket()});}
  },true);
  listen(document,'fullscreenchange',report,true);listen(window,'resize',report,{passive:true});
  let scrollTimer;listen(window,'scroll',()=>{if(!scrollTimer)scrollTimer=setTimeout(()=>{scrollTimer=null;report();},250);},{passive:true,capture:true});
@@ -229,7 +236,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  function route(){if(routeQueued)return;routeQueued=true;queueMicrotask(()=>{routeQueued=false;if(disposed)return;for(const state of states.values())state.rate.sync();if(!isRecent())onIdle();report();});}
  listen(document,'video-control:media-ready-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(!video)return;registry.add(video,{mediaEvent:true});if(!eligible(video))return;const id=registry.ids.get(video),state=states.get(id);state?.rate.sync(true);if(state)queueQuality(video,id);report();},true);
  for(const name of ['popstate','hashchange','yt-navigate-finish','video-control:route'])listen(window,name,route,true);
- listen(window,'pagehide',()=>{clearTimeout(reportTimer);if(rememberedRate){send({action:'report',videos:snapshot(),rememberedRate});rememberedRate=null;}marker({clear:true});send({action:'report',videos:[]});});
+ listen(window,'pagehide',()=>{clearTimeout(reportTimer);if(rememberedRate){send({action:'report',...snapshotPacket(),rememberedRate});rememberedRate=null;}marker({clear:true});send({action:'report',videos:[],snapshotEpoch,snapshotRevision:++snapshotRevision});});
  listen(window,'pageshow',report);
  listen(document,'video-control:shadow',event=>{for(const node of event.composedPath())if(node.shadowRoot){if(isFocused())registry.scan(node.shadowRoot);else if(canDiscover())registry.observe(node.shadowRoot);}},true);
  listen(document,'DOMContentLoaded',()=>{if(!documentPending)return;if(!isFocused()&&canDiscover())registry.probe();documentPending=false;onIdle();},{once:true});
@@ -240,13 +247,13 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   const label=document.createElement('div');label.textContent=translate(resolveLanguage(language),'Select a video · Esc to cancel');Object.assign(label.style,{position:'fixed',top:'12px',left:'50%',transform:'translateX(-50%)',padding:'8px 14px',borderRadius:'8px',background:'#236fa7',color:'white',font:'13px system-ui',pointerEvents:'none',zIndex:2147483647});
   (document.fullscreenElement||document.documentElement).append(overlay);if(window===window.top)document.documentElement.append(label);
   const move=event=>{const video=registry.fromEvent(event);if(!video){overlay.style.display='none';return;}const r=video.getBoundingClientRect();Object.assign(overlay.style,{display:'block',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});};
-  const click=event=>{const video=registry.fromEvent(event);if(!video)return;event.preventDefault();event.stopImmediatePropagation();const id=registry.ids.get(video);interactions.set(video,Date.now());cancelPick();send({action:'picked',id});};
+  const click=event=>{const video=registry.fromEvent(event);if(!video)return;event.preventDefault();event.stopImmediatePropagation();const id=registry.ids.get(video);interactions.set(video,Date.now());cancelPick();send({action:'picked',id,...snapshotPacket(true)});};
   const key=event=>{if(event.key==='Escape'){event.preventDefault();cancelPick();send({action:'cancelPick'});}};
   listen(document,'pointermove',move,true);listen(document,'click',click,true);listen(window,'keydown',key,true);
   const timer=setTimeout(()=>{cancelPick();send({action:'cancelPick'});},30000);
   picker={cancel(){clearTimeout(timer);overlay.remove();label.remove();document.removeEventListener('pointermove',move,true);document.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);}};
  }
- const api={dispose,snapshot,update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,pendingUntil:state.load.until,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
+ const api={dispose,snapshot,clearSnapshot:()=>({videos:[],pendingUntil:0,snapshotEpoch,snapshotRevision:++snapshotRevision}),update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,pendingUntil:state.load.until,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
   if(deep&&isFocused()){registry.scan(document,true);registry.titleCache=new WeakMap();}
   const items=snapshot(),id=activeId||items.find(item=>item.visible&&item.playing)?.id||items.find(item=>item.visible)?.id;
   const video=registry.videos.get(id),state=states.get(id);
@@ -265,17 +272,22 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   if(message?.scope!==SCOPE)return;
   try{
    if(message.action==='activeTarget'){
+    if(!selectionOrder.accept(message)){respond({ok:true,activeId,staleSelection:true});return;}
     registry.prune();
     if(message.id&&!registry.videos.has(message.id)){report();respond({ok:false,activeId:null,error:'Video changed; select it again'});return;}
-    activeId=message.id||null;hasTarget=!!message.hasTarget;rateClient.accept(message);updateLastRate(rateClient.rate);
+    activeId=message.id||null;hasTarget=!!message.hasTarget;preference=message.preference||null;hasOtherFrames=message.hasOtherFrames===true;rateClient.accept(message);updateLastRate(rateClient.rate);
     for(const [id,state]of states){state.rate.lastRate=lastRate;state.rate.select(id===activeId);state.notice.wake();if(id!==activeId){clearTimeout(state.timer);state.timer=null;}}
     if(activeId){const video=registry.videos.get(activeId);queueQuality(video,activeId);}respond({ok:true,activeId});
    }
    else if(message.action==='highlight')respond({ok:true,...marker(message.options)});
-   else if(message.action==='control')respond({ok:true,result:act(message.id,message.command,message.value,message.language||locale)});
+   else if(message.action==='control'){
+    const packet=snapshotPacket(true),target=localTarget(packet.videos,message.id);
+    if(target?.id!==message.id){respond({ok:false,staleTarget:true,...packet});return;}
+    respond({ok:true,result:act(message.id,message.command,message.value,message.language||locale)});
+   }
    else if(message.action==='pick'){startPick(message.language);respond({ok:true});}
    else if(message.action==='cancelPick'){cancelPick();respond({ok:true});}
-   else if(message.action==='snapshot')respond({ok:true,videos:snapshot()});
+   else if(message.action==='snapshot')respond({ok:true,...snapshotPacket(message.verify===true)});
    else if(message.action==='refreshTarget'){api.refresh(false).then(videos=>respond({ok:true,videos}),error=>respond({ok:false,error:error.message}));return true;}
   }catch(error){respond({ok:false,error:error.message});}
  };
@@ -325,7 +337,7 @@ function boot(){
    bridgeReady=false;
    const previous=session;session=null;previous?.dispose({preserveDefault:localSettings.enabled&&!isFocused()});
    document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:false,suspended:localSettings.enabled&&localSettings.defaultMode!=='off'&&!isFocused()})}));
-   if(previous)send({action:'report',videos:[]});
+   if(previous)send({action:'report',...previous.clearSnapshot()});
    return;
   }
   bridgeReady=false;
@@ -368,7 +380,7 @@ function boot(){
   const enabled=localPolicyKnown&&contextReady&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled;
   if(localPolicyKnown&&contextReady&&!enabled)return;
   if(enabled){event.preventDefault();event.stopImmediatePropagation();}
-  startup.ensure({force:true,reason:'shortcut'}).then(async ok=>{if(!session&&bridgeStartup.task)await bridgeStartup.task;if(enabled&&ok&&session&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)send({action:'command',command});});
+  startup.ensure({force:true,reason:'shortcut'}).then(async ok=>{if(!session&&bridgeStartup.task)await bridgeStartup.task;if(enabled&&ok&&session&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)session.handleKey(event);});
  };
  window.addEventListener('keydown',wakeKey,true);
  Promise.resolve().then(()=>messenger.call(chrome.storage.local,'get','settings')).then(messenger.guard(data=>{if(configuration===0&&data){settings=normalizeSettings(data.settings);localPolicyKnown=true;}})).catch(()=>{});

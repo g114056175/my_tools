@@ -1,10 +1,11 @@
-import {normalizeSettings,validateSettings,rankTargets} from './settings.js';
+import {normalizeSettings,validateSettings,rankTargets,targetIsProminent,TARGET_PREFERENCE_MS} from './settings.js';
 import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS,TAB_LOADING_GRACE_MS} from './tab-activity.js';
 import {consumeRuntimeError} from './runtime.js';
-const SCOPE='video-control',VERSION='0.6.17',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.18',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const currentTargets=new Map(),selectionEpoch=Date.now();let selectionRevision=0;
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
@@ -12,9 +13,9 @@ function tabGeneration(tabId){if(!tabGenerations.has(tabId))tabGenerations.set(t
 const frameGeneration=(tabId,frameId)=>frameGenerations.get(tabId)?.get(frameId)||0;
 const selectionDeliveries=new Map();
 function clearSelectionDelivery(tabId){const delivery=selectionDeliveries.get(tabId);clearTimeout(delivery?.timer);selectionDeliveries.delete(tabId);}
-function sendSelection(tabId,message,options){
+function sendSelection(tabId,message,options,timeoutMs=1000){
  return new Promise(resolve=>{
-  const timer=setTimeout(()=>resolve(null),1000);
+  const timer=setTimeout(()=>resolve(null),timeoutMs);
   Promise.resolve().then(()=>chrome.tabs.sendMessage(tabId,message,options)).then(response=>{clearTimeout(timer);resolve(response);},()=>{clearTimeout(timer);resolve(null);});
  });
 }
@@ -190,7 +191,7 @@ function syncPower(settings){
    for(const tabId of selectionDeliveries.keys())clearSelectionDelivery(tabId);
    for(const tabId of frames.keys()){const target=targetFor(tabId);if(target)frozen[tabId]=target;}
    await chrome.storage.session.set({pausedTargets:frozen});
-   frames.clear();announced.clear();pinned.clear();
+   frames.clear();announced.clear();pinned.clear();currentTargets.clear();
   }
   const rate=await optionalRateState();
   await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate,pendingTabs.has(tabId))));
@@ -203,7 +204,7 @@ async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPending=false){
  settings=settings||await stored();if(pageUrl===undefined)pageUrl=(await chrome.tabs.get(tabId)).url||'';
  const contact=wasPending||await mayContactPage(tabId);
  const blocked=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes),enabled=settings.enabled&&!blocked;
- if(!enabled){clearSelectionDelivery(tabId);frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);}
+ if(!enabled){clearSelectionDelivery(tabId);frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);currentTargets.delete(tabId);}
  if(rate===undefined)rate=await optionalRateState();
  const message={scope:SCOPE,action:'power',settings,pageUrl,language,activity:await activityFor(tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
  if(contact)await chrome.tabs.sendMessage(tabId,message).catch(()=>{});
@@ -212,7 +213,13 @@ async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPending=false){
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
 function itemsFor(tabId){return [...(frames.get(tabId)?.values()||[])].flatMap(frame=>frame.videos.map(video=>({...video,frameId:frame.frameId,documentId:frame.documentId,key:keyOf(frame,video.id)})));}
-function targetFor(tabId){return rankTargets(itemsFor(tabId),pinned.get(tabId))[0]||null;}
+function targetFor(tabId){
+ const items=itemsFor(tabId),preference=pinned.get(tabId);
+ if(preference&&(preference.until<=Date.now()||!items.some(item=>item.key===preference.key&&targetIsProminent(item))))pinned.delete(tabId);
+ const target=rankTargets(items,pinned.get(tabId),{currentKey:currentTargets.get(tabId)})[0]||null;
+ if(target)currentTargets.set(tabId,target.key);else currentTargets.delete(tabId);
+ return target;
+}
 function highlight(tabId,scroll=false,clear=false){
  const previous=markerQueues.get(tabId)||Promise.resolve();
  const next=previous.catch(()=>{}).then(async()=>{
@@ -229,19 +236,22 @@ async function announce(tabId,force=false){
  if(!(await stored()).enabled)return;
  if(!await mayContactPage(tabId)){clearSelectionDelivery(tabId);announced.delete(tabId);return;}
  const target=targetFor(tabId),key=target?.key||'';
- const recipients=[...(frames.get(tabId)?.values()||[])],signature=JSON.stringify([key,recipients.map(frame=>[frame.frameId,frame.documentId])]);
+ const recipients=[...(frames.get(tabId)?.values()||[])],signature=JSON.stringify([key,pinned.get(tabId)?.until||0,recipients.map(frame=>[frame.frameId,frame.documentId,frame.videos.length>0])]);
  let delivery=selectionDeliveries.get(tabId);
- if(delivery?.signature!==signature){clearTimeout(delivery?.timer);delivery={signature,key,attempts:0,pending:false,timer:null};selectionDeliveries.set(tabId,delivery);}
- if((force||announced.get(tabId)!==key)&&!delivery.pending){
+ const signatureChanged=delivery?.signature!==signature;
+ if(signatureChanged){clearTimeout(delivery?.timer);delivery={signature,key,revision:++selectionRevision,attempts:0,pending:false,timer:null};selectionDeliveries.set(tabId,delivery);}
+ if((force||signatureChanged||announced.get(tabId)!==key)&&!delivery.pending){
   clearTimeout(delivery.timer);delivery.timer=null;delivery.pending=true;delivery.attempts++;
   try{
    const rate=await optionalRateState();
    if(selectionDeliveries.get(tabId)!==delivery)return;
    if(!await mayContactPage(tabId)){clearSelectionDelivery(tabId);return;}
-   const message={scope:SCOPE,action:'activeTarget',hasTarget:!!target};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
+   const message={scope:SCOPE,action:'activeTarget',hasTarget:!!target,selectionEpoch,selectionRevision:delivery.revision,preference:pinned.get(tabId)||null};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
    const responses=await Promise.allSettled(recipients.map(async frame=>{
     const id=frame.documentId===target?.documentId&&frame.frameId===target?.frameId?target.id:null;
-    const response=await sendSelection(tabId,{...message,id},optionsOf(frame));
+    const hasOtherFrames=recipients.some(other=>other.frameId!==frame.frameId&&other.videos.length>0);
+    const preference=message.preference&&id?{key:id,until:message.preference.until}:null;
+    const response=await sendSelection(tabId,{...message,id,hasOtherFrames,preference},optionsOf(frame));
     return response?.ok===true&&response.activeId===id;
    }));
    if(selectionDeliveries.get(tabId)!==delivery)return;
@@ -267,14 +277,31 @@ async function announce(tabId,force=false){
  if([...ports.values()].some(item=>item.tabId===tabId)&&(markedTargets.get(tabId)?.key!==key||markedTargets.get(tabId)?.title!==target?.title))highlight(tabId);
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
-function record(tabId,frameId,documentId,videos,pendingUntil=0){
+function record(tabId,frameId,documentId,videos,pendingUntil=0,snapshotRevision=0,snapshotEpoch=0){
+ const previous=frames.get(tabId)?.get(frameId);
+ if(previous?.documentId===documentId){
+  if(snapshotEpoch>0&&previous.snapshotEpoch>snapshotEpoch)return;
+  if(snapshotEpoch===previous.snapshotEpoch&&snapshotRevision>0&&previous.snapshotRevision>snapshotRevision)return;
+  if(!snapshotEpoch){snapshotEpoch=previous.snapshotEpoch||0;if(!snapshotRevision)snapshotRevision=previous.snapshotRevision||0;}
+ }
  const items=Array.isArray(videos)?videos.slice(0,64):[];
  // An empty child frame has no media to select. Keeping every ad/analytics
  // frame here made later reports contact documents that had already gone away.
  if(frameId>0&&!items.length){if(frames.get(tabId)?.delete(frameId))announce(tabId,true);return;}
  if(!frames.has(tabId))frames.set(tabId,new Map());
  const fresh=frames.get(tabId).get(frameId)?.documentId!==documentId;
- frames.get(tabId).set(frameId,{frameId,documentId,videos:items,pendingUntil});announce(tabId,fresh);
+ frames.get(tabId).set(frameId,{frameId,documentId,videos:items,pendingUntil,snapshotRevision,snapshotEpoch});announce(tabId,fresh);
+}
+async function resampleTargets(tabId,sender,skipSender=false){
+ if(!await mayContactPage(tabId))return;
+ const all=frames.get(tabId),target=targetFor(tabId);if(!all)return;
+ const candidates=[all.get(sender?.frameId),all.get(target?.frameId),...[...all.values()].filter(frame=>frame.videos.length)].filter(Boolean);
+ const unique=[...new Map(candidates.map(frame=>[frame.frameId,frame])).values()].filter(frame=>!skipSender||frame.frameId!==sender.frameId||frame.documentId!==sender.documentId).slice(0,8);
+ await Promise.allSettled(unique.map(async frame=>{
+  const response=await sendSelection(tabId,{scope:SCOPE,action:'snapshot',verify:true},optionsOf(frame),160);
+  if(all.get(frame.frameId)!==frame||!response?.ok||!Array.isArray(response.videos))return;
+  record(tabId,frame.frameId,frame.documentId,response.videos,response.pendingUntil||0,response.snapshotRevision||0,response.snapshotEpoch||0);
+ }));
 }
 async function refresh(tabId,force=false){
  const settings=await stored();if(!settings.enabled||disabledOnUrl((await chrome.tabs.get(tabId)).url,settings.disabledSites,settings.siteModes))return;
@@ -338,6 +365,7 @@ async function dispatch(tabId,message,retry=true){
  let result;
  try{result=await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'control',id:target.id,command:message.command,value:message.value,language},optionsOf(target));}
  catch(error){if(!retry||message.key)throw error;await refresh(tabId,true);return dispatch(tabId,message,false);}
+ if(result?.staleTarget&&retry){record(tabId,target.frameId,target.documentId,result.videos,result.pendingUntil||0,result.snapshotRevision||0,result.snapshotEpoch||0);await announce(tabId);return dispatch(tabId,{...message,key:undefined},false);}
  if(!result?.ok)throw Error(result?.error||"Video did not respond; reload the page");
  const frame=frames.get(tabId)?.get(target.frameId);
  if(frame?.documentId===target.documentId){const video=frame.videos.find(item=>item.id===target.id);if(video)Object.assign(video,result.result);}
@@ -374,7 +402,7 @@ async function run(message,sender){
   if(settings.enabled&&sender.tab?.id&&!disabledOnUrl(sender.tab.url,settings.disabledSites,settings.siteModes)&&!disabledOnUrl(sender.url,settings.disabledSites,settings.siteModes)){
    const activity=await activityFor(sender.tab.id),pendingUntil=Number.isSafeInteger(message.pendingUntil)?Math.min(message.pendingUntil,activity.loadingUntil||0):0;
    const eligible=activity.focused||activity.until>Date.now()||pendingUntil>Date.now();
-   record(sender.tab.id,sender.frameId,sender.documentId,eligible?message.videos:[],eligible?pendingUntil:0);const target=targetFor(sender.tab.id);
+   record(sender.tab.id,sender.frameId,sender.documentId,eligible?message.videos:[],eligible?pendingUntil:0,message.snapshotRevision||0,message.snapshotEpoch||0);const target=targetFor(sender.tab.id);
    targetMatches=!!hint&&target?.id===hint.id&&target.frameId===sender.frameId&&target.documentId===sender.documentId;
   }
   return token?persistRateMessage(hint,token,targetMatches):{};
@@ -387,7 +415,9 @@ async function run(message,sender){
  }
  if(message.action==='picked'){
   if(!(await stored()).enabled)return {};
-  if(!sender.tab?.id)return {};pinned.set(sender.tab.id,keyOf(sender,message.id));
+  if(!sender.tab?.id)return {};
+  if(Array.isArray(message.videos))record(sender.tab.id,sender.frameId,sender.documentId,message.videos,message.pendingUntil||0,message.snapshotRevision||0,message.snapshotEpoch||0);
+  pinned.set(sender.tab.id,{key:keyOf(sender,message.id),until:Date.now()+TARGET_PREFERENCE_MS});
   await chrome.tabs.sendMessage(sender.tab.id,{scope:SCOPE,action:'cancelPick'}).catch(()=>{});
   await announce(sender.tab.id);if(typeof chrome.action.openPopup==='function')await chrome.action.openPopup().catch(()=>{});return {};
  }
@@ -411,11 +441,15 @@ async function run(message,sender){
  if(disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes))throw Error("Disabled on this site");
  if(message.action==='select'){
   if(!itemsFor(tabId).some(item=>item.key===message.key))throw Error("Video changed; select it again");
-  pinned.set(tabId,message.key);await announce(tabId);await highlight(tabId,true);return {};
+  pinned.set(tabId,{key:message.key,until:Date.now()+TARGET_PREFERENCE_MS});await announce(tabId);await highlight(tabId,true);return {};
  }
  if(message.action==='pick'){await refresh(tabId,true);await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'pick',language:resolveLanguage(message.language||language)});return {};}
  if(message.action==='cancelPick'){await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'cancelPick'}).catch(()=>{});return {};}
- if(message.action==='command'){if(!targetFor(tabId))await refresh(tabId);return {result:await dispatch(tabId,message)};}
+ if(message.action==='command'){
+  if(fromPage&&Array.isArray(message.videos))record(tabId,sender.frameId,sender.documentId,message.videos,message.pendingUntil||0,message.snapshotRevision||0,message.snapshotEpoch||0);
+  if(message.reselect||!fromPage){await resampleTargets(tabId,sender,fromPage&&Array.isArray(message.videos));await announce(tabId);}
+  if(!targetFor(tabId))await refresh(tabId);return {result:await dispatch(tabId,message)};
+ }
  throw Error("Unsupported action");
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
@@ -439,7 +473,7 @@ function forgetTab(tabId){
  clearSelectionDelivery(tabId);
  tabGenerations.set(tabId,++navigationSerial);
  frameGenerations.delete(tabId);
- frames.delete(tabId);pinned.delete(tabId);announced.delete(tabId);markedTargets.delete(tabId);markerQueues.delete(tabId);
+ frames.delete(tabId);pinned.delete(tabId);currentTargets.delete(tabId);announced.delete(tabId);markedTargets.delete(tabId);markerQueues.delete(tabId);
  rateWriteLedger.forgetTab(tabId);
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{const data=await chrome.storage.session.get('pausedTargets'),frozen={...data.pausedTargets};if(Object.hasOwn(frozen,tabId)){delete frozen[tabId];await chrome.storage.session.set({pausedTargets:frozen});}});
 }

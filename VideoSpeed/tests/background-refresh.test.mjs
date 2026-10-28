@@ -227,7 +227,7 @@ test('empty child frames do not accumulate selection recipients; a later video s
  await new Promise(resolve=>setTimeout(resolve,30));
  assert.ok(selections.length>0);assert.ok(selections.every(item=>item.documentId==='top'),'empty ad/analytics documents must not receive selection notifications');
  const child={...top,frameId:201,documentId:'real-child'};
- await send({action:'report',videos:[{...video('child'),lastPlayedAt:Date.now()+1000}]},child);
+ await send({action:'report',videos:[{...video('child'),visibleArea:4000,lastPlayedAt:Date.now()+1000}]},child);
  await new Promise(resolve=>setTimeout(resolve,30));
  assert.ok(selections.some(item=>item.documentId==='real-child'&&item.id==='child'));
  selections.length=0;await send({action:'report',videos:[]},child);
@@ -264,10 +264,48 @@ test('a failed selection drops only a confirmed removed iframe and returns to th
  const top=createContentSender('top');
  const send=(message,sender=top)=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
  await send({action:'report',videos:[video('main')]});
- await send({action:'report',videos:[{...video('gone'),lastPlayedAt:Date.now()+1000}]},{...top,frameId:99,documentId:'removed-child'});
+ await send({action:'report',videos:[{...video('gone'),visibleArea:4000,lastPlayedAt:Date.now()+1000}]},{...top,frameId:99,documentId:'removed-child'});
  await new Promise(resolve=>setTimeout(resolve,80));
  assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'main');
  calls.length=0;await send({action:'report',videos:[video('main')]});
  await new Promise(resolve=>setTimeout(resolve,30));
  assert.ok(!calls.includes('removed-child'),'later reports must not keep contacting the removed document');
+});
+
+test('a delayed geometry report cannot replace a newer snapshot from the same document',async()=>{
+ const fixture=createChromeFixture();await import('../extension/background.js?test=snapshot-order');
+ const sender=createContentSender('current');
+ const send=message=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ await send({action:'report',snapshotRevision:2,videos:[{...video('new'),playing:false,visibleArea:200000}]});
+ await send({action:'report',snapshotRevision:1,videos:[{...video('old'),playing:true,visibleArea:500000}]});
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'new');
+});
+
+test('a replacement control session can restart snapshot revisions without accepting retired-session reports',async()=>{
+ const fixture=createChromeFixture();await import('../extension/background.js?test=snapshot-session-recovery');
+ const sender=createContentSender('current');
+ const send=message=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ await send({action:'report',snapshotEpoch:100,snapshotRevision:20,videos:[video('retired')]});
+ await send({action:'report',snapshotEpoch:200,snapshotRevision:1,videos:[video('recovered')]});
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'recovered');
+ await send({action:'report',snapshotEpoch:100,snapshotRevision:99,videos:[video('retired')]});
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'recovered');
+ await send({action:'report',snapshotEpoch:100,snapshotRevision:100,videos:[]});
+ assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'recovered','retired-session cleanup must not clear its replacement');
+});
+
+test('a new competing top-frame video updates the child hotkey path even when selection stays in the child',async()=>{
+ const fixture=createChromeFixture(),messages=[];
+ chrome.tabs.sendMessage=async(_tab,message,options)=>{if(message.action==='activeTarget')messages.push({message,documentId:options?.documentId});return {ok:true,version,activeId:message.id};};
+ await import('../extension/background.js?test=competing-frame-media');
+ const send=(message,sender)=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ const top=createContentSender('top'),child={...top,frameId:1,documentId:'child'};
+ await send({action:'report',videos:[]},top);
+ await send({action:'report',videos:[{...video('main'),visibleArea:200000}]},child);
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(messages.some(item=>item.documentId==='child'&&item.message.id==='main'&&item.message.hasOtherFrames===false));
+ messages.length=0;
+ await send({action:'report',videos:[{...video('secondary'),visibleArea:10000}]},top);
+ await new Promise(resolve=>setTimeout(resolve,30));
+ assert.ok(messages.some(item=>item.documentId==='child'&&item.message.id==='main'&&item.message.hasOtherFrames===true));
 });

@@ -1,6 +1,6 @@
 # VideoPocket - 網頁媒體下載與擷取 <img src="extension/icons/48.png" width="32" height="32" alt="VideoPocket icon">
 
-**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=72b36c6d3a32)** · 解壓約 7.1 MB · Chrome 120 以上
+**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=8129dc605459)** · 解壓約 7.1 MB · Chrome 120 以上
 
 在網頁中選擇影片，下載影片、音檔或字幕；所有處理都在本機瀏覽器完成。
 
@@ -15,7 +15,7 @@
 </tr>
 </table>
 
-<img src="docs/download-demo.gif" width="339" alt="VideoPocket 操作示範：開啟工具、調整片段時間並下載影片">
+<img src="docs/download-demo.gif?v=d4ea2893" width="357" alt="VideoPocket 操作示範：影片、音檔、字幕與片段下載">
 
 <details>
 <summary><strong>安裝方式</strong></summary>
@@ -52,7 +52,7 @@
 **本專案僅供個人測試與技術研究使用。請勿違反串流媒體或其他網站的服務條款，並僅處理自己有權存取與保存的內容。使用者應自行確認相關授權與適用法規；本工具不提供繞過 DRM、付費或存取限制的功能。軟體依現況提供，不保證支援所有網站或持續可用；完整授權與免責條款請見 LICENSE。**
 
 - 支援 YouTube、Bilibili、一般網頁影片與部分社群來源；可用性依播放資料、登入狀態與網站變動而定。
-- 來源尚未載入時，可先播放影片，再重新偵測；多影片頁面也可進入單篇貼文操作。
+- 找不到來源時，可重新偵測或在網頁中選取播放器；多影片頁面也可進入單篇貼文操作。
 - 「大小未知」不影響下載。大檔與裁切需預留磁碟空間，瀏覽器重開後不保留續傳能力；不支援直播錄製。
 
 <details>

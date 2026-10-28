@@ -121,7 +121,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
    }),
   });
   for(const name of ['pause','play','ended','resize','loadedmetadata'])listen(video,name,report);
-  state.onPlayback=()=>{state.notice.wake();finishPending(state);};
+  state.onPlayback=()=>{state.notice.wake();queueQuality(video,id);finishPending(state);};
   state.onNoticeSource=()=>state.notice.cancelFrame();
   for(const name of ['play','playing'])listen(video,name,state.onPlayback);
   for(const name of ['loadstart','emptied'])listen(video,name,state.onNoticeSource);

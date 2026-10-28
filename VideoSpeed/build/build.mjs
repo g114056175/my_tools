@@ -1,5 +1,5 @@
 import {createRequire} from 'node:module';
-import {copyFile,mkdir,readFile} from 'node:fs/promises';
+import {copyFile,mkdir,readFile,rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 const require=createRequire(import.meta.url),{build}=require('esbuild');
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -12,11 +12,10 @@ for(const path of ['src/content.js','src/page-bridge.js','src/background.js']){
 }
 await import('./icons.mjs');
 await mkdir(root+'extension',{recursive:true});
+for(const name of ['rate-memory.js','tab-activity.js'])await rm(root+'extension/'+name,{force:true});
 await build({absWorkingDir:root,tsconfigRaw:{},entryPoints:['./src/content.js','./src/page-bridge.js'],outdir:'extension',bundle:true,format:'iife',platform:'browser',target:'chrome120',minify:true,legalComments:'eof'});
 await build({absWorkingDir:root,tsconfigRaw:{},entryPoints:['./src/background.js'],outfile:'extension/background.js',bundle:true,format:'iife',platform:'browser',target:'chrome120',minify:false,legalComments:'eof'});
 await copyFile(root+'src/settings.js',root+'extension/settings.js');
-await copyFile(root+'src/rate-memory.js',root+'extension/rate-memory.js');
-await copyFile(root+'src/tab-activity.js',root+'extension/tab-activity.js');
 await copyFile(root+'src/quality-options.js',root+'extension/quality-options.js');
 await copyFile(root+'src/site-rules.js',root+'extension/site-rules.js');
 await build({absWorkingDir:root,entryPoints:['./src/site-domain.js'],outdir:'extension',bundle:true,format:'esm',platform:'browser',target:'chrome120',minify:true,legalComments:'eof'});

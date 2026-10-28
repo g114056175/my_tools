@@ -1,15 +1,20 @@
-# VideoSpeed 1.0.0 發布驗證
+# VideoSpeed 1.0.0 最後驗證
 
-2026-10-28。以現行功能整理為 GitHub 正式發布版；程式名稱維持 VideoSpeed，下載檔名維持 `VideoSpeed.zip` 與 `VideoSpeed-source.zip`。內部 manifest 版本為 1.0.0，供瀏覽器識別更新。
+2026-10-28。修正兩個已重現的邊界，精簡打包；名稱、版本與下載檔名維持不變。首頁下載標籤統一為「下載ZIP」，大小保留在子專案說明與發布內文。
 
-- 首頁與子專案 README 統一指向 `video-speed-v1.0.0/VideoSpeed.zip`。
-- 公開資產僅安裝包與獨立原始碼；GitHub 另自動提供整個儲存庫的 ZIP／tar.gz 原始碼。商店包及檢查碼留在本機，不列入公開下載。
-- 新版上傳、公開下載與檢查碼確認後，再移除舊 VideoSpeed 預覽版。VideoPocket 與其他工具的發布內容保留。
-- 329 項單元／整合，以及 3 項新安裝預設／語系保存的瀏覽器檢查通過。自動速度、畫質皆關閉，偏好 2×，淺色英文；網站原速度不被覆寫。
+- 大型文件初次掃描未完成時，建構器又將同一份文件排入，導致完整走兩輪。15,000 節點的回歸測試在原版得到兩輪；移除多餘排程後為一輪，後續 DOM 變動仍由原先佇列處理。
+- 影片載入後若先手動改速、再第一次播放，速度控制器已初始化，卻沒有觸發畫質排程。隔離 Chromium 已重現畫質呼叫為零；現在播放事件補交尚未完成的畫質工作，成功狀態仍阻止重複套用。修正版首次呼叫一次，暫停重播及同源重新載入都不重複，手動 1.5× 保留。
+- 移除已包含在背景 bundle、未被執行期引用的 `rate-memory.js`／`tab-activity.js` 成品副本。來源保留；同步調整建置、封裝與測試清單，成品由 27 檔減為 25 檔。
 
-本輪整理版本與發布流程，播放控制邏輯沿用 0.6.20。原生 popup 與生命週期驗證見歷史紀錄。
+修正版驗證：330 項單元／整合、8 項播放前改速與畫質檢查、25 項主片／預覽與提示、11 項除外與介面回歸均通過。不開 popup 的四次新文件、兩次 SPA、啟動故障恢復與 worker 冷啟動通過。Brave 原生 popup 持續開啟 35 秒、實際調速、Escape 返回、切窗恢復及不開 popup 的快捷鍵共五項通過；畫面以實際 420px 檢查。
 
-成品 SHA-256：`d62d719a723175136840058d17743417920c5c8b64e55335ec27ef20ebf47335`。本機證據：`work/qa-084-release-cleanup/`。
+修正版另通過 90 秒播放及五次快捷鍵檢查，包含動態替換影片、切離後返回與播放後段的控制；期間未開 popup 補救。
+
+本輪修正前，原 v1.0.0 另通過 300 秒播放（12 次快捷鍵及提示、12 次同網址路由回授）、Chromium／Brave 原生 popup，以及更新時不探查三個未使用的無影片分頁、期限不延長與 BFCache 返回；其成品 hash 為 `d62d719a723175136840058d17743417920c5c8b64e55335ec27ef20ebf47335`。閒置測試使用 tab inactive 狀態；headless 的 visibilityState 仍為 visible，不能視為 hidden 分頁驗收。
+
+以上使用隔離 profile、本機影片與播放器結構，不能取代各站實際長時間使用。先前環境中持續 context invalidation、長播卡死與 worker-fetch 的完整觸發條件仍未全數定位。本輪不新增亮度、音效或其他控制項。
+
+成品 SHA-256：`ac41d37ab972b485cfacd00ec0d2150f4149c12caf222e65d66f5f49b930d5cf`（相對路徑依大小寫排序，各檔 path + NUL + bytes + NUL）。本機證據：`work/qa-086-final/`、`work/qa-082-popup/final-v100-after-brave-results.json`、`work/qa-autostart/final-v100-after-results.json`、`work/qa-075-main-final-v100-after/results.json`、`work/qa-069-exclusion/results.json`。
 
 <details>
 <summary>0.6.20 歷史驗證</summary>

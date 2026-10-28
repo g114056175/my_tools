@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const qaRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../work/qa-076-lifecycle');
 const projectRoot = resolve(qaRoot, '../..');
+const candidateVersion = JSON.parse(await readFile(join(projectRoot,'extension/manifest.json'),'utf8')).version;
 const extensionCopy = resolve(qaRoot, 'extension-baseline');
 const runMode = process.argv[2] === 'candidate' ? 'candidate' : 'baseline';
 const baselineRef = '9b488d07d9a0942b7bbc97a5e479f8a53c30c203';
@@ -71,10 +72,10 @@ async function copyHeadExtension() {
   return { repoRoot, relativeExtension, ref: baselineRef, fileCount: names.length, manifestVersion: manifest.version };
 }
 
-async function copyCandidateExtension(targetManifestVersion = '0.6.14') {
+async function copyCandidateExtension(targetManifestVersion = candidateVersion) {
   const candidateSource = resolve(projectRoot, 'extension');
   const sourceManifest = JSON.parse(await readFile(join(candidateSource, 'manifest.json'), 'utf8'));
-  if (sourceManifest.version !== '0.6.14') throw new Error(`Expected candidate extension 0.6.14; found ${sourceManifest.version}`);
+  if (sourceManifest.version !== candidateVersion) throw new Error(`Expected candidate extension ${candidateVersion}; found ${sourceManifest.version}`);
   const digest = createHash('sha256');
   for (const name of extensionFiles) {
     const source = join(candidateSource, name);
@@ -85,7 +86,7 @@ async function copyCandidateExtension(targetManifestVersion = '0.6.14') {
     await writeFile(destination, contents);
   }
   const copiedManifest = JSON.parse(await readFile(join(extensionCopy, 'manifest.json'), 'utf8'));
-  if (copiedManifest.version !== '0.6.14') throw new Error(`Candidate copy has version ${copiedManifest.version}`);
+  if (copiedManifest.version !== candidateVersion) throw new Error(`Candidate copy has version ${copiedManifest.version}`);
   if (targetManifestVersion !== copiedManifest.version) {
     copiedManifest.version = targetManifestVersion;
     await writeFile(join(extensionCopy, 'manifest.json'), JSON.stringify(copiedManifest, null, 2) + '\n', 'utf8');
@@ -334,7 +335,7 @@ async function safeRemoveProfile() {
 }
 
 let baselineGit = null, collectorBefore = null, activeTabsBeforeUpdate = null, updateInfoAfter = null;
-let checkpointReloadEvidence = null, latestCandidateVersion = '0.6.14';
+let checkpointReloadEvidence = null, latestCandidateVersion = candidateVersion;
 try {
   await mkdir(qaRoot, { recursive: true });
   baselineGit = await copyHeadExtension();
@@ -454,7 +455,7 @@ try {
   if (runMode === 'candidate') candidateBuild = await copyCandidateExtension();
   else {
     const oldManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    oldManifest.version = '0.6.14';
+    oldManifest.version = candidateVersion;
     await writeFile(manifestPath, JSON.stringify(oldManifest, null, 2) + '\n', 'utf8');
   }
   phase = runMode === 'candidate' ? 'candidate-update' : 'baseline-update';
@@ -464,8 +465,8 @@ try {
     const error = await chrome.developerPrivate.reload(id, { failQuietly: true, populateErrorForUnpacked: true });
     return error ? { error } : { ok: true };
   }, extensionId);
-  if (!reloadResult.ok) throw new Error(`0.6.14 ${runMode} update reload failed: ${JSON.stringify(reloadResult)}`);
-  updateInfoAfter = await loadInfoAtVersion('0.6.14');
+  if (!reloadResult.ok) throw new Error(`${candidateVersion} ${runMode} update reload failed: ${JSON.stringify(reloadResult)}`);
+  updateInfoAfter = await loadInfoAtVersion(candidateVersion);
   const updatedWorker = await workerFor();
   const updateTrace = await waitForCallLogQuiet(updatedWorker, 700, 15000);
   await delay(400);
@@ -532,17 +533,17 @@ try {
 
       phase = 'candidate-checkpoint-reload';
       await setPhase(updatedWorker, phase, true);
-      secondCandidateBuild = await copyCandidateExtension('0.6.14.1');
+      secondCandidateBuild = await copyCandidateExtension(candidateVersion+'.1');
       checkpointReloadStartedAt = new Date().toISOString();
       checkpointReloadResult = await inspector.evaluate(async id => {
         const error = await chrome.developerPrivate.reload(id, { failQuietly: true, populateErrorForUnpacked: true });
         return error ? { error } : { ok: true };
       }, extensionId);
-      if (!checkpointReloadResult.ok) throw new Error(`0.6.14 to 0.6.14.1 candidate update failed: ${JSON.stringify(checkpointReloadResult)}`);
-      const checkpointReloadInfo = await loadInfoAtVersion('0.6.14.1');
+      if (!checkpointReloadResult.ok) throw new Error(`${candidateVersion} to ${candidateVersion}.1 candidate update failed: ${JSON.stringify(checkpointReloadResult)}`);
+      const checkpointReloadInfo = await loadInfoAtVersion(candidateVersion+'.1');
       checkpointReloadVersion = checkpointReloadInfo.version;
-      effectiveWorker = await workerFor('0.6.14.1');
-      latestCandidateVersion = '0.6.14.1';
+      effectiveWorker = await workerFor(candidateVersion+'.1');
+      latestCandidateVersion = candidateVersion+'.1';
       checkpointReloadTrace = await waitForCallLogQuiet(effectiveWorker, 700, 12000);
       const reloadCalls = checkpointReloadTrace.calls.filter(item => item.phase === phase && item.at >= Date.parse(checkpointReloadStartedAt));
       checkpointReloadIdleCalls = reloadCalls.filter(item => idleCallTargets.has(item.tabId));
@@ -564,7 +565,7 @@ try {
     const deadlineBeforeReload = checkpointBeforeReload?.recentDeadline ?? null;
     const deadlineAfterReload = checkpointAfterReload?.untilByTab?.[recentVideoTabId] ?? null;
     checkpointReloadEvidence = {
-      fromVersion: '0.6.14', toVersion: checkpointReloadVersion || '0.6.14.1', manifestVersionBumpOnlyInQACopy: true,
+      fromVersion: candidateVersion, toVersion: checkpointReloadVersion || candidateVersion+'.1', manifestVersionBumpOnlyInQACopy: true,
       candidateBuild: secondCandidateBuild, checkpointBeforeReload, checkpointAfterReload, sessionAfterReload,
       sameCandidateBytesAsInitialUpdate: secondCandidateBuild?.sha256 === candidateBuild?.sha256,
       recentTabId: recentVideoTabId, deadlineBeforeReload, deadlineAfterReload,
@@ -703,8 +704,8 @@ const report = {
   interpretation: fatal ? `${runMode} QA did not complete; use the saved evidence to identify the failed gate.`
     : runMode === 'candidate' ? updateEvidence?.idleProbeCallCount > 0
       ? `Candidate update unexpectedly made ${updateEvidence.idleProbeCallCount} instrumented API calls to inactive no-video fixture tabs.`
-      : `Candidate updated from ${oldManifestVersion} to 0.6.14 without instrumented API calls to the confirmed inactive no-video tabs; candidate gate failures: ${candidateFailures.join('; ') || 'none'}.`
-    : updateEvidence?.idleProbeCallCount > 0 ? `Baseline confirmed ${updateEvidence.idleProbeCallCount} instrumented API calls targeted inactive no-video fixture tabs during the 0.6.13 to 0.6.14 reload.`
+      : `Candidate updated from ${oldManifestVersion} to ${candidateVersion} without instrumented API calls to the confirmed inactive no-video tabs; candidate gate failures: ${candidateFailures.join('; ') || 'none'}.`
+    : updateEvidence?.idleProbeCallCount > 0 ? `Baseline confirmed ${updateEvidence.idleProbeCallCount} instrumented API calls targeted inactive no-video fixture tabs during the 0.6.13 to ${candidateVersion} reload.`
       : 'Baseline completed without an instrumented update API call targeting the confirmed inactive no-video fixture tabs.',
 };
 await mkdir(qaRoot, { recursive: true });
@@ -716,7 +717,7 @@ const summaryItems = runMode === 'candidate' ? [
   `- Confirmed inactive no-video tabs probed during update: ${updateEvidence?.idleProbeCallCount ?? 'not measured'}; executeScript calls across all tabs: ${updateEvidence?.executeScriptCallsAfterUpdate ?? 'unknown'}.`,
   `- Active/recent target update calls: ${updateEvidence?.perTargetTab?.map(item => `${item.label}=${item.calls.length}`).join(', ') || 'not measured'}.`,
   `- Speed control: active ${rateSummary(controlEvidence?.active)}, recent ${rateSummary(controlEvidence?.recent)}, recent after checkpoint reload ${rateSummary(controlEvidence?.recentAfterCheckpointReload)}, new background tab ${rateSummary(controlEvidence?.newBackground)}.`,
-  `- Checkpoint update: manifest 0.6.14 to ${checkpointReloadEvidence?.toVersion || 'not completed'}; local deadline before/after ${checkpointReloadEvidence?.deadlineBeforeReload ?? 'missing'}/${checkpointReloadEvidence?.deadlineAfterReload ?? 'missing'}; not extended ${checkpointReloadEvidence?.deadlineWasNotExtended ?? false}; idle probes ${checkpointReloadEvidence?.idleProbeCallCount ?? 'not measured'}.`,
+  `- Checkpoint update: manifest ${candidateVersion} to ${checkpointReloadEvidence?.toVersion || 'not completed'}; local deadline before/after ${checkpointReloadEvidence?.deadlineBeforeReload ?? 'missing'}/${checkpointReloadEvidence?.deadlineAfterReload ?? 'missing'}; not extended ${checkpointReloadEvidence?.deadlineWasNotExtended ?? false}; idle probes ${checkpointReloadEvidence?.idleProbeCallCount ?? 'not measured'}.`,
   `- New background tab: opener matches active page ${controlEvidence?.openerMatchesActiveVideo ?? false}; recorded grace ${controlEvidence?.openerLeaseMsAtObservation ?? 'unknown'} ms.`,
   `- BFCache: ${bfcacheEvidence?.pageshowPersistedTrue ? 'pageshow.persisted=true' : 'not confirmed'}; new runtime errors/warnings after BFCache ${bfcacheEvidence?.runtimeErrors?.length ?? 'unknown'}/${bfcacheEvidence?.runtimeWarnings?.length ?? 'unknown'}; returned-page rate ${bfcacheEvidence?.returnControl?.actual ?? 'not verified'}×.`,
 ] : [

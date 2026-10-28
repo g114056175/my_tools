@@ -1,6 +1,6 @@
 {
   "name": "video-speed",
-  "version": "0.6.14",
+  "version": "0.6.15",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,9 @@
     "test:routes": "node --test tests/browser/page-bridge-route-check.mjs",
     "test:soak": "node tests/browser/long-playback-soak.mjs",
     "test:notices": "node tests/browser/initial-rate-notice-check.mjs",
-    "test:lifecycle": "node tests/browser/idle-lifecycle-check.mjs candidate"
+    "test:lifecycle": "node tests/browser/idle-lifecycle-check.mjs candidate",
+    "test:loading": "node tests/browser/slow-load-check.mjs candidate",
+    "test:network-loading": "node tests/browser/network-load-check.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

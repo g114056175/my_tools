@@ -452,7 +452,9 @@ async function runChecks() {
       }
       return null;
     }, 'active fixture did not apply its custom speed preset');
-    const beforeSyntheticKey = await storedRatePair();
+    // Applying the preset and acknowledging its memory are separate messages.
+    // Finish that setup before measuring whether a synthetic key writes memory.
+    const beforeSyntheticKey = await waitFor(async()=>{const pair=await storedRatePair();return pair.lastRate===8?pair:null;},'preset memory acknowledgement');
     await presetVideo.frame.evaluate(() => window.dispatchEvent(
       new KeyboardEvent('keydown', { key: '>', bubbles: true, cancelable: true }),
     ));

@@ -68,6 +68,17 @@ function drain(registry,limit=10000){
  assert.fail('MediaRegistry work did not drain');
 }
 
+test('passive loading registers only direct media events without restarting DOM exploration',t=>{
+ const {document,registry}=fixture(t);drain(registry);registry.setExploring(false);
+ let permitted=true;registry.allowMediaEvents=()=>permitted;
+ const walks=document.walkerRoots.length,video=document.createElement('video');document.append(video);
+ registry.add(video);assert.equal(registry.ids.has(video),false,'ordinary scans cannot add passive videos');
+ document.dispatch('play',{type:'play',composedPath:()=>[video,document]});assert.equal(registry.ids.has(video),true);
+ assert.equal(registry.exploring,false);assert.equal(registry.walkQueue.length,0);assert.equal(document.walkerRoots.length,walks);
+ permitted=false;const late=document.createElement('video');document.append(late);document.dispatch('play',{type:'play',composedPath:()=>[late,document]});assert.equal(registry.ids.has(late),false);
+ registry.dispose();
+});
+
 test('large added-node batches retain an incremental cursor without rescanning the document',t=>{
  const {document,registry,notify,added}=fixture(t);
  document.append(...Array.from({length:8000},()=>document.createElement('article')));

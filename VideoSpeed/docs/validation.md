@@ -1,3 +1,42 @@
+# VideoSpeed 0.6.18 驗證
+
+2026-10-28。自動選片改以視覺主體為主，手動選取不再永久固定。VideoPocket 未修改，UI、權限及速度／畫質偏好維持原有設定。
+
+## 規則與成本
+
+1. 先排除已知 YouTube／Bilibili 縮圖預覽；未知網站的影片照一般候選處理。
+2. 全螢幕優先；有合理可見候選時，畫面外的舊影片不得競爭。可見比例至少 25%，或可見部分占視窗至少 20%，視為主要候選；都未達時再使用仍可見的影片。
+3. 以可見面積平方根、可見比例及中央位置計算分數；播放中僅加 3% 輔助權重，近期操作僅加小幅權重，不能直接壓過大片暫停主體。
+4. 手動選取優先最多四秒，且必須仍是合理可見候選。滑出或只剩細小殘片立即失去優先權。分數相近時，現有目標可在 15% 容差內維持，避免抖動；不是新增等待時間。
+5. 原生 IntersectionObserver 只追蹤已登記影片，處理 viewport、overflow 裁切及父頁 iframe 的可見度；探索暫停與 dispose 時斷開。[W3C 規範](https://www.w3.org/TR/intersection-observer/#compute-the-intersection) 說明其異步交集計算與巢狀瀏覽內容裁切。
+6. 快捷鍵先重讀已登記元素；只對最多四個領先候選同步核對祖先裁切，最多追十六層。目標未變時留在本地立即調速；目標改變或跨 frame 才請背景重選。跨 frame 只詢問至多八個已知 frame 的快照，各有 160ms 等待上限，不重新注入或全頁探索。
+7. 選取公告與影片快照各有世代及序號，舊訊息不把目標切回舊片。同一頁重建控制器可從新序號接手，退休控制器的延遲空報告也不能清掉新狀態。初次影片偏好仍維持每片一次，探索／待載入期限沿用 0.6.16。
+
+若整頁沒有任何可見候選，仍保留原有「已知播放器」退路，供單一播放頁面使用；本輪保證的切換條件是有新的合理可見主體時，舊片不能靠播放或手選繼續占住目標。
+
+## 驗證
+
+- 舊版 0.6.17 用同一組本機影片案例重現六種失敗：暫停主片被小片搶走、手選永久固定、捲動後快捷鍵改舊片、overflow 殘片搶片、父頁外 iframe 搶片，以及相近候選切換不穩定。
+- 322 項單元／整合通過；包含快照亂序、同頁控制器重建與退休清理、選取訊息亂序、手選到期、可見幾何與 observer 生命週期。
+- 最終 Chromium／Brave 各 13 項視覺主體操作檢查通過：未知網站大片暫停主片、直接捲動按鍵、FB-like 貼文手選後滑走、主片暫停與小片播放、overflow 殘片、同源／跨來源畫外 iframe、四秒優先到期、15% 容差及已知預覽排除。
+- 一般快捷鍵與捲動後快捷鍵期間，ISOLATED world 的 Document／Element.querySelectorAll 及 createTreeWalker 計數均為零。測的是已有登記影片的操作路徑，不代表初次開頁完全不查 DOM。
+- 25 項主影片／預覽提示回歸通過；不開 popup 的四次新文件、兩次 SPA、啟動故障恢復與 worker 冷啟動通過。
+- 12 項近期／待載入生命週期通過，包含同頁 dispose／reinject 後十五秒首播仍套預設，以及原期限不延長。候選回歸曾抓到新 session 序號從頭開始而被拒收的問題；已用 snapshotEpoch 分開世代並補回歸。
+- Chromium 與 Brave 更新／BFCache 回歸通過：閒置頁探查為零，更新期限不延長，返回後可控制，新增 runtime errors／warnings 為零。
+
+最終成品 SHA-256（大小寫敏感相對路徑排序，各檔 path + NUL + bytes + NUL）：`75b3d7074562e8e6ebfaf2acc4ed07f4533ef1a22eba6747c167eaeaa1227647`。
+
+本機證據：`work/qa-080-visual/`、`work/qa-078-focus/results.json`、`work/qa-075-main-release-0618-final/results.json`、`work/qa-autostart/release-0618-final-results.json`、`work/qa-076-lifecycle/`。各報告核對載入的最終成品 hash。輸出摘要為 `VideoSpeed-validation.json`。
+
+## 界線
+
+上述為隔離瀏覽器與真實本機影片的操作測試，未取代使用者當前實站驗收。未知網站以幾何與互動推斷主體，無法保證理解所有等尺寸、重疊或特殊播放器的用途；IntersectionObserver 主要提供幾何交集，不是完整的像素遮擋或內容語意辨識。跨來源 iframe 的父頁裁切已驗證，中央位置仍以影片所在 frame 為基準。
+
+先前持續 context invalidation、長播卡死與 worker-fetch 的原始觸發條件尚未全數定位，不以本輪選片回歸宣稱全部解決。
+
+<details>
+<summary>0.6.17 歷史驗證</summary>
+
 # VideoSpeed 0.6.17 驗證
 
 2026-10-28。修正 Bilibili 影片頁右側推薦預覽誤入控制目標。VideoPocket 未修改。
@@ -255,6 +294,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

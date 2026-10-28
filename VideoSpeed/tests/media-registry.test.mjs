@@ -185,6 +185,24 @@ test('Bilibili sidebar previews never become registry or pointer targets',t=>{
  assert.equal(registry.fromEvent({composedPath:()=>[main]}),main);registry.dispose();
 });
 
+test('native intersections observe known media only and disconnect during background suspension',t=>{
+ const {document,registry:initial}=fixture(t);initial.dispose();let observer,changes=0;
+ document.defaultView.top=document.defaultView;document.defaultView.getComputedStyle=()=>({display:'block',visibility:'visible',opacity:'1'});
+ document.defaultView.IntersectionObserver=class{
+  constructor(callback){this.callback=callback;this.targets=new Set();this.disconnections=0;observer=this;}
+  observe(video){this.targets.add(video);}unobserve(video){this.targets.delete(video);}disconnect(){this.targets.clear();this.disconnections++;}
+ };
+ const registry=new MediaRegistry(document,()=>{},()=>changes++),video=document.createElement('video');
+ const bounds={left:0,top:0,right:640,bottom:360,width:640,height:360};video.getBoundingClientRect=()=>bounds;
+ document.append(video);registry.add(video);assert.equal(observer.targets.has(video),true);
+ const entry={target:video,time:performance.now(),boundingClientRect:bounds,intersectionRect:{left:0,top:0,right:640,bottom:1,width:640,height:1}};
+ observer.callback([entry]);assert.equal(registry.snapshot(new Map(),new WeakMap())[0].visibleArea,640);
+ registry.setExploring(false);assert.equal(observer.targets.size,0);const before=changes;observer.callback([entry]);assert.equal(changes,before);
+ registry.setExploring(true);assert.equal(observer.targets.has(video),true);
+ registry.remove(registry.ids.get(video),video);assert.equal(observer.targets.size,0);
+ registry.dispose();assert.ok(observer.disconnections>=3);
+});
+
 test('mutation backlog is capped and an overflow fallback still finds media',t=>{
  const {document,registry,notify,added}=fixture(t);drain(registry);
  const nodes=Array.from({length:4097},()=>document.createElement('article')),video=document.createElement('video');nodes.at(-1).append(video);document.append(...nodes);

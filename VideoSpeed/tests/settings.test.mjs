@@ -84,12 +84,53 @@ test('shortcut actions match the recorded format, including modifiers and old sy
  assert.equal(shortcutAction({key:'a'},{fineFaster:''}),null);
  assert.equal(editingEvent({target:{tagName:'INPUT'}}),true);assert.equal(editingEvent({composedPath:()=>[{isContentEditable:true}]}),true);
 });
-test('single target uses current playback, then last actual playback, with explicit pick available',()=>{
+test('visible subjects beat hidden playback and explicit preferences cannot keep hidden media',()=>{
  const items=[{key:'ad',visible:false,area:999999,playing:true},{key:'main',visible:true,area:60000,playing:true},{key:'paused',visible:true,area:20000,interactedAt:100}];
  assert.equal(rankTargets(items)[0].key,'main');assert.equal(rankTargets(items,'paused')[0].key,'paused');
- assert.equal(rankTargets([{key:'a',visible:true,lastPlayedAt:10},{key:'b',visible:false,lastPlayedAt:20}])[0].key,'b');
+ assert.equal(rankTargets([{key:'a',visible:true,lastPlayedAt:10},{key:'b',visible:false,lastPlayedAt:20}])[0].key,'a');
  assert.equal(rankTargets([{key:'only',visible:false}])[0].key,'only');
  assert.equal(rankTargets([{key:'a',visible:true,playing:true,lastPlayedAt:10},{key:'b',visible:true,playing:true,lastPlayedAt:20}])[0].key,'b');
+});
+
+test('a paused primary video beats a playing thumbnail on an unknown website',()=>{
+ const main={key:'main',visible:true,visibleRatio:1,visibleArea:480000,viewportArea:900000,centrality:.9,playing:false};
+ const preview={key:'preview',visible:true,visibleRatio:1,visibleArea:18000,viewportArea:900000,centrality:.7,playing:true,lastPlayedAt:999};
+ assert.equal(rankTargets([preview,main])[0].key,'main');
+});
+
+test('manual preference expires and gives way immediately when its video leaves the visual subject pool',()=>{
+ const items=[{key:'main',visible:true,visibleRatio:1,visibleArea:480000},{key:'small',visible:true,visibleRatio:1,visibleArea:18000,playing:true}];
+ const preference={key:'small',until:5000};
+ assert.equal(rankTargets(items,preference,{now:2000})[0].key,'small');
+ assert.equal(rankTargets(items,preference,{now:5000})[0].key,'main');
+ assert.equal(rankTargets([{...items[1],visible:false},items[0]],preference,{now:2000})[0].key,'main');
+ assert.equal(rankTargets([{...items[1],visibleRatio:.01,visibleArea:180},items[0]],preference,{now:2000})[0].key,'main');
+});
+
+test('edge slivers and recent autoplay cannot displace a central, reasonably visible video',()=>{
+ const sliver={key:'old',visible:true,area:500000,visibleArea:500,visibleRatio:.001,viewportArea:900000,centrality:.1,playing:true,lastPlayedAt:10000};
+ const main={key:'new',visible:true,area:500000,visibleArea:360000,visibleRatio:.72,viewportArea:900000,centrality:.9,playing:false};
+ assert.equal(rankTargets([sliver,main],{key:'old',until:20000},{now:10000,currentKey:'old'})[0].key,'new');
+});
+
+test('large videos exceeding the viewport remain visual subjects by their screen coverage',()=>{
+ const large={key:'large',visible:true,visibleArea:500000,visibleRatio:.1,viewportArea:600000};
+ const small={key:'small',visible:true,visibleArea:10000,visibleRatio:1,viewportArea:600000,playing:true};
+ assert.equal(rankTargets([small,large])[0].key,'large');
+});
+
+test('fullscreen wins, while recent interaction only supplies a small visual tiebreaker',()=>{
+ const a={key:'a',visible:true,visibleArea:50000,visibleRatio:1,playing:true};
+ const b={key:'b',visible:true,visibleArea:50000,visibleRatio:1,interactedAt:1000};
+ assert.equal(rankTargets([a,b],null,{now:2000})[0].key,'b');
+ assert.equal(rankTargets([{...a,fullscreen:true},b],{key:'b',until:3000},{now:2000})[0].key,'a');
+});
+
+test('similar candidates keep the current target without keeping a departed or clearly smaller target',()=>{
+ const a={key:'a',visible:true,visibleRatio:1,visibleArea:100000},b={key:'b',visible:true,visibleRatio:1,visibleArea:110000};
+ assert.equal(rankTargets([a,b],null,{currentKey:'a'})[0].key,'a');
+ assert.equal(rankTargets([{...a,visibleArea:10000},b],null,{currentKey:'a'})[0].key,'b');
+ assert.equal(rankTargets([{...a,visible:false},b],null,{currentKey:'a'})[0].key,'b');
 });
 
 test('fine controls follow the same fifth-interval grid as dragging',()=>{

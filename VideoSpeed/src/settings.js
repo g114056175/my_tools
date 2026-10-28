@@ -124,9 +124,27 @@ export function shortcutAction(event,shortcuts=DEFAULT_SHORTCUTS){
  return Object.entries(shortcuts).find(([,key])=>key!==''&&normalizeShortcut(key)===shortcut)?.[0]??null;
 }
 export function editingEvent(event){return (event.composedPath?.()||[event.target]).some(node=>node?.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(node?.tagName||'')||node?.getAttribute?.('role')==='textbox');}
-export function rankTargets(items,pinned){
+export const TARGET_PREFERENCE_MS=4000;
+export function targetIsProminent(item){
+ if(!item?.visible)return false;
+ const area=Math.max(0,Number(item.visibleArea??item.area??1)),ratio=Number(item.visibleRatio??(item.area?area/item.area:1));
+ return area>0&&(ratio>=.25||item.viewportArea>0&&area/item.viewportArea>=.2);
+}
+function targetScore(item,now){
+ if(!item.visible)return 0;
+ const area=Math.max(0,Number(item.visibleArea??item.area??1)),ratio=Math.max(0,Math.min(1,Number(item.visibleRatio??(item.area?area/item.area:1)))),center=Math.max(0,Math.min(1,Number(item.centrality??1)));
+ const age=now-Number(item.interactedAt||0),recent=Number(item.interactedAt)>0&&age>=0&&age<TARGET_PREFERENCE_MS;
+ return Math.sqrt(area)*(.65+.35*ratio)*(.7+.3*center)*(item.playing?1.03:1)*(recent?1.12:1);
+}
+export function rankTargets(items,preference,{now=Date.now(),currentKey=null}={}){
  const connected=items.filter(item=>item.connected!==false);
- if(connected.length<=1)return connected;
- return connected.sort((a,b)=>Number(b.key===pinned)-Number(a.key===pinned)||Number(!!b.playing)-Number(!!a.playing)||(a.playing&&b.playing?Number(!!b.visible)-Number(!!a.visible):0)||
- (b.lastPlayedAt||0)-(a.lastPlayedAt||0)||Number(!!b.visible)-Number(!!a.visible)||(b.visibleArea??b.area??0)-(a.visibleArea??a.area??0));
+ const fullscreen=connected.filter(item=>item.fullscreen),prominent=connected.filter(targetIsProminent),visible=connected.filter(item=>item.visible);
+ const pool=fullscreen.length?fullscreen:prominent.length?prominent:visible.length?visible:connected;
+ const scored=pool.map(item=>({item,score:targetScore(item,now)})).sort((a,b)=>b.score-a.score||Number(!!b.item.playing)-Number(!!a.item.playing)||(b.item.lastPlayedAt||0)-(a.item.lastPlayedAt||0));
+ if(!scored.length)return [];
+ const preferredKey=typeof preference==='string'?preference:preference?.until>now?preference.key:null;
+ const preferred=scored.find(value=>value.item.key===preferredKey&&targetIsProminent(value.item));
+ const current=scored.find(value=>value.item.key===currentKey&&targetIsProminent(value.item));
+ const first=preferred||current&&current.score*1.15>=scored[0].score&&current||scored[0];
+ return [first.item,...scored.filter(value=>value!==first).map(value=>value.item)];
 }

@@ -1,4 +1,6 @@
 import {mediaTitle} from './media-title.js';
+import {rankTargets} from './settings.js';
+import {mediaGeometry,verifyMediaGeometry} from './media-visibility.js';
 const sourceObjectIds=new WeakMap();let sourceObjectSerial=0;
 function sourceObjectKey(video){
  try{
@@ -50,6 +52,13 @@ export function mediaCanInitialize(video,target=globalThis){
 export class MediaRegistry{
  constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true,allowMediaEvents=()=>false,acceptVideo=()=>true}={}){
   Object.assign(this,{document,onAdd,onChange,owner,exploring,allowMediaEvents,acceptVideo,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
+  this.intersections=new WeakMap();this.visibilityEpoch=performance.now();
+  const Observer=document.defaultView?.IntersectionObserver;
+  this.visibilityObserver=typeof Observer==='function'?new Observer(entries=>{
+   if(this.disposed||!this.exploring)return;
+   let changed=false;for(const entry of entries)if(this.ids.has(entry.target)&&!(entry.time<this.visibilityEpoch)){this.intersections.set(entry.target,entry);changed=true;}
+   if(changed)this.onChange();
+  },{threshold:[0,.15,.25,.5,.75,1]}):null;
   const seenEvents=new WeakSet();
   this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video)||this.allowMediaEvents())){this.add(video,{mediaEvent:true});if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
   this.observe(document);this.scan(document,true);this.enqueue(document);
@@ -62,7 +71,7 @@ export class MediaRegistry{
   if(isMediaPreview(video,this.document.defaultView)){const id=this.ids.get(video);if(id)this.remove(id,video);return;}
   if(!this.exploring&&!(mediaEvent&&this.allowMediaEvents())||this.ids.has(video)||!this.acceptVideo(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
-  const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
+  const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);if(this.exploring)this.visibilityObserver?.observe(video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }
  notePlay(video){video.setAttribute('data-video-control-last-played',String(Date.now()));}
  // Background grace checks only direct videos in already known roots. No
@@ -76,7 +85,7 @@ export class MediaRegistry{
   if(this.serial!==before)this.onChange();
  }
  clearIdentity(id,video){if(video.getAttribute('data-video-control-registry')===this.owner&&video.getAttribute('data-video-control-id')===id){video.removeAttribute('data-video-control-id');video.removeAttribute('data-video-control-registry');}}
- remove(id,video){this.videos.delete(id);this.ids.delete(video);this.titleCache.delete(video);this.onRemove?.(id,video);this.clearIdentity(id,video);}
+ remove(id,video){this.visibilityObserver?.unobserve(video);this.intersections.delete(video);this.videos.delete(id);this.ids.delete(video);this.titleCache.delete(video);this.onRemove?.(id,video);this.clearIdentity(id,video);}
  observe(root){
   if(this.disposed||root.host?.id?.startsWith('video-control-')||this.observers.has(root)||this.observers.size>=64)return;
   for(const event of ['play','loadedmetadata','loadstart'])root.addEventListener(event,this.discover,true);
@@ -92,12 +101,14 @@ export class MediaRegistry{
  setExploring(enabled){
   enabled=!!enabled;if(this.disposed||this.exploring===enabled)return;
   this.exploring=enabled;
+  this.visibilityObserver?.disconnect();this.intersections=new WeakMap();this.visibilityEpoch=performance.now();
   if(!enabled){
    clearTimeout(this.walkTimer);this.walkTimer=null;this.walkQueue=[];this.walkDeferred.clear();this.mutationQueue=[];this.pendingMutationNodes=0;this.pendingMutationRecords=0;
    for(const observer of this.observers.values())observer.disconnect();
    return;
   }
   this.prune();this.walkedRoots=new WeakSet();
+  for(const video of this.videos.values())this.visibilityObserver?.observe(video);
   for(const [root,observer]of this.observers)observer.observe(root,{childList:true,subtree:true});
   this.scan(this.document,true);
  }
@@ -240,11 +251,11 @@ export class MediaRegistry{
   const hits=[...this.videos.values()].filter(video=>{if(isMediaPreview(video,this.document.defaultView))return false;const r=video.getBoundingClientRect();return r.width>0&&r.height>0&&x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;});
   return hits.length===1?hits[0]:null;
  }
- snapshot(states,interactions,{details=false,activeId=null}={}){
+ snapshot(states,interactions,{details=false,activeId=null,verify=false}={}){
   this.prune();const items=[],view=this.document.defaultView;
   for(const [id,video]of this.videos){
    const rect=video.getBoundingClientRect(),style=view.getComputedStyle(video);
-   const visible=rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<view.innerHeight&&rect.left<view.innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0';
+   const geometry=mediaGeometry(rect,view,{painted:style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0',intersection:this.intersections.get(video),waitForIntersection:!!this.visibilityObserver&&this.exploring&&view!==view.top});
    const fullscreen=this.document.fullscreenElement===video||this.document.fullscreenElement?.contains(video)||false;
    const signature=mediaSignature(video),cached=this.titleCache.get(video);
    let title=cached?.title;
@@ -252,10 +263,10 @@ export class MediaRegistry{
    else if(cached?.key!==signature)title='';
    title=title||video.getAttribute('title')||`Video ${items.length+1}`;
    const state=states.get(id);
-   const visibleArea=visible?Math.max(0,Math.min(view.innerWidth,rect.right)-Math.max(0,rect.left))*Math.max(0,Math.min(view.innerHeight,rect.bottom)-Math.max(0,rect.top)):0;
-   items.push({id,title:String(title).trim().slice(0,200),visible,visibleArea,area:Math.round(rect.width*rect.height),fullscreen,playing:!video.paused&&!video.ended,lastPlayedAt:Number(video.getAttribute('data-video-control-last-played'))||0,interactedAt:interactions.get(video)||0,connected:video.isConnected,videoQuality:video.videoWidth&&video.videoHeight?Math.min(video.videoWidth,video.videoHeight):video.videoHeight||0,videoHeight:video.videoHeight||0,...state?.rate.snapshot(),quality:state?.quality||{status:'pending'}});
+   items.push({id,title:String(title).trim().slice(0,200),...geometry,fullscreen,playing:!video.paused&&!video.ended,lastPlayedAt:Number(video.getAttribute('data-video-control-last-played'))||0,interactedAt:interactions.get(video)||0,connected:video.isConnected,videoQuality:video.videoWidth&&video.videoHeight?Math.min(video.videoWidth,video.videoHeight):video.videoHeight||0,videoHeight:video.videoHeight||0,...state?.rate.snapshot(),quality:state?.quality||{status:'pending'}});
   }
+  if(verify){const cache=new WeakMap();for(const item of rankTargets(items.filter(item=>item.visible)).slice(0,4))Object.assign(item,verifyMediaGeometry(this.videos.get(item.id),view,item,cache));}
   return items;
  }
- dispose(){this.disposed=true;clearTimeout(this.walkTimer);this.walkTimer=null;this.walkQueue=[];this.walkDeferred.clear();this.mutationQueue=[];this.pendingMutationNodes=0;this.pendingMutationRecords=0;for(const [root,observer]of this.observers){observer.disconnect();for(const event of ['play','loadedmetadata','loadstart'])root.removeEventListener(event,this.discover,true);}this.observers.clear();for(const [id,video]of this.videos){this.ids.delete(video);this.clearIdentity(id,video);}this.videos.clear();}
+ dispose(){this.disposed=true;this.visibilityObserver?.disconnect();clearTimeout(this.walkTimer);this.walkTimer=null;this.walkQueue=[];this.walkDeferred.clear();this.mutationQueue=[];this.pendingMutationNodes=0;this.pendingMutationRecords=0;for(const [root,observer]of this.observers){observer.disconnect();for(const event of ['play','loadedmetadata','loadstart'])root.removeEventListener(event,this.discover,true);}this.observers.clear();for(const [id,video]of this.videos){this.ids.delete(video);this.clearIdentity(id,video);}this.videos.clear();}
 }

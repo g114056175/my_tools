@@ -61,7 +61,7 @@ export class MediaRegistry{
   },{threshold:[0,.15,.25,.5,.75,1]}):null;
   const seenEvents=new WeakSet();
   this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video)||this.allowMediaEvents())){this.add(video,{mediaEvent:true});if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
-  this.observe(document);this.scan(document,true);this.enqueue(document);
+  this.observe(document);this.scan(document,true);
   // A slow document/worker may start after the media's first events. Catch up
   // once on direct videos; passive waiting never queues a DOM/shadow walk.
   if(!exploring&&allowMediaEvents())this.probe();

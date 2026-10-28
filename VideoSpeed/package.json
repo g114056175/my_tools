@@ -14,6 +14,7 @@
     "test:routes": "node --test tests/browser/page-bridge-route-check.mjs",
     "test:soak": "node tests/browser/long-playback-soak.mjs",
     "test:notices": "node tests/browser/initial-rate-notice-check.mjs",
+    "test:quality-start": "node tests/browser/quality-before-play-check.mjs",
     "test:popup": "node tests/browser/popup-target-check.mjs",
     "test:targets": "node tests/browser/visual-target-check.mjs",
     "test:lifecycle": "node tests/browser/idle-lifecycle-check.mjs candidate",

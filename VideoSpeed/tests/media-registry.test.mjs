@@ -47,11 +47,11 @@ class FakeDocument extends FakeNode{
  }
 }
 
-function fixture(t,registryOptions={}){
+function fixture(t,registryOptions={},prepareDocument=()=>{}){
  const observers=new Set(),prior=globalThis.MutationObserver;
  globalThis.MutationObserver=class extends FakeMutationObserver{constructor(callback){super(callback,observers);}};
  t.after(()=>{globalThis.MutationObserver=prior;for(const observer of [...observers])observer.disconnect();});
- const document=new FakeDocument(observers),added=[],changes=[];
+ const document=new FakeDocument(observers),added=[],changes=[];prepareDocument(document);
  const registry=new MediaRegistry(document,(video,id)=>added.push({video,id}),()=>changes.push(1),registryOptions);
  const notify=(root,nodes=[],removedNodes=[])=>{
   const record={target:root,addedNodes:nodes,removedNodes};
@@ -67,6 +67,16 @@ function drain(registry,limit=10000){
  }
  assert.fail('MediaRegistry work did not drain');
 }
+
+test('an initial document larger than the foreground budget is traversed once',t=>{
+ const {document,registry}=fixture(t,{},document=>{
+  document.append(...Array.from({length:15000},()=>document.createElement('article')));
+ });
+ t.after(()=>registry.dispose());
+ drain(registry);
+ assert.equal(document.walkerRoots.filter(root=>root===document).length,1);
+ assert.equal(registry.walkQueue.length,0);
+});
 
 test('passive loading registers only direct media events without restarting DOM exploration',t=>{
  const {document,registry}=fixture(t);drain(registry);registry.setExploring(false);

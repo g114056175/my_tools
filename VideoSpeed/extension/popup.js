@@ -16,16 +16,16 @@ const popupTabReady=chrome.tabs.query({active:true,currentWindow:true}).then(([t
 }).catch(()=>{});
 const shortcutActions=[['slower','Prev tick'],['faster','Next tick'],['fineSlower','Fine down'],['fineFaster','Fine up'],['reset','Reset 1×'],['preferred','Preferred']];
 let language=resolveLanguage();const t=(key,values)=>translate(language,key,values);
-const systemTheme=matchMedia('(prefers-color-scheme: dark)');let appearance='system';
-function paintTheme(){const dark=appearance==='dark'||appearance==='system'&&systemTheme.matches;document.documentElement.dataset.theme=dark?'dark':'light';for(const button of document.querySelectorAll('button[data-theme]')){const active=button.dataset.theme===(dark?'dark':'light');button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}}
+let appearance='light';
+function paintTheme(){const dark=appearance==='dark';document.documentElement.dataset.theme=dark?'dark':'light';for(const button of document.querySelectorAll('button[data-theme]')){const active=button.dataset.theme===(dark?'dark':'light');button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}}
 function paintLanguage(){applyPopupLanguage(document,language);for(const button of document.querySelectorAll('[data-language]')){const active=button.dataset.language===language;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}for(const node of document.querySelectorAll('[role=alert]'))if(node.dataset.message)node.textContent=translateMessage(language,node.dataset.message);sliderKey='';if(state)render();}
 try{const storedUi=await chrome.storage.local.get(['popupTheme','popupLanguage']);if(['light','dark'].includes(storedUi.popupTheme))appearance=storedUi.popupTheme;language=resolveLanguage(storedUi.popupLanguage);}catch{language='en';}
-paintLanguage();paintTheme();systemTheme.addEventListener('change',paintTheme);
+paintLanguage();paintTheme();
 for(const button of document.querySelectorAll('button[data-theme],button[data-language]'))button.addEventListener('click',async()=>{
  if(!state||!effective().enabled)return;cancelRecording();
  try{await chrome.storage.local.set(button.dataset.theme?{popupTheme:button.dataset.theme}:{popupLanguage:button.dataset.language});}catch{error('feedback',button.dataset.theme?'Could not save appearance':'Could not save: Could not connect');}
 });
-chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.popupTheme){appearance=['light','dark'].includes(changes.popupTheme.newValue)?changes.popupTheme.newValue:'system';paintTheme();}if(changes.popupLanguage){language=resolveLanguage(changes.popupLanguage.newValue);paintLanguage();}});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local')return;if(changes.popupTheme){appearance=['light','dark'].includes(changes.popupTheme.newValue)?changes.popupTheme.newValue:'light';paintTheme();}if(changes.popupLanguage){language=resolveLanguage(changes.popupLanguage.newValue);paintLanguage();}});
 const send=async message=>{const result=await chrome.runtime.sendMessage({scope:'video-control',...(tabId?{tabId}:{}),...message});if(!result?.ok)throw Error(result?.error||'Could not connect');return result;};
 function error(id,text=''){$(id).dataset.message=text;$(id).textContent=translateMessage(language,text);$(id).hidden=!text;}
 function effective(){return {...state.settings,...Object.fromEntries([...drafts].map(([key,item])=>[key,item.value]))};}

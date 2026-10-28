@@ -4,7 +4,7 @@ import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS,TAB_LOADING_GRACE_MS} from './tab-activity.js';
 import {consumeRuntimeError} from './runtime.js';
-const SCOPE='video-control',VERSION='0.6.19',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.20',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const currentTargets=new Map(),selectionEpoch=Date.now();let selectionRevision=0;
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};

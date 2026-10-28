@@ -719,7 +719,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.18";
+  var VERSION = "0.6.19";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();
@@ -735,6 +735,7 @@
   var optionsOf = (target) => target.documentId ? { documentId: target.documentId } : { frameId: target.frameId };
   var tabGenerations = /* @__PURE__ */ new Map();
   var frameGenerations = /* @__PURE__ */ new Map();
+  var frameDocuments = /* @__PURE__ */ new Map();
   var navigationSerial = 0;
   function tabGeneration(tabId) {
     if (!tabGenerations.has(tabId)) tabGenerations.set(tabId, ++navigationSerial);
@@ -832,7 +833,7 @@
   }
   async function readFocusedContext() {
     const window = await chrome.windows.getLastFocused();
-    if (!window?.focused || !Number.isInteger(window.id)) return { windowId: null, tabId: null };
+    if (!Number.isInteger(window?.id) || !window.focused && ![...ports.values()].some((item) => item.windowId === window.id)) return { windowId: null, tabId: null };
     const [tab] = await chrome.tabs.query({ active: true, windowId: window.id });
     return { windowId: window.id, tabId: Number.isInteger(tab?.id) ? tab.id : null };
   }
@@ -872,6 +873,7 @@
     }
     activityGeneration++;
     const windowId = event.windowId === chrome.windows.WINDOW_ID_NONE ? null : event.windowId;
+    if (windowId === null && [...ports.values()].some((item) => item.windowId === tabActivity.focusedWindowId)) return;
     const previousRevision = tabActivity.revision;
     const affected = tabActivity.setFocusedWindow(windowId, event.at);
     if (tabActivity.revision !== previousRevision) saveActivity().catch(() => {
@@ -975,20 +977,24 @@
     return activity.focused || activity.until > Date.now() || activity.loadingUntil > Date.now() && hasPendingMedia(tabId) || [...ports.values()].some((item) => item.tabId === tabId);
   }
   var activityRecheck = null;
-  async function ensureStartupActivity(tabId) {
+  var popupFocusRevision = 0;
+  async function ensureStartupActivity(tabId, { force = false } = {}) {
     const activity = await activityFor(tabId);
-    if (activity.focused) return;
+    if (activity.focused && !force) return;
     if (!activityRecheck) {
-      const revision = activityEventRevision;
-      activityRecheck = readFocusedContext().then((context) => {
-        if (revision !== activityEventRevision) return;
-        const changed = tabActivity.reconcile(context, Date.now());
-        if (changed.length) {
-          saveActivity().catch(() => {
-          });
-          for (const id of changed) notifyActivity(id);
+      activityRecheck = (async () => {
+        for (; ; ) {
+          const revision = activityEventRevision, popupRevision = popupFocusRevision, context = await readFocusedContext();
+          if (revision !== activityEventRevision || popupRevision !== popupFocusRevision) continue;
+          const changed = tabActivity.reconcile(context, Date.now());
+          if (changed.length) {
+            saveActivity().catch(() => {
+            });
+            for (const id of changed) notifyActivity(id);
+          }
+          return;
         }
-      }).catch(() => {
+      })().catch(() => {
       }).finally(() => {
         activityRecheck = null;
       });
@@ -1221,6 +1227,8 @@
     }
   }
   function record(tabId, frameId, documentId, videos, pendingUntil = 0, snapshotRevision = 0, snapshotEpoch = 0) {
+    const liveDocument = frameDocuments.get(tabId)?.get(frameId);
+    if (documentId && liveDocument && documentId !== liveDocument) return;
     const previous = frames.get(tabId)?.get(frameId);
     if (previous?.documentId === documentId) {
       if (snapshotEpoch > 0 && previous.snapshotEpoch > snapshotEpoch) return;
@@ -1271,7 +1279,7 @@
           const result = await chrome.tabs.sendMessage(tabId, { scope: SCOPE, action: "refreshTarget" }, optionsOf(target));
           if (result?.ok && Array.isArray(result.videos) && result.videos.some((video) => video.id === target.id && video.connected !== false)) {
             if (tabGenerations.get(tabId) === generation && frameGeneration(tabId, target.frameId) === frameVersion) {
-              if (frames.get(tabId)?.get(target.frameId) === before) record(tabId, target.frameId, target.documentId, result.videos);
+              if (frames.get(tabId)?.get(target.frameId) === before) record(tabId, target.frameId, target.documentId, result.videos, result.pendingUntil || 0, result.snapshotRevision || 0, result.snapshotEpoch || 0);
               return;
             }
           }
@@ -1313,7 +1321,7 @@
       if (/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname)) return [];
       const api = globalThis[/* @__PURE__ */ Symbol.for("video-control.api")];
       if (!api?.alive?.()) throw Error("Could not connect to the video");
-      return await api.refresh();
+      return api.refreshSnapshot ? await api.refreshSnapshot() : { videos: await api.refresh() };
     } });
     let liveFrames;
     try {
@@ -1326,7 +1334,8 @@
     }
     for (const item of results) {
       if (frameGeneration(tabId, item.frameId) !== (frameVersions.get(item.frameId) || 0) || frames.get(tabId)?.get(item.frameId) !== before.get(item.frameId)) continue;
-      record(tabId, item.frameId, item.documentId, item.result);
+      const packet = Array.isArray(item.result) ? { videos: item.result } : item.result || {};
+      record(tabId, item.frameId, item.documentId, packet.videos, packet.pendingUntil || 0, packet.snapshotRevision || 0, packet.snapshotEpoch || 0);
     }
     await announce(tabId);
     return true;
@@ -1440,7 +1449,12 @@
     if (message.action === "activity") return activityFields(tabId, tab.url || "");
     if (message.action === "getState" || message.action === "cachedState") {
       const settings2 = await stored2(), pageUrl = tab.url || "", siteDisabled = disabledOnUrl(pageUrl, settings2.disabledSites, settings2.siteModes);
-      if (message.action === "getState" && settings2.enabled && !siteDisabled) await popupRefresh(refresh(tabId, message.refresh === true));
+      if (message.action === "getState" && settings2.enabled && !siteDisabled) {
+        await Promise.allSettled([...ports.values()].filter((item) => item.requestedTabId === tabId).map((item) => item.binding));
+        await ensureStartupActivity(tabId);
+        await notifyActivity(tabId);
+        await popupRefresh(refresh(tabId, message.refresh === true));
+      }
       const target = siteDisabled ? null : settings2.enabled ? targetFor(tabId) : await pausedTarget(tabId), rate = await rateState();
       return { tabId, pageUrl, siteDisabled, settings: settings2, loading: tab.status === "loading", lastRate: rate.lastRate, rateRevision: rate.rateRevision, videos: target ? [target] : [], target };
     }
@@ -1497,13 +1511,28 @@
       return;
     }
     if (port.name !== "video-control-popup") return;
-    const item = { tabId: null };
+    const item = { tabId: null, windowId: null, requestedTabId: null, binding: null };
     ports.set(port, item);
     port.onMessage.addListener((message) => {
-      if (message.action === "watch" && Number.isInteger(message.tabId)) {
-        const changed = item.tabId !== message.tabId;
-        item.tabId = message.tabId;
-        if (changed && settingsCache?.enabled) highlight(item.tabId);
+      if (message.action === "watch" && Number.isInteger(message.tabId) && item.requestedTabId !== message.tabId) {
+        item.requestedTabId = message.tabId;
+        item.binding = (async () => {
+          await activityReady;
+          const [tab, window] = await Promise.all([chrome.tabs.get(message.tabId), chrome.windows.getLastFocused()]);
+          const [selected] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+          if (!ports.has(port) || item.requestedTabId !== message.tabId || selected?.id !== tab.id || window?.id !== tab.windowId) return;
+          item.tabId = tab.id;
+          item.windowId = tab.windowId;
+          popupFocusRevision++;
+          const changed = tabActivity.reconcile({ windowId: tab.windowId, tabId: tab.id });
+          if (changed.length) {
+            saveActivity().catch(() => {
+            });
+            await Promise.allSettled(changed.map(notifyActivity));
+          }
+          if (settingsCache?.enabled) await highlight(tab.id);
+        })().catch(() => {
+        });
       }
       if (message.action === "renew" && item.tabId && settingsCache?.enabled) {
         const target = targetFor(item.tabId);
@@ -1516,13 +1545,19 @@
     port.onDisconnect.addListener(() => {
       consumeRuntimeError(chrome.runtime);
       ports.delete(port);
-      if (item.tabId && ![...ports.values()].some((other) => other.tabId === item.tabId)) highlight(item.tabId, false, true);
+      popupFocusRevision++;
+      if (item.tabId && ![...ports.values()].some((other) => other.tabId === item.tabId)) {
+        highlight(item.tabId, false, true);
+        ensureStartupActivity(item.tabId, { force: true }).catch(() => {
+        });
+      }
     });
   });
   function forgetTab(tabId) {
     clearSelectionDelivery(tabId);
     tabGenerations.set(tabId, ++navigationSerial);
     frameGenerations.delete(tabId);
+    frameDocuments.delete(tabId);
     frames.delete(tabId);
     pinned.delete(tabId);
     currentTargets.delete(tabId);
@@ -1585,13 +1620,17 @@
   chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => frameRoute(details).catch(() => {
   }));
   chrome.webNavigation.onCommitted.addListener((details) => {
-    if (details.frameId > 0) {
+    if (!frameDocuments.has(details.tabId)) frameDocuments.set(details.tabId, /* @__PURE__ */ new Map());
+    if (details.documentId) frameDocuments.get(details.tabId).set(details.frameId, details.documentId);
+    if (details.frameId === 0) tabGenerations.set(details.tabId, ++navigationSerial);
+    else {
       if (!frameGenerations.has(details.tabId)) frameGenerations.set(details.tabId, /* @__PURE__ */ new Map());
       frameGenerations.get(details.tabId).set(details.frameId, ++navigationSerial);
-      frames.get(details.tabId)?.delete(details.frameId);
-      announce(details.tabId, true).catch(() => {
-      });
     }
+    const previous = frames.get(details.tabId)?.get(details.frameId);
+    if (previous && (!details.documentId || previous.documentId !== details.documentId)) frames.get(details.tabId).delete(details.frameId);
+    announce(details.tabId, true).catch(() => {
+    });
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local") rateMemory.observeChanges(changes, area).catch(() => {

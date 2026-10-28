@@ -148,6 +148,22 @@ const video = id => ({
   rate: 2,
 });
 
+test('retired documents cannot clear or replace the live media after a navigation commit', async () => {
+ const fixture=createChromeFixture();await import('../extension/background.js?test=retired-document-reports');
+ const send=(message,sender=createPopupMessageSender())=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},sender,resolve));
+ for(const frameId of [0,1]){
+  const current={...createContentSender('live-'+frameId),frameId};
+  const retired={...current,documentId:'retired-'+frameId};
+  fixture.events.navigationCommitted.listeners[0]({tabId:1,frameId,documentId:current.documentId});
+  await send({action:'report',snapshotEpoch:200,snapshotRevision:1,videos:[video('live-'+frameId)]},current);
+  await send({action:'report',snapshotEpoch:100,snapshotRevision:99,videos:[]},retired);
+  await send({action:'report',snapshotEpoch:300,snapshotRevision:100,videos:[{...video('retired'),visibleArea:1_000_000}]},retired);
+  const result=await send({action:'cachedState',tabId:1});
+  assert.ok(result.target,'retired cleanup erased a live target');
+  assert.notEqual(result.target.id,'retired','retired media became the selected target');
+ }
+});
+
 test('refreshFrames preserves newer frame reports across delayed allFrames snapshots', { timeout: 20000 }, async () => {
   const fixture = createChromeFixture();
   await import('../extension/background.js?test=background-refresh');

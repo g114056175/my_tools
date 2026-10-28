@@ -13,7 +13,7 @@ import {PendingMediaLease} from './pending-media-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {SelectionOrder} from './selection-order.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.18',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.19',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -145,7 +145,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  trustedRateInput.start();
  globalThis[Symbol.for('video-control.identities')]={keys:registry.ids};
  const snapshot=(details=false,verify=false)=>registry.snapshot(states,interactions,{details,activeId,verify});
- const snapshotPacket=(verify=false)=>({videos:snapshot(false,verify),pendingUntil:pendingUntil(),snapshotEpoch,snapshotRevision:++snapshotRevision});
+ const snapshotPacket=(verify=false,details=false)=>({videos:snapshot(details,verify),pendingUntil:pendingUntil(),snapshotEpoch,snapshotRevision:++snapshotRevision});
  const localTarget=(items,currentKey=activeId)=>rankTargets(items.map(item=>({...item,key:item.id})),preference,{currentKey})[0]||null;
  function marker(options){
   globalThis[Symbol.for('video-control.selection')]={videos:[...registry.videos.values()]};
@@ -253,7 +253,14 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   const timer=setTimeout(()=>{cancelPick();send({action:'cancelPick'});},30000);
   picker={cancel(){clearTimeout(timer);overlay.remove();label.remove();document.removeEventListener('pointermove',move,true);document.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);}};
  }
- const api={dispose,snapshot,clearSnapshot:()=>({videos:[],pendingUntil:0,snapshotEpoch,snapshotRevision:++snapshotRevision}),update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,pendingUntil:state.load.until,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refresh:async(deep=true)=>{
+ let inspectTask=null;
+ const api={dispose,snapshot,snapshotPacket,clearSnapshot:()=>({videos:[],pendingUntil:0,snapshotEpoch,snapshotRevision:++snapshotRevision}),update,updateLastRate,updateActivity,handleKey,updateLanguage:value=>{locale=resolveLanguage(value);},diagnostics:()=>[...states].map(([id,state])=>({id,...state.rate.diagnostics(),key:state.rateKeyToken,pendingUntil:state.load.until,memory:rateClient.snapshot(),bridge:rateOperation(registry.videos.get(id),id,{op:'diagnostics'})})),refreshSnapshot:(deep=true)=>{
+  if(deep&&isFocused()){registry.scan(document,true);registry.titleCache=new WeakMap();}
+  const packet=snapshotPacket(true,true);
+  // Identity/rate/geometry must not wait for an optional quality adapter.
+  if(!inspectTask)inspectTask=api.refresh(false).then(()=>{if(!disposed)report();}).catch(()=>{}).finally(()=>{inspectTask=null;});
+  return packet;
+ },refresh:async(deep=true)=>{
   if(deep&&isFocused()){registry.scan(document,true);registry.titleCache=new WeakMap();}
   const items=snapshot(),id=activeId||items.find(item=>item.visible&&item.playing)?.id||items.find(item=>item.visible)?.id;
   const video=registry.videos.get(id),state=states.get(id);
@@ -288,7 +295,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
    else if(message.action==='pick'){startPick(message.language);respond({ok:true});}
    else if(message.action==='cancelPick'){cancelPick();respond({ok:true});}
    else if(message.action==='snapshot')respond({ok:true,...snapshotPacket(message.verify===true)});
-   else if(message.action==='refreshTarget'){api.refresh(false).then(videos=>respond({ok:true,videos}),error=>respond({ok:false,error:error.message}));return true;}
+   else if(message.action==='refreshTarget')respond({ok:true,...api.refreshSnapshot(false)});
   }catch(error){respond({ok:false,error:error.message});}
  };
  function dispose({preserveDefault=false}={}){
@@ -367,7 +374,10 @@ function boot(){
   if(disposed||!isRecent()&&(initialCatchupUsed||!isLoading())&&document.visibilityState==='hidden')return;
   connectLifeline();
   if(event?.type==='pageshow'&&event.persisted){startup.ensure({force:true,reason:'page-restored'});return;}
-  if(session)return;
+  if(session){
+   if(event?.type==='focus'&&event.target===window||event?.type==='visibilitychange'&&document.visibilityState==='visible')startup.ensure({force:true,reason:'focus-returned'});
+   return;
+  }
   if(startup.ready&&!settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)return;
   startup.ensure({force:startup.ready,reason:'page-event'});
  };
@@ -375,7 +385,7 @@ function boot(){
  for(const type of ['visibilitychange','loadedmetadata','playing'])document.addEventListener(type,wake,true);
  const wakeKey=event=>{
   if(disposed||!event.isTrusted||editingEvent(event))return;
-  if(session){session.handleKey(event);return;}
+  if(session){if(session.handleKey(event)||isFocused()||!document.hasFocus())return;}
   const command=shortcutAction(event,settings.shortcuts);if(!command)return;
   const enabled=localPolicyKnown&&contextReady&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled;
   if(localPolicyKnown&&contextReady&&!enabled)return;
@@ -413,7 +423,8 @@ function boot(){
  if(disposed){stopStorage();return;}
  stopMessages=messenger.guard(()=>messenger.listen(chrome.runtime.onMessage,receive))()||(()=>{});
  if(disposed){stopStorage();stopMessages();return;}
- const api={version:VERSION,alive:()=>!disposed&&messenger.alive(),enabled:()=>!!session,dispose,startup:()=>({...startup.snapshot(),bridge:bridgeStartup.snapshot()}),snapshot:()=>session?.snapshot()||[],diagnostics:()=>session?.diagnostics()||[],refresh:async()=>{await initial;if(!session)await startup.ensure({force:true,reason:'refresh'});if(!session)await bridgeStartup.task;return session?session.refresh():[];}};
+ const ensureSession=async()=>{await initial;if(!session)await startup.ensure({force:true,reason:'refresh'});if(!session)await bridgeStartup.task;};
+ const api={version:VERSION,alive:()=>!disposed&&messenger.alive(),enabled:()=>!!session,dispose,startup:()=>({...startup.snapshot(),bridge:bridgeStartup.snapshot()}),snapshot:()=>session?.snapshot()||[],diagnostics:()=>session?.diagnostics()||[],refreshSnapshot:async()=>{await ensureSession();return session?session.refreshSnapshot():{videos:[],pendingUntil:0};},refresh:async()=>{await ensureSession();return session?session.refresh():[];}};
  globalThis[API]=api;
  function connectLifeline(){
   if(disposed||lifeline)return;

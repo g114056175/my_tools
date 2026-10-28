@@ -1,6 +1,6 @@
 # VideoPocket - 網頁媒體下載與擷取 <img src="extension/icons/48.png" width="32" height="32" alt="VideoPocket icon">
 
-**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=8129dc605459)** · 解壓約 7.1 MB · Chrome 120 以上
+**[下載 ZIP（約 2.3 MB）](https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=4f1e080f00ea)** · 解壓約 7.1 MB · Chrome 120 以上
 
 在網頁中選擇影片，下載影片、音檔或字幕；所有處理都在本機瀏覽器完成。
 
@@ -29,7 +29,7 @@
 
 ## 介面與功能
 
-頂部選單切換影片，「⌖」可直接在網頁中選取播放器，「↻」重新偵測來源。藍框標示目前選中的影片。
+開啟工具後自動偵測影片；多部影片可用下拉選單切換，也可按選取按鈕指定網頁中的播放器。「↻」重新偵測，藍框標示目前選片。
 
 ### 影片
 

@@ -141,7 +141,7 @@ function createChromeFixture({
       onRemoved: events.windowRemoved,
       async getLastFocused() {
         const id = state.focusedWindowId;
-        return { id: Number.isInteger(id) ? id : -1, focused: Number.isInteger(id) };
+        return { id: Number.isInteger(id) ? id : -1, focused: Number.isInteger(id) && id !== -1 };
       },
     },
     tabs: {
@@ -260,6 +260,25 @@ const contentSender = tabId => ({
   frameId: 0,
   documentId: `doc-${tabId}`,
 });
+
+const popupSender = {
+  id: 'videospeed-test',
+  url: 'chrome-extension://videospeed-test/popup.html',
+  frameId: 0,
+  documentId: 'popup-document',
+};
+
+function connectPopup(fixture) {
+  const onDisconnect = makeEvent(), onMessage = makeEvent();
+  const port = { name: 'video-control-popup', sender: popupSender, onDisconnect, onMessage, postMessage() {} };
+  fixture.events.runtimeConnect.listeners[0](port);
+  return {
+    send(message) { onMessage.listeners[0](message); },
+    disconnect() { onDisconnect.listeners[0](); },
+  };
+}
+
+const readActivity = (fixture, tabId) => fixture.sendRuntime({ action: 'activity', tabId }, popupSender);
 
 async function waitForInitialSnapshot(fixture) {
   await within(fixture.activitySaved.promise, 'initial tab activity snapshot');
@@ -516,6 +535,168 @@ test('committed child frames in an idle empty page cannot trigger selection or h
  fixture.events.runtimeConnect.listeners[0](port);messages.listeners[0]({action:'watch',tabId:30});await new Promise(resolve=>setTimeout(resolve,15));
  fixture.state.messages=[];disconnect.listeners[0]();await new Promise(resolve=>setTimeout(resolve,30));
  assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0,'closed popup scheduled an idle-page clear highlight');
+});
+
+test('popup watch claims the active tab and ignores WINDOW_ID_NONE while bound', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({ receivers: [10] });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  fixture.focus(-1);
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === false, 'tab blur before popup watch');
+  // Model the focused browser window returning before its focus event reaches the worker.
+  fixture.state.focusedWindowId = 1;
+  const popup = connectPopup(fixture);
+  popup.send({ action: 'watch', tabId: 10 });
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === true, 'popup watch claiming active tab');
+
+  await fixture.sendRuntime({
+    action: 'report',
+    videos: [{ id: 'media-a', connected: true, visible: true, playing: true, rate: 1 }],
+  }, contentSender(10));
+  assert.equal((await fixture.sendRuntime({ action: 'cachedState', tabId: 10 }, popupSender)).target?.id, 'media-a');
+
+  fixture.focus(-1);
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === true, 'popup owner retained through WINDOW_ID_NONE');
+  assert.equal((await fixture.sendRuntime({ action: 'cachedState', tabId: 10 }, popupSender)).target?.id, 'media-a');
+  popup.disconnect();
+});
+
+test('popup watch cannot promote a nonactive tab', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({
+    tabs: [{ id: 20, windowId: 1, active: false, url: 'https://example.test/20', status: 'complete' }],
+    receivers: [10, 20],
+  });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  const popup = connectPopup(fixture);
+  popup.send({ action: 'watch', tabId: 20 });
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  assert.equal((await readActivity(fixture, 20)).activity.focused, false);
+  assert.equal((await readActivity(fixture, 10)).activity.focused, true);
+  popup.disconnect();
+});
+
+test('popup disconnect reconciles a real WINDOW_ID_NONE loss of focus', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({ receivers: [10] });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  const popup = connectPopup(fixture);
+  popup.send({ action: 'watch', tabId: 10 });
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === true, 'popup watch focus claim');
+  fixture.focus(-1);
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === true, 'popup keeps owner focused while open');
+
+  popup.disconnect();
+  await waitFor(async () => {
+    const { activity } = await readActivity(fixture, 10);
+    return activity.focused === false && activity.until > Date.now();
+  }, 'focus reconciliation after popup closes');
+});
+
+test('popup close invalidates a pending owner-window focus read', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({
+    focusedWindowId: 1,
+    activeTabIds: { 1: 10, 2: 20 },
+    activeByWindow: { 1: 10, 2: 20 },
+    tabs: [
+      { id: 10, windowId: 1, active: true, url: 'https://example.test/10', status: 'complete' },
+      { id: 20, windowId: 2, active: true, url: 'https://example.test/20', status: 'complete' },
+    ],
+    sessionSnapshot: { version: 1, focusedWindowId: 1, focusedTabId: 10, revision: 5, untilByTab: {}, activeByWindow: { 1: 10, 2: 20 } },
+    receivers: [10, 20],
+  });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  await fixture.sendRuntime({ action: 'cachedState', tabId: 10 }, popupSender);
+  const popup = connectPopup(fixture);
+  popup.send({ action: 'watch', tabId: 10 });
+  await waitFor(() => fixture.state.messages.some(item => item.tabId === 10 && item.message.action === 'highlight'), 'popup watch binding');
+
+  let focusedReads = 0;
+  chrome.windows.getLastFocused = async () => {
+    focusedReads++;
+    return { id: 1, focused: false };
+  };
+  const ownerQueriesBefore = fixture.state.tabQueries.filter(query => query?.active && query.windowId === 1).length;
+  const delayedOwnerQuery = fixture.planActiveQuery(1);
+  const settingsRequest = fixture.sendRuntime({ action: 'settings' }, contentSender(20));
+  await waitFor(() => fixture.state.tabQueries.filter(query => query?.active && query.windowId === 1).length === ownerQueriesBefore + 1,
+    'owner active-tab query while popup is bound');
+
+  popup.disconnect();
+  delayedOwnerQuery.resolve([{ id: 10, windowId: 1, active: true, url: 'https://example.test/10', status: 'complete' }]);
+
+  const response = await within(settingsRequest, 'settings request after stale focus query');
+  assert.equal(response.ok, true);
+  assert.equal(focusedReads, 2, 'the focus read should be repeated after popup close invalidates its first result');
+  const ownerActivity = (await readActivity(fixture, 10)).activity;
+  assert.equal(ownerActivity.focused, false, 'a result captured while the popup was open restored focus after it closed');
+  assert.ok(ownerActivity.until > Date.now(), 'the owner tab should receive the normal blur grace');
+});
+
+test('a real focus change to another window is not suppressed by the popup owner', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({
+    activeTabIds: { 1: 10, 2: 30 },
+    activeByWindow: { 1: 10, 2: 30 },
+    tabs: [
+      { id: 10, windowId: 1, active: true, url: 'https://example.test/10', status: 'complete' },
+      { id: 30, windowId: 2, active: true, url: 'https://example.test/30', status: 'complete' },
+    ],
+    receivers: [10, 30],
+  });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  const popup = connectPopup(fixture);
+  popup.send({ action: 'watch', tabId: 10 });
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === true, 'popup watch focus claim');
+  fixture.focus(2);
+
+  await waitFor(async () => {
+    const previous = (await readActivity(fixture, 10)).activity;
+    const current = (await readActivity(fixture, 30)).activity;
+    return !previous.focused && previous.until > Date.now() && current.focused;
+  }, 'real window 2 focus taking ownership');
+  popup.disconnect();
+});
+
+test('getState waits for activity delivery before starting its page refresh', { timeout: 10000 }, async () => {
+  const fixture = createChromeFixture({ receivers: [10] });
+  await fixture.importBackground();
+  await waitForInitialSnapshot(fixture);
+
+  fixture.focus(-1);
+  await waitFor(async () => (await readActivity(fixture, 10)).activity.focused === false, 'stale focus state');
+  // The real focused window is back, but the background has not received that event yet.
+  fixture.state.focusedWindowId = 1;
+
+  const activityStarted = deferred(), activityDelivery = deferred();
+  const originalSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
+  let held = false;
+  chrome.tabs.sendMessage = async (tabId, message, ...options) => {
+    if (tabId === 10 && message.action === 'activity' && !held) {
+      held = true;
+      fixture.state.messages.push({ tabId, message, delivered: true, at: Date.now() });
+      activityStarted.resolve(message);
+      return activityDelivery.promise;
+    }
+    return originalSendMessage(tabId, message, ...options);
+  };
+
+  const request = fixture.sendRuntime({ action: 'getState' }, popupSender);
+  await within(activityStarted.promise, 'startup activity message before refresh');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(fixture.state.executeCalls.length, 0, 'page refresh started before activity delivery completed');
+
+  activityDelivery.resolve({ ok: true, version });
+  const response = await within(request, 'getState after activity delivery');
+  assert.equal(response.ok, true);
+  assert.ok(fixture.state.executeCalls.length > 0, 'getState did not start its page refresh after activity delivery');
 });
 
 test('pending loading permits one update recovery; pending reports need a connected video and stay bounded',async()=>{

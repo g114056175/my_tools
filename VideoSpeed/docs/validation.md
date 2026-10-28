@@ -1,3 +1,42 @@
+# VideoSpeed 0.6.19 驗證
+
+2026-10-28。修正原生工具列 popup 導致影片狀態被清空，以及初次狀態讀取被快取更新蓋掉的競態。VideoPocket 未修改。
+
+## 原因與修正
+
+隔離的有畫面 Chromium 已重現：開 popup 前，主影片仍在 registry 且可播放；呼叫原生 `chrome.action.openPopup()` 後，Chrome 回報所屬視窗未聚焦。舊程式將它視為真正離開頁面，立即移除已完成初始化的影片，送出空快照。popup 當時尚未訂閱分頁更新，後續讀取可能繼續顯示 No video found。這是擴充功能自身的活動與資料同步錯誤，不是 YouTube／Bilibili 抓取規則失效。
+
+- popup 在讀取外觀設定前即連線、綁定目前分頁；背景核對實際 active tab 與所屬視窗，將這個原生 popup 視為同分頁的互動。真正切至其他視窗仍照常釋放控制。
+- 關閉 popup 時重查真實焦點；若讀取途中發生開關或切窗，丟棄舊結果並重讀，避免恢復錯誤的活動狀態。
+- 完整讀取先同步分頁資格，再取得影片快照；較早到達的 cachedState 不再取消首次完整讀取。
+- 名稱、速度與位置的快照立即回傳，畫質能力在旁路補查；快照持續攜帶世代與序號。已知 navigation commit 的舊 document 回報不能清除或替換新文件的影片。
+- 真正回到頁面時核對活動資格；失焦紀錄尚未更新但頁面已收到可信快捷鍵時，可重新確認資格後執行。沒有新增常駐全頁掃描或背景輪詢。
+
+## 驗證
+
+- 329 項單元／整合通過。新增 popup 綁定、真正切窗、關閉競態、先同步後抓取，以及舊文件延遲回報測試；舊文件案例已在未修正版本重現失敗。
+- 13 項視覺選片回歸、25 項主影片／預覽與提示回歸通過。
+- 不開 popup 的四次新文件、兩次 SPA、快捷鍵、啟動故障及 worker 冷啟動回歸通過。
+- 12 項近期／待載入生命週期通過，包含真正離開頁面後停止控制、10／30 秒期限、首次速度與畫質，以及跟隨記憶保護。
+- 有畫面 Chromium 的原生工具列 popup 在載入後 1、5、12、35 秒均核對名稱、控制區、快取影片 ID 與外框；持續開啟 35 秒並實際按鈕調速通過。
+- 正常 Escape 關閉 popup、切窗返回、不開 popup 直接按快捷鍵均通過。快捷鍵核對可信 keyup、主片實際速度、`rateOrigin=command` 與影片提示，避免將播放器自行改速算成成功。
+- Brave 的 YouTube 結構案例核對原生 popup、35 秒持續操作、Escape 返回與直接快捷鍵通過。
+
+成品 SHA-256（大小寫敏感相對路徑排序，各檔 path + NUL + bytes + NUL）：`050492f5fde8d2585010a320dffe47e584fc9fcaf10ef3a14cf51bdcef60d183`。
+
+原始診斷報告保留：早期測試以 CDP 強制銷毀 popup target，或等待會被擴充功能攔截的後置 keydown 觀察器，產生了不適合當正常互動驗收的失敗條件；正式補驗使用 Escape 與可信 keyup。早期原因重現期間的 runtime 曾有開發修改，不作完整舊版成品的驗收證據；最終候選測試均核對同一 hash 前後未變。
+
+本機證據：`work/qa-082-popup/`、`work/qa-082-release/`、`work/qa-080-visual/candidate/results.json`、`work/qa-075-main-release-0619-final/results.json`、`work/qa-autostart/release-0619-final-results.json`。輸出摘要為 `VideoSpeed-validation.json`。
+
+## 驗證界線
+
+原先選片測試用無頭瀏覽器及擴充頁面，未涵蓋原生工具列 popup 的視窗焦點變化，因此即使快捷鍵測試通過，仍漏掉這次基本回歸。本輪把真 popup 的 DOM、影片名稱、控制區、外框及實際調速目標一致納入檢查。
+
+以上使用隔離瀏覽器、本機影片及對應播放器結構，尚未替代使用者當前實站的最終 demo。舊版持續 context invalidation、長播卡死與 worker-fetch 的原始觸發條件未全數定位，不能宣稱全部解決。worker 重啟後的 document guard 需重新建立，因此不宣稱可拒絕所有跨重啟的退休文件訊息。
+
+<details>
+<summary>0.6.18 歷史驗證</summary>
+
 # VideoSpeed 0.6.18 驗證
 
 2026-10-28。自動選片改以視覺主體為主，手動選取不再永久固定。VideoPocket 未修改，UI、權限及速度／畫質偏好維持原有設定。
@@ -294,6 +333,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

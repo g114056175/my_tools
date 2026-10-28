@@ -6,6 +6,14 @@ import {resolveLanguage,translate,translateMessage,applyPopupLanguage} from './i
 const $=id=>document.getElementById(id),drafts=new Map();
 let state,tabId,revision=0,refreshRevision=0,rateRevision=0,enterCommit=false,rateDirty=false,dragging=false,rateTarget='',sliderKey='',pendingRate=null,sendingRate=false,rateTimer,refreshTimer,closed=false,unavailableReason='';
 let powerBusy=false,stepInputDirty=false,stepInputRevision=0,stepTimer,shortcutRecording='',siteInputDirty=false,siteInputPage='';
+const port=chrome.runtime.connect({name:'video-control-popup'});
+let portDisconnected=false,renew,fullRefreshInFlight=false,cachedRefreshQueued=false;
+port.onDisconnect.addListener(()=>{try{void chrome.runtime.lastError;}catch{}portDisconnected=true;clearInterval(renew);});
+// Bind before storage/theme initialization or the first state read. Native
+// popup focus belongs to this selected tab, even if its window reports blur.
+const popupTabReady=chrome.tabs.query({active:true,currentWindow:true}).then(([tab])=>{
+ if(Number.isInteger(tab?.id)){tabId=tab.id;if(!portDisconnected)port.postMessage({action:'watch',tabId});}
+}).catch(()=>{});
 const shortcutActions=[['slower','Prev tick'],['faster','Next tick'],['fineSlower','Fine down'],['fineFaster','Fine up'],['reset','Reset 1×'],['preferred','Preferred']];
 let language=resolveLanguage();const t=(key,values)=>translate(language,key,values);
 const systemTheme=matchMedia('(prefers-color-scheme: dark)');let appearance='system';
@@ -170,16 +178,16 @@ async function saveFields(patch){
  }catch(problem){for(const [key,item]of items)if(drafts.get(key)===item)drafts.delete(key);error('feedback','Could not save: '+problem.message);render();return false;}
 }
 const saveField=(key,value)=>saveFields({[key]:value});
-const port=chrome.runtime.connect({name:'video-control-popup'});
-let portDisconnected=false,renew;
-port.onDisconnect.addListener(()=>{try{void chrome.runtime.lastError;}catch{}portDisconnected=true;clearInterval(renew);});
 async function refresh(full=false,force=false){
+ if(!full&&fullRefreshInFlight){cachedRefreshQueued=true;return;}
+ if(full)fullRefreshInFlight=true;
  const request=++refreshRevision;
  try{
   const response=await send({action:full?'getState':'cachedState',refresh:force});if(closed||request!==refreshRevision)return;
   state=response;tabId=response.tabId;unavailableReason='';render();error('feedback');
   if(!portDisconnected)port.postMessage({action:'watch',tabId});
   }catch(problem){if(!closed&&request===refreshRevision){if(!state){let data={};try{data=await chrome.storage.local.get('settings');}catch{}state={settings:normalizeSettings(data.settings),target:null,pageUrl:''};}unavailable(problem?.message||'Could not connect');}}
+  finally{if(full){fullRefreshInFlight=false;if(cachedRefreshQueued&&!closed){cachedRefreshQueued=false;refresh();}}}
 }
 port.onMessage.addListener(message=>{if(message.action==='updated'){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>refresh(),100);}});
 renew=setInterval(()=>{if(portDisconnected||!state||!effective().enabled||disabledOnUrl(state.pageUrl,effective().disabledSites,effective().siteModes))return;try{port.postMessage({action:'renew'});}catch{}},3000);
@@ -288,4 +296,5 @@ $('rate-slider').addEventListener('input',()=>queueRate(rateAtPosition(Number($(
 $('rate-slider').addEventListener('change',()=>{dragging=false;flushRate();});
 $('rate-slider').addEventListener('pointercancel',()=>{dragging=false;flushRate();});
 $('rate-slider').addEventListener('keydown',event=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp'].includes(event.key)){event.preventDefault();$(event.key==='ArrowLeft'||event.key==='ArrowDown'?'slower':'faster').click();}else if(event.key==='Home'||event.key==='End'){event.preventDefault();queueRate(event.key==='Home'?effective().steps[0]:effective().steps.at(-1));}});
+await popupTabReady;
 await refresh(true);

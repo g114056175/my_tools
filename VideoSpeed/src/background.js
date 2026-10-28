@@ -4,11 +4,11 @@ import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS,TAB_LOADING_GRACE_MS} from './tab-activity.js';
 import {consumeRuntimeError} from './runtime.js';
-const SCOPE='video-control',VERSION='0.6.18',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+const SCOPE='video-control',VERSION='0.6.19',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const currentTargets=new Map(),selectionEpoch=Date.now();let selectionRevision=0;
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
-const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
+const tabGenerations=new Map(),frameGenerations=new Map(),frameDocuments=new Map();let navigationSerial=0;
 function tabGeneration(tabId){if(!tabGenerations.has(tabId))tabGenerations.set(tabId,++navigationSerial);return tabGenerations.get(tabId);}
 const frameGeneration=(tabId,frameId)=>frameGenerations.get(tabId)?.get(frameId)||0;
 const selectionDeliveries=new Map();
@@ -53,7 +53,7 @@ function saveActivity(){
 }
 async function readFocusedContext(){
  const window=await chrome.windows.getLastFocused();
- if(!window?.focused||!Number.isInteger(window.id))return {windowId:null,tabId:null};
+ if(!Number.isInteger(window?.id)||!window.focused&&![...ports.values()].some(item=>item.windowId===window.id))return {windowId:null,tabId:null};
  const [tab]=await chrome.tabs.query({active:true,windowId:window.id});
  return {windowId:window.id,tabId:Number.isInteger(tab?.id)?tab.id:null};
 }
@@ -83,6 +83,9 @@ function applyActivityEvent(event){
  }
  activityGeneration++;
  const windowId=event.windowId===chrome.windows.WINDOW_ID_NONE?null:event.windowId;
+ // Native action popups can temporarily make their owning browser window
+ // unfocused. The bound popup is still an interaction with that selected tab.
+ if(windowId===null&&[...ports.values()].some(item=>item.windowId===tabActivity.focusedWindowId))return;
  const previousRevision=tabActivity.revision;
  const affected=tabActivity.setFocusedWindow(windowId,event.at);
  if(tabActivity.revision!==previousRevision)saveActivity().catch(()=>{});
@@ -143,16 +146,19 @@ async function mayContactPage(tabId){
  const activity=await activityFor(tabId);
  return activity.focused||activity.until>Date.now()||activity.loadingUntil>Date.now()&&hasPendingMedia(tabId)||[...ports.values()].some(item=>item.tabId===tabId);
 }
-let activityRecheck=null;
-async function ensureStartupActivity(tabId){
- const activity=await activityFor(tabId);if(activity.focused)return;
+let activityRecheck=null,popupFocusRevision=0;
+async function ensureStartupActivity(tabId,{force=false}={}){
+ const activity=await activityFor(tabId);if(activity.focused&&!force)return;
  if(!activityRecheck){
-  const revision=activityEventRevision;
-  activityRecheck=readFocusedContext().then(context=>{
-   if(revision!==activityEventRevision)return;
-   const changed=tabActivity.reconcile(context,Date.now());
-   if(changed.length){saveActivity().catch(()=>{});for(const id of changed)notifyActivity(id);}
-  }).catch(()=>{}).finally(()=>{activityRecheck=null;});
+  activityRecheck=(async()=>{
+   for(;;){
+    const revision=activityEventRevision,popupRevision=popupFocusRevision,context=await readFocusedContext();
+    if(revision!==activityEventRevision||popupRevision!==popupFocusRevision)continue;
+    const changed=tabActivity.reconcile(context,Date.now());
+    if(changed.length){saveActivity().catch(()=>{});for(const id of changed)notifyActivity(id);}
+    return;
+   }
+  })().catch(()=>{}).finally(()=>{activityRecheck=null;});
  }
  await activityRecheck;
 }
@@ -278,6 +284,8 @@ async function announce(tabId,force=false){
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
 function record(tabId,frameId,documentId,videos,pendingUntil=0,snapshotRevision=0,snapshotEpoch=0){
+ const liveDocument=frameDocuments.get(tabId)?.get(frameId);
+ if(documentId&&liveDocument&&documentId!==liveDocument)return;
  const previous=frames.get(tabId)?.get(frameId);
  if(previous?.documentId===documentId){
   if(snapshotEpoch>0&&previous.snapshotEpoch>snapshotEpoch)return;
@@ -315,7 +323,7 @@ async function refresh(tabId,force=false){
    try{
     const result=await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'refreshTarget'},optionsOf(target));
     if(result?.ok&&Array.isArray(result.videos)&&result.videos.some(video=>video.id===target.id&&video.connected!==false)){
-     if(tabGenerations.get(tabId)===generation&&frameGeneration(tabId,target.frameId)===frameVersion){if(frames.get(tabId)?.get(target.frameId)===before)record(tabId,target.frameId,target.documentId,result.videos);return;}
+     if(tabGenerations.get(tabId)===generation&&frameGeneration(tabId,target.frameId)===frameVersion){if(frames.get(tabId)?.get(target.frameId)===before)record(tabId,target.frameId,target.documentId,result.videos,result.pendingUntil||0,result.snapshotRevision||0,result.snapshotEpoch||0);return;}
     }
    }catch{}
   }
@@ -342,7 +350,7 @@ async function refreshFrames(tabId){
   if(/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname))return [];
   const api=globalThis[Symbol.for('video-control.api')];
   if(!api?.alive?.())throw Error("Could not connect to the video");
-  return await api.refresh();
+  return api.refreshSnapshot?await api.refreshSnapshot():{videos:await api.refresh()};
  }});
  let liveFrames;try{liveFrames=await chrome.webNavigation.getAllFrames({tabId});}catch{}
  if(!(await stored()).enabled||tabGenerations.get(tabId)!==generation)return false;
@@ -350,7 +358,8 @@ async function refreshFrames(tabId){
  for(const item of results){
   // A live report received during this refresh is newer than its snapshot.
   if(frameGeneration(tabId,item.frameId)!==(frameVersions.get(item.frameId)||0)||frames.get(tabId)?.get(item.frameId)!==before.get(item.frameId))continue;
-  record(tabId,item.frameId,item.documentId,item.result);
+  const packet=Array.isArray(item.result)?{videos:item.result}:item.result||{};
+  record(tabId,item.frameId,item.documentId,packet.videos,packet.pendingUntil||0,packet.snapshotRevision||0,packet.snapshotEpoch||0);
  }
  await announce(tabId);
  return true;
@@ -426,7 +435,14 @@ async function run(message,sender){
  if(message.action==='activity')return activityFields(tabId,tab.url||'');
  if(message.action==='getState'||message.action==='cachedState'){
   const settings=await stored(),pageUrl=tab.url||'',siteDisabled=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes);
-  if(message.action==='getState'&&settings.enabled&&!siteDisabled)await popupRefresh(refresh(tabId,message.refresh===true));
+  if(message.action==='getState'&&settings.enabled&&!siteDisabled){
+   await Promise.allSettled([...ports.values()].filter(item=>item.requestedTabId===tabId).map(item=>item.binding));
+   await ensureStartupActivity(tabId);
+   // Send the current lease before asking the document to rescan. A worker
+   // restart must not refresh using the document's previous blurred lease.
+   await notifyActivity(tabId);
+   await popupRefresh(refresh(tabId,message.refresh===true));
+  }
   const target=siteDisabled?null:settings.enabled?targetFor(tabId):await pausedTarget(tabId),rate=await rateState();return {tabId,pageUrl,siteDisabled,settings,loading:tab.status==='loading',lastRate:rate.lastRate,rateRevision:rate.rateRevision,videos:target?[target]:[],target};
  }
  if(message.action==='updateSettings'){
@@ -459,20 +475,33 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
 chrome.runtime.onConnect.addListener(port=>{
  if(port.name==='video-control-content'){contentPorts.add(port);port.onDisconnect.addListener(()=>{consumeRuntimeError(chrome.runtime);contentPorts.delete(port);});return;}
  if(port.name!=='video-control-popup')return;
- const item={tabId:null};ports.set(port,item);
+ const item={tabId:null,windowId:null,requestedTabId:null,binding:null};ports.set(port,item);
  port.onMessage.addListener(message=>{
-  if(message.action==='watch'&&Number.isInteger(message.tabId)){const changed=item.tabId!==message.tabId;item.tabId=message.tabId;if(changed&&settingsCache?.enabled)highlight(item.tabId);}
+  if(message.action==='watch'&&Number.isInteger(message.tabId)&&item.requestedTabId!==message.tabId){
+   item.requestedTabId=message.tabId;
+   item.binding=(async()=>{
+    await activityReady;
+    const [tab,window]=await Promise.all([chrome.tabs.get(message.tabId),chrome.windows.getLastFocused()]);
+    const [selected]=await chrome.tabs.query({active:true,windowId:tab.windowId});
+    if(!ports.has(port)||item.requestedTabId!==message.tabId||selected?.id!==tab.id||window?.id!==tab.windowId)return;
+    item.tabId=tab.id;item.windowId=tab.windowId;popupFocusRevision++;
+    const changed=tabActivity.reconcile({windowId:tab.windowId,tabId:tab.id});
+    if(changed.length){saveActivity().catch(()=>{});await Promise.allSettled(changed.map(notifyActivity));}
+    if(settingsCache?.enabled)await highlight(tab.id);
+   })().catch(()=>{});
+  }
   if(message.action==='renew'&&item.tabId&&settingsCache?.enabled){
    const target=targetFor(item.tabId);
    if(target)chrome.tabs.sendMessage(item.tabId,{scope:SCOPE,action:'highlight',options:{renew:true}},optionsOf(target)).then(result=>{if(!result?.highlighted)highlight(item.tabId);}).catch(()=>{});
   }
  });
- port.onDisconnect.addListener(()=>{consumeRuntimeError(chrome.runtime);ports.delete(port);if(item.tabId&&![...ports.values()].some(other=>other.tabId===item.tabId))highlight(item.tabId,false,true);});
+ port.onDisconnect.addListener(()=>{consumeRuntimeError(chrome.runtime);ports.delete(port);popupFocusRevision++;if(item.tabId&&![...ports.values()].some(other=>other.tabId===item.tabId)){highlight(item.tabId,false,true);ensureStartupActivity(item.tabId,{force:true}).catch(()=>{});}});
 });
 function forgetTab(tabId){
  clearSelectionDelivery(tabId);
  tabGenerations.set(tabId,++navigationSerial);
  frameGenerations.delete(tabId);
+ frameDocuments.delete(tabId);
  frames.delete(tabId);pinned.delete(tabId);currentTargets.delete(tabId);announced.delete(tabId);markedTargets.delete(tabId);markerQueues.delete(tabId);
  rateWriteLedger.forgetTab(tabId);
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{const data=await chrome.storage.session.get('pausedTargets'),frozen={...data.pausedTargets};if(Object.hasOwn(frozen,tabId)){delete frozen[tabId];await chrome.storage.session.set({pausedTargets:frozen});}});
@@ -494,7 +523,15 @@ async function frameRoute(details){
 }
 chrome.webNavigation.onHistoryStateUpdated.addListener(details=>frameRoute(details).catch(()=>{}));
 chrome.webNavigation.onReferenceFragmentUpdated.addListener(details=>frameRoute(details).catch(()=>{}));
-chrome.webNavigation.onCommitted.addListener(details=>{if(details.frameId>0){if(!frameGenerations.has(details.tabId))frameGenerations.set(details.tabId,new Map());frameGenerations.get(details.tabId).set(details.frameId,++navigationSerial);frames.get(details.tabId)?.delete(details.frameId);announce(details.tabId,true).catch(()=>{});}});
+chrome.webNavigation.onCommitted.addListener(details=>{
+ if(!frameDocuments.has(details.tabId))frameDocuments.set(details.tabId,new Map());
+ if(details.documentId)frameDocuments.get(details.tabId).set(details.frameId,details.documentId);
+ if(details.frameId===0)tabGenerations.set(details.tabId,++navigationSerial);
+ else {if(!frameGenerations.has(details.tabId))frameGenerations.set(details.tabId,new Map());frameGenerations.get(details.tabId).set(details.frameId,++navigationSerial);}
+ const previous=frames.get(details.tabId)?.get(details.frameId);
+ if(previous&&(!details.documentId||previous.documentId!==details.documentId))frames.get(details.tabId).delete(details.frameId);
+ announce(details.tabId,true).catch(()=>{});
+});
 
 
 chrome.storage.onChanged.addListener((changes,area)=>{

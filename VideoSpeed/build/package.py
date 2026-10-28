@@ -80,5 +80,7 @@ with ZipFile(store) as check:
     assert 'manifest.json' in check.namelist() and all(not name.startswith('VideoSpeed/') for name in check.namelist())
 hashes = {path.name: {'bytes': path.stat().st_size, 'sha256': sha256(path.read_bytes()).hexdigest()} for path in [install, store, source_zip]}
 (DIST / 'SHA256SUMS.txt').write_text(''.join(value['sha256'] + '  ' + name + '\n' for name, value in sorted(hashes.items())), encoding='utf-8')
-(DIST / 'package-info.json').write_text(json.dumps({'name': manifest['name'], 'version': manifest['version'], 'runtimeFiles': len(runtime), 'archives': hashes}, indent=2) + '\n', encoding='utf-8')
-print(json.dumps({'name': manifest['name'], 'version': manifest['version'], 'runtimeFiles': len(runtime), 'archives': hashes}, indent=2))
+info = {'name': manifest['name'], 'version': manifest['version'], 'runtimeFiles': len(runtime), 'archives': hashes,
+        'releaseAssets': [install.name, source_zip.name]}
+(DIST / 'package-info.json').write_text(json.dumps(info, indent=2) + '\n', encoding='utf-8')
+print(json.dumps(info, indent=2))

@@ -5,7 +5,7 @@
 <table width="100%">
 <thead><tr><th width="140">工具</th><th width="470">用途</th><th width="104">下載</th><th width="120">首次發布</th></tr></thead>
 <tbody>
-<tr><td><a href="VideoSpeed/">VideoSpeed</a></td><td>Chrome 擴充功能，自訂刻度與快捷鍵調整影片倍速</td><td><a href="https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.6/VideoSpeed.zip">下載ZIP</a></td><td>2026-10-27</td></tr>
+<tr><td><a href="VideoSpeed/">VideoSpeed</a></td><td>Chrome 擴充功能，自訂刻度與快捷鍵調整影片倍速</td><td><a href="https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip">下載ZIP</a></td><td>2026-10-27</td></tr>
 <tr><td><a href="VideoPocket/">V⁠i⁠d⁠e⁠o⁠P⁠o⁠c⁠k⁠e⁠t</a></td><td>C⁠h⁠r⁠o⁠m⁠e⁠ ⁠擴⁠充⁠功⁠能⁠，⁠用⁠於⁠下⁠載⁠影⁠片⁠、⁠音⁠檔⁠、⁠字⁠幕</td><td><a href="https://github.com/g114056175/my_tools/releases/download/video-pocket-v1.0.0/VideoPocket.zip?sha=7fc1e1527ef4">下⁠載⁠Z⁠I⁠P</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠1⁠7</td></tr>
 <tr><td><a href="CursorEffects/">CursorEffects</a></td><td>按⁠住⁠左⁠鍵⁠的⁠光⁠跡⁠、⁠點⁠擊⁠波⁠紋⁠與⁠碎⁠片</td><td><a href="https://github.com/g114056175/my_tools/releases/download/cursor-effects/CursorEffects.exe">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠1⁠2</td></tr>
 <tr><td><a href="RegionRecorder/">RegionRecorder</a></td><td>類⁠似⁠螢⁠幕⁠截⁠圖⁠，⁠可⁠選⁠取⁠範⁠圍⁠錄⁠製⁠ ⁠M⁠P⁠4⁠/⁠G⁠I⁠F</td><td><a href="https://github.com/g114056175/my_tools/releases/download/region_recorder-v1.0.0/RegionRecorder.exe?sha=32b381b2bedd">下⁠載⁠E⁠X⁠E</a></td><td>2⁠0⁠2⁠6⁠-⁠1⁠0⁠-⁠0⁠5</td></tr>

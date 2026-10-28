@@ -1,3 +1,19 @@
+# VideoSpeed 1.0.0 發布驗證
+
+2026-10-28。以現行功能整理為 GitHub 正式發布版；程式名稱維持 VideoSpeed，下載檔名維持 `VideoSpeed.zip` 與 `VideoSpeed-source.zip`。內部 manifest 版本為 1.0.0，供瀏覽器識別更新。
+
+- 首頁與子專案 README 統一指向 `video-speed-v1.0.0/VideoSpeed.zip`。
+- 公開資產僅安裝包與獨立原始碼；GitHub 另自動提供整個儲存庫的 ZIP／tar.gz 原始碼。商店包及檢查碼留在本機，不列入公開下載。
+- 新版上傳、公開下載與檢查碼確認後，再移除舊 VideoSpeed 預覽版。VideoPocket 與其他工具的發布內容保留。
+- 329 項單元／整合，以及 3 項新安裝預設／語系保存的瀏覽器檢查通過。自動速度、畫質皆關閉，偏好 2×，淺色英文；網站原速度不被覆寫。
+
+本輪整理版本與發布流程，播放控制邏輯沿用 0.6.20。原生 popup 與生命週期驗證見歷史紀錄。
+
+成品 SHA-256：`d62d719a723175136840058d17743417920c5c8b64e55335ec27ef20ebf47335`。本機證據：`work/qa-084-release-cleanup/`。
+
+<details>
+<summary>0.6.20 歷史驗證</summary>
+
 # VideoSpeed 0.6.20 驗證
 
 2026-10-28。新安裝外觀改為固定淺色，語言仍預設英文；速度預設與畫質皆關閉、偏好速度 2×。已儲存的外觀、語言與播放設定繼續保留。README 底部加入精簡已知問題，並明示縮圖預覽不支援調速。VideoPocket 未修改。
@@ -353,6 +369,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

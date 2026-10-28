@@ -14,6 +14,27 @@ test('starts unvisited tabs inactive and tracks only the focused window active t
  assert.deepEqual(activity.activity(20),{focused:false,until:0,revision:2});
 });
 
+test('a new background tab from a recent opener gets one bounded loading grace',()=>{
+ const clock=clockAt(1_000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
+ assert.deepEqual(activity.openFrom(10,20),[20]);assert.equal(activity.activity(20).until,11_000);
+ assert.equal(activity.activity(10).focused,true);clock.set(11_000);assert.equal(activity.activity(20).until,0);
+ assert.deepEqual(activity.openFrom(30,40),[],'an unvisited opener cannot activate a background tab');
+ activity.setActiveTab(1,11);clock.set(21_001);assert.deepEqual(activity.openFrom(10,21),[],'an expired opener cannot grant activity');
+});
+
+test('buffered tab creation uses its real opening time rather than worker wake-up time',()=>{
+ const clock=clockAt(20_000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
+ assert.deepEqual(replayTabActivityEvents(activity,[{type:'created',openerTabId:10,tabId:20,at:5_000}]),[20]);
+ assert.equal(activity.activity(20).until,0);assert.equal(Object.hasOwn(activity.snapshot().untilByTab,'20'),false);
+});
+
+test('restoring recent activity preserves the original deadline and rejects expired or inflated leases',()=>{
+ const clock=clockAt(20_000),activity=new TabActivity({now:clock.now});
+ assert.equal(activity.restoreRecent(20,25_000),true);assert.equal(activity.activity(20).until,25_000);
+ assert.equal(activity.restoreRecent(21,19_999),false);assert.equal(activity.restoreRecent(22,30_001),false);
+ assert.equal(activity.restoreRecent(20,24_000),false);clock.set(25_000);assert.equal(activity.activity(20).until,0);
+});
+
 test('tab switch grants the previous tab ten seconds and expires at the deadline',()=>{
  const clock=clockAt(1_000),activity=new TabActivity({now:clock.now});
  activity.reconcile({windowId:2,tabId:10});

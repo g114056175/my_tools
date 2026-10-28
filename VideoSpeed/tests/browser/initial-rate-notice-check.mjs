@@ -60,7 +60,16 @@ try{
   if(url.protocol!=='http:'||!hosts.includes(url.hostname))return route.abort();
   return route.fulfill(url.pathname==='/tiny.webm'?{status:200,contentType:'video/webm',body:bytes}:{status:200,contentType:'text/html',body:fixture(url)});});
  serviceWorker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');
- await serviceWorker.evaluate(()=>chrome.storage.local.set({settings:{enabled:true,defaultMode:'follow',qualityEnabled:false},lastRate:2,lastRateRevision:1}));
+ await serviceWorker.evaluate(async()=>{
+  // Let fresh-profile initialization seed its own memory before fixture seeding.
+  // Writing raw storage concurrently with that initialization races its default.
+  const deadline=Date.now()+5000;
+  while(!Number.isSafeInteger((await chrome.storage.local.get('lastRateRevision')).lastRateRevision)){
+   if(Date.now()>=deadline)throw Error('Fixture setup: initial rate memory did not initialize');
+   await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  await chrome.storage.local.set({settings:{enabled:true,defaultMode:'follow',qualityEnabled:false},lastRate:2,lastRateRevision:1});
+ });
  page=context.pages()[0];
  await page.goto('http://www.youtube.com/watch?v=A&hidden=1');
  await page.waitForFunction(()=>qa?.ready&&document.querySelector('#v').playbackRate===2);
@@ -113,7 +122,11 @@ try{
   });
  }
  assert.deepEqual(report.errors,[]);
-}catch(error){report.error=String(error?.stack||error);process.exitCode=1;}
+}catch(error){
+ report.error=String(error?.stack||error);process.exitCode=1;
+ report.failureState=await page?.evaluate(()=>({qa:window.qa,visibility:document.visibilityState,href:location.href,videos:[...document.querySelectorAll('video')].map(v=>({id:v.id,rate:v.playbackRate,paused:v.paused,ready:v.readyState,attrs:[...v.attributes].map(a=>[a.name,a.value])}))})).catch(()=>null);
+ report.failureBackground=await serviceWorker?.evaluate(async()=>({storage:await chrome.storage.local.get(['settings','lastRate','lastRateRevision','tabActivityGrace']),session:await chrome.storage.session.get('tabActivity'),window:await chrome.windows.getLastFocused(),tabs:(await chrome.tabs.query({})).map(({id,url,active,status})=>({id,url,active,status}))})).catch(()=>null);
+}
 finally{
  await context?.close().catch(()=>{});const resolved=await realpath(profile),relative=path.relative(path.resolve(os.tmpdir()),resolved);
  if(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)&&path.basename(resolved).startsWith('videospeed-notice-')){await rm(resolved,{recursive:true,force:true});report.cleanup=true;}

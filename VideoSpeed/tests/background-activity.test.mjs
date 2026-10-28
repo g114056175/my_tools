@@ -42,6 +42,7 @@ function createChromeFixture({
   activeQueryFailures = {},
   activeTargetResponses = {},
   receivers = [10],
+  activityCheckpoint,
 } = {}) {
   const events = Object.fromEntries([
     'runtimeMessage', 'runtimeConnect', 'runtimeInstalled', 'storageChanged',
@@ -61,6 +62,7 @@ function createChromeFixture({
     siteModes: {},
   };
   const localData = { settings, lastRate: 2, lastRateRevision: 1 };
+  if(activityCheckpoint!==undefined)localData.tabActivityGrace=activityCheckpoint;
   const sessionData = {};
   if (sessionSnapshot !== undefined) sessionData.tabActivity = sessionSnapshot;
   const sessionRead = deferred();
@@ -417,4 +419,95 @@ test('content startup reconciles focus after an initial active-tab query failure
  await fixture.importBackground();await waitForInitialSnapshot(fixture);
  const result=await fixture.sendRuntime({action:'settings'},contentSender(10));
  assert.equal(result.ok,true);assert.equal(result.activity.focused,true);assert.equal(fixture.state.popupOpens,0);
+});
+
+test('extension update restores focused, recent and known-playing tabs without querying every page',async()=>{
+ const now=Date.now(),fixture=createChromeFixture({tabs:[20,30,40,50].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30,40,50],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{20:now+10_000,30:now-100},activeByWindow:{1:10,2:40}}});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ await fixture.sendRuntime({action:'report',videos:[{id:'background-player',connected:true,playing:true,visible:false,rate:2}]},contentSender(50));
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});
+ await waitFor(()=>fixture.state.executeCalls.length>=3,'scoped update restore probes');
+ await new Promise(resolve=>setTimeout(resolve,25));
+ assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20,50]);
+ assert.ok(!fixture.state.tabQueries.some(query=>query?.url),'update enumerated all HTTP tabs');
+});
+
+test('a recovery probe that outlives its grace period cannot inject bridge or content files',async()=>{
+ const fixture=createChromeFixture({tabs:[{id:20,windowId:1,active:false,url:'https://example.test/20',status:'complete'}],receivers:[10,20],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{20:Date.now()+80},activeByWindow:{1:10}}});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ const focused=fixture.planExecuteScript(),recent=fixture.planExecuteScript();focused.resolve([{frameId:0,result:false}]);
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});await waitFor(()=>fixture.state.executeCalls.length===2,'recent page recovery probe');
+ await new Promise(resolve=>setTimeout(resolve,100));recent.resolve([{frameId:0,result:true}]);await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(fixture.state.executeCalls.filter(call=>call.target.tabId===20).length,1);assert.ok(fixture.state.executeCalls.every(call=>!call.files));
+});
+
+test('idle empty pages receive no policy messages or child-route probes on other-page setting changes',async()=>{
+ const fixture=createChromeFixture({tabs:[{id:30,windowId:1,active:false,url:'https://example.test/30',status:'complete'}],receivers:[10,30]});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);await new Promise(resolve=>setTimeout(resolve,20));
+ fixture.events.runtimeConnect.listeners[0]({name:'video-control-content',sender:contentSender(30),onDisconnect:makeEvent()});
+ fixture.state.messages=[];fixture.events.tabsUpdated.listeners[0](30,{url:'https://example.test/30#background-change'});
+ fixture.events.historyStateUpdated.listeners[0]({tabId:30,frameId:1,documentId:'idle-child',url:'https://example.test/child'});
+ const next={...fixture.state.localData.settings,preferredRate:3};fixture.state.localData.settings=next;fixture.events.storageChanged.listeners[0]({settings:{newValue:next}},'local');
+ await new Promise(resolve=>setTimeout(resolve,40));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0);assert.equal(fixture.state.executeCalls.filter(call=>call.target.tabId===30).length,0);
+});
+
+test('power off still stops a known background player after its activity deadline expired',async()=>{
+ const fixture=createChromeFixture({tabs:[{id:50,windowId:1,active:false,url:'https://example.test/50',status:'complete'}],receivers:[10,50]});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ await fixture.sendRuntime({action:'report',videos:[{id:'background-player',connected:true,playing:true,visible:false,rate:2}]},contentSender(50));
+ fixture.state.messages=[];const next={...fixture.state.localData.settings,enabled:false};fixture.state.localData.settings=next;
+ fixture.events.storageChanged.listeners[0]({settings:{newValue:next}},'local');
+ await waitFor(()=>fixture.state.messages.some(item=>item.tabId===50&&item.message.action==='power'&&item.message.settings.enabled===false),'background player power-off');
+});
+
+test('both background port disconnect callbacks consume the runtime error synchronously',async()=>{
+ const fixture=createChromeFixture();await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ let reads=0,inside=false;Object.defineProperty(chrome.runtime,'lastError',{get(){assert.ok(inside);reads++;return {message:'BFCache closed the channel'};}});
+ for(const name of ['video-control-content','video-control-popup']){
+  const disconnect=makeEvent(),port={name,sender:contentSender(10),onDisconnect:disconnect,onMessage:makeEvent()};
+  fixture.events.runtimeConnect.listeners[0](port);inside=true;disconnect.listeners[0]();inside=false;
+ }
+ assert.equal(reads,2);
+});
+
+test('new background tabs inherit recent opener loading grace without waking unrelated old pages',async()=>{
+ const fixture=createChromeFixture({tabs:[{id:20,windowId:1,active:false,url:'https://example.test/20',status:'loading'},{id:30,windowId:1,active:false,url:'https://example.test/30',status:'complete'}],receivers:[10,20,30]});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ fixture.events.tabsCreated.listeners[0]({id:20,windowId:1,active:false,openerTabId:10});
+ await waitFor(()=>fixture.state.messages.some(item=>item.tabId===20&&item.message.activity?.until>Date.now()),'background new-tab loading grace');
+ const response=await fixture.sendRuntime({action:'settings'},contentSender(20));assert.equal(response.activity.focused,false);assert.ok(response.activity.until>Date.now());
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0);assert.equal(fixture.state.executeCalls.length,0);
+});
+
+test('an update with cleared session restores only unexpired local grace without renewing it',async()=>{
+ const now=Date.now(),deadline=now+5_000;
+ const fixture=createChromeFixture({sessionSnapshot:undefined,activityCheckpoint:{version:1,revision:90,untilByTab:{20:deadline,30:now-100,40:now+60_000}},tabs:[20,30,40].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30,40]});
+ // The fixture defaults sessionSnapshot when omitted; explicitly model Chrome clearing it.
+ delete fixture.state.sessionData.tabActivity;
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ const response=await fixture.sendRuntime({action:'settings'},contentSender(20));assert.equal(response.activity.until,deadline);assert.ok(response.activity.revision>=90);
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});await waitFor(()=>fixture.state.executeCalls.length>=2,'checkpoint update restore');
+ assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20]);assert.ok(!fixture.state.tabQueries.some(query=>query?.url));
+ assert.equal(fixture.state.localData.tabActivityGrace.untilByTab[20],deadline);
+});
+
+test('first upgrade uses recent browser timestamps as metadata, without probing old tabs',async()=>{
+ const now=Date.now(),fixture=createChromeFixture({tabs:[{id:20,windowId:1,active:false,url:'https://example.test/20',status:'complete',lastAccessed:now-1000},{id:30,windowId:1,active:false,url:'https://example.test/30',status:'complete',lastAccessed:now-30_000}],receivers:[10,20,30]});
+ delete fixture.state.sessionData.tabActivity;await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});await waitFor(()=>fixture.state.executeCalls.length>=2,'metadata-migrated recent tab');
+ assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20]);
+ const response=await fixture.sendRuntime({action:'settings'},contentSender(20));assert.equal(response.activity.until,now-1000+10_000);
+});
+
+test('committed child frames in an idle empty page cannot trigger selection or highlight messages',async()=>{
+ const fixture=createChromeFixture({tabs:[{id:30,windowId:1,active:false,url:'https://example.test/30',status:'complete'}],receivers:[10,30]});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ await fixture.sendRuntime({action:'report',videos:[]},contentSender(30));fixture.state.messages=[];
+ fixture.events.navigationCommitted.listeners[0]({tabId:30,frameId:1,documentId:'new-idle-child',url:'https://example.test/child'});
+ await new Promise(resolve=>setTimeout(resolve,40));assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0);
+ const disconnect=makeEvent(),messages=makeEvent(),port={name:'video-control-popup',onDisconnect:disconnect,onMessage:messages};
+ fixture.events.runtimeConnect.listeners[0](port);messages.listeners[0]({action:'watch',tabId:30});await new Promise(resolve=>setTimeout(resolve,15));
+ fixture.state.messages=[];disconnect.listeners[0]();await new Promise(resolve=>setTimeout(resolve,30));
+ assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0,'closed popup scheduled an idle-page clear highlight');
 });

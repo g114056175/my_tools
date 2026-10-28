@@ -3,6 +3,12 @@ export const isContextInvalidatedError=error=>{
  catch{return false;}
 };
 
+// Port errors exist only during onDisconnect; read them before any liveness check.
+export function consumeRuntimeError(runtime){
+ try{return runtime?.lastError?.message||'';}
+ catch(error){if(isContextInvalidatedError(error))return 'Extension context invalidated.';throw error;}
+}
+
 export function createRuntimeMessenger(runtime,onInvalid=()=>{}){
  let invalid=false;
  const invalidate=()=>{
@@ -49,8 +55,7 @@ export function createRuntimeMessenger(runtime,onInvalid=()=>{}){
   return typeof method==='function'?Reflect.apply(method,target,args):undefined;
  });
  const guard=callback=>(...args)=>run(()=>callback(...args));
- const listen=(event,callback)=>{
-  const listener=guard(callback);
+ const subscribe=(event,listener)=>{
   call(event,'addListener',listener);
   let active=true;
   return ()=>{
@@ -62,6 +67,15 @@ export function createRuntimeMessenger(runtime,onInvalid=()=>{}){
    });
   };
  };
+ const listen=(event,callback)=>subscribe(event,guard(callback));
+ const listenDisconnect=(port,callback)=>{
+  const event=run(()=>port.onDisconnect);if(!event)return ()=>{};
+  return subscribe(event,(...args)=>{
+   const error=consumeRuntimeError(runtime);
+   if(isContextInvalidatedError(error))return invalidate();
+   return run(()=>callback(error,...args));
+  });
+ };
  const send=async message=>{
   if(!alive())return invalidate();
   try{return await runtime.sendMessage(message);}
@@ -70,5 +84,5 @@ export function createRuntimeMessenger(runtime,onInvalid=()=>{}){
    return null;
   }
  };
- return {send,alive,invalidate,call,guard,listen,cleanup};
+ return {send,alive,invalidate,call,guard,listen,listenDisconnect,cleanup};
 }

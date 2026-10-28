@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.13/VideoSpeed.zip)** · Chrome／Brave · 預覽版
+**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.14/VideoSpeed.zip)** · Chrome／Brave · 預覽版
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -29,7 +29,7 @@
 - **播放偏好**：速度可選關閉、跟隨上一部或指定倍速，動態載入與換片也適用。支援的播放器可設定起始畫質；首次套用後仍可手動調整。略過 YouTube、Bilibili 的縮圖預覽，保留主影片控制。
 - **自訂操作**：編輯刻度與快捷鍵；修改刻度不會立即改變正在播放的速度。
 - **網站除外**：新增網域或影片網址，點規則旁的類型切換。`Full` 停止所有功能；`Default` 僅略過自動速度與畫質設定，保留手動操作。
-- **背景節流**：僅探索聚焦分頁，離開後保留 10 秒載入緩衝；既有背景播放保留控制，切回時再補查。
+- **背景節流**：探索聚焦與 10 秒內近期分頁，從這些頁面新開的背景分頁也保留載入緩衝；既有背景播放保留控制。更新時不逐一接管閒置舊頁。
 - **介面**：預設英文，可在齒輪設定切換中文及深淺色；設定自動保存。總開關可停用整體功能。
 
 | 預設快捷鍵 | 操作 |
@@ -66,6 +66,7 @@ npm run test:autostart
 npm run test:routes
 npm run test:soak
 npm run test:notices
+npm run test:lifecycle
 ```
 
 `src/` 為來源，`extension/` 為可直接載入的成品。瀏覽器測試使用隔離環境與本地固定資料；範圍及尚未驗證項目見 [驗證紀錄](docs/validation.md)。

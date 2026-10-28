@@ -509,6 +509,7 @@
 
   // src/tab-activity.js
   var TAB_ACTIVITY_GRACE_MS = 1e4;
+  var TAB_LOADING_GRACE_MS = 6e4;
   var validId = (value) => Number.isInteger(value) && value >= 0;
   function replayTabActivityEvents(activity, events, { windowIdNone = -1 } = {}) {
     const affected = /* @__PURE__ */ new Set();
@@ -517,19 +518,22 @@
       let changed = [];
       if (event.type === "activated") changed = activity.setActiveTab(event.windowId, event.tabId, event.at);
       else if (event.type === "created") changed = activity.openFrom(event.openerTabId, event.tabId, event.at);
+      else if (event.type === "loading") changed = activity.startLoading(event.tabId, event.at) ? [event.tabId] : [];
       else if (event.type === "focus") changed = activity.setFocusedWindow(event.windowId === windowIdNone ? null : event.windowId, event.at);
       for (const tabId of changed) affected.add(tabId);
     }
     return [...affected];
   }
   var TabActivity = class {
-    constructor({ now = () => Date.now(), graceMs = TAB_ACTIVITY_GRACE_MS } = {}) {
+    constructor({ now = () => Date.now(), graceMs = TAB_ACTIVITY_GRACE_MS, loadingMs = TAB_LOADING_GRACE_MS } = {}) {
       this.now = now;
       this.graceMs = graceMs;
+      this.loadingMs = loadingMs;
       this.focusedWindowId = null;
       this.focusedTabId = null;
       this.revision = 0;
       this.untilByTab = /* @__PURE__ */ new Map();
+      this.loadingUntilByTab = /* @__PURE__ */ new Map();
       this.activeByWindow = /* @__PURE__ */ new Map();
     }
     restore(snapshot) {
@@ -541,6 +545,11 @@
       for (const [key, value] of entries) {
         const tabId = Number(key);
         if (validId(tabId) && Number.isFinite(value) && value > 0) this.untilByTab.set(tabId, value);
+      }
+      this.loadingUntilByTab = /* @__PURE__ */ new Map();
+      for (const [key, value] of Object.entries(snapshot?.loadingUntilByTab || {}).slice(0, 256)) {
+        const tabId = Number(key);
+        if (validId(tabId) && Number.isSafeInteger(value) && value > this.now() && value <= this.now() + this.loadingMs) this.loadingUntilByTab.set(tabId, value);
       }
       this.activeByWindow = /* @__PURE__ */ new Map();
       const activeEntries = Object.entries(snapshot?.activeByWindow || {});
@@ -554,13 +563,14 @@
     }
     snapshot(now = this.now()) {
       this.prune(now);
-      return { version: 1, focusedWindowId: this.focusedWindowId, focusedTabId: this.focusedTabId, revision: this.revision, untilByTab: Object.fromEntries(this.untilByTab), activeByWindow: Object.fromEntries(this.activeByWindow) };
+      return { version: 1, focusedWindowId: this.focusedWindowId, focusedTabId: this.focusedTabId, revision: this.revision, untilByTab: Object.fromEntries(this.untilByTab), loadingUntilByTab: Object.fromEntries(this.loadingUntilByTab), activeByWindow: Object.fromEntries(this.activeByWindow) };
     }
     activity(tabId, now = this.now()) {
       if (!validId(tabId)) return { focused: false, until: 0, revision: this.revision };
       const focused = this.focusedTabId === tabId;
       const until = focused ? 0 : this.untilByTab.get(tabId) || 0;
-      return { focused, until: until > now ? until : 0, revision: this.revision };
+      const loadingUntil = this.loadingUntilByTab.get(tabId) || 0;
+      return { focused, until: until > now ? until : 0, revision: this.revision, ...loadingUntil > now ? { loadingUntil } : {} };
     }
     setFocusedWindow(windowId, now = this.now()) {
       const nextWindowId = validId(windowId) ? windowId : null;
@@ -602,8 +612,22 @@
       const until = now + this.graceMs;
       if ((this.untilByTab.get(tabId) || 0) >= until) return [];
       this.untilByTab.set(tabId, until);
+      this.loadingUntilByTab.set(tabId, now + this.loadingMs);
       this.revision++;
       return [tabId];
+    }
+    startLoading(tabId, now = this.now()) {
+      const activity = this.activity(tabId, now);
+      if (!validId(tabId) || !activity.focused && activity.until <= now) return false;
+      if (!activity.focused && (this.loadingUntilByTab.get(tabId) || 0) > now) return false;
+      this.loadingUntilByTab.set(tabId, now + this.loadingMs);
+      this.revision++;
+      return true;
+    }
+    finishLoading(tabId) {
+      if (!this.loadingUntilByTab.delete(tabId)) return false;
+      this.revision++;
+      return true;
     }
     restoreRecent(tabId, until, now = this.now()) {
       if (!validId(tabId) || tabId === this.focusedTabId || !Number.isSafeInteger(until) || until <= now || until > now + this.graceMs || (this.untilByTab.get(tabId) || 0) >= until) return false;
@@ -624,6 +648,7 @@
     forget(tabId) {
       if (!validId(tabId)) return false;
       let had = this.untilByTab.delete(tabId);
+      had = this.loadingUntilByTab.delete(tabId) || had;
       for (const [windowId, cachedTabId] of this.activeByWindow) if (cachedTabId === tabId) {
         this.activeByWindow.delete(windowId);
         had = true;
@@ -642,6 +667,7 @@
     }
     prune(now = this.now()) {
       for (const [tabId, until] of this.untilByTab) if (until <= now || tabId === this.focusedTabId) this.untilByTab.delete(tabId);
+      for (const [tabId, until] of this.loadingUntilByTab) if (until <= now) this.loadingUntilByTab.delete(tabId);
       for (const [windowId, tabId] of this.activeByWindow) if (!validId(windowId) || !validId(tabId)) this.activeByWindow.delete(windowId);
       if (this.focusedWindowId !== null && this.focusedTabId !== null) this.activeByWindow.set(this.focusedWindowId, this.focusedTabId);
     }
@@ -673,7 +699,7 @@
 
   // src/background.js
   var SCOPE = "video-control";
-  var VERSION = "0.6.14";
+  var VERSION = "0.6.15";
   var frames = /* @__PURE__ */ new Map();
   var pinned = /* @__PURE__ */ new Map();
   var ports = /* @__PURE__ */ new Map();
@@ -770,7 +796,7 @@
   }
   function saveActivity() {
     const snapshot = tabActivity.snapshot();
-    const checkpoint = { version: 1, revision: snapshot.revision, untilByTab: snapshot.untilByTab }, signature = JSON.stringify(checkpoint);
+    const checkpoint = { version: 1, revision: snapshot.revision, untilByTab: snapshot.untilByTab, loadingUntilByTab: snapshot.loadingUntilByTab }, signature = JSON.stringify(checkpoint);
     activityWrites = activityWrites.catch(() => {
     }).then(async () => {
       await chrome.storage.session.set({ tabActivity: snapshot });
@@ -796,6 +822,14 @@
     applyActivityEvent(event);
   }
   function applyActivityEvent(event) {
+    if (event.type === "loading") {
+      if (tabActivity.startLoading(event.tabId, event.at)) {
+        saveActivity().catch(() => {
+        });
+        notifyActivity(event.tabId);
+      }
+      return;
+    }
     if (event.type === "created") {
       const affected2 = tabActivity.openFrom(event.openerTabId, event.tabId, event.at);
       if (affected2.length) saveActivity().catch(() => {
@@ -851,7 +885,8 @@
       }
       migrateRecentActivity = checkpoint?.version !== 1;
       const entries = Object.entries(checkpoint?.untilByTab || {}).slice(0, 256).filter(([id, until]) => Number.isInteger(Number(id)) && Number(id) >= 0 && Number.isSafeInteger(until) && until > startedAt && until <= startedAt + TAB_ACTIVITY_GRACE_MS);
-      tabActivity.restore({ revision: checkpoint?.revision, untilByTab: Object.fromEntries(entries) });
+      const loadingEntries = Object.entries(checkpoint?.loadingUntilByTab || {}).slice(0, 256).filter(([id, until]) => Number.isInteger(Number(id)) && Number(id) >= 0 && Number.isSafeInteger(until) && until > startedAt && until <= startedAt + TAB_LOADING_GRACE_MS);
+      tabActivity.restore({ revision: checkpoint?.revision, untilByTab: Object.fromEntries(entries), loadingUntilByTab: Object.fromEntries(loadingEntries) });
     }
     const initialWindow = await windowAtStart;
     let context;
@@ -890,8 +925,10 @@
   chrome.tabs.onActivated.addListener((info) => queueActivityEvent({ type: "activated", tabId: info.tabId, windowId: info.windowId, at: Date.now() }));
   chrome.tabs.onCreated?.addListener((tab) => {
     const at = Date.now();
-    if (tab.active) queueActivityEvent({ type: "activated", tabId: tab.id, windowId: tab.windowId, at });
-    else if (!tab.discarded && Number.isInteger(tab.openerTabId)) queueActivityEvent({ type: "created", tabId: tab.id, openerTabId: tab.openerTabId, at });
+    if (tab.active) {
+      queueActivityEvent({ type: "activated", tabId: tab.id, windowId: tab.windowId, at });
+      if (!tab.discarded) queueActivityEvent({ type: "loading", tabId: tab.id, at });
+    } else if (!tab.discarded && Number.isInteger(tab.openerTabId)) queueActivityEvent({ type: "created", tabId: tab.id, openerTabId: tab.openerTabId, at });
   });
   chrome.windows.onFocusChanged.addListener((windowId) => queueActivityEvent({ type: "focus", windowId, at: Date.now() }));
   chrome.windows.onRemoved?.addListener((windowId) => {
@@ -912,7 +949,8 @@
   }
   async function mayContactPage(tabId) {
     const activity = await activityFor(tabId);
-    return activity.focused || activity.until > Date.now() || hasPlayingMedia(tabId) || [...ports.values()].some((item) => item.tabId === tabId);
+    const pendingMedia = activity.loadingUntil > Date.now() && [...frames.get(tabId)?.values() || []].some((frame) => frame.videos.some((video) => video.connected !== false));
+    return activity.focused || activity.until > Date.now() || pendingMedia || hasPlayingMedia(tabId) || [...ports.values()].some((item) => item.tabId === tabId);
   }
   var activityRecheck = null;
   async function ensureStartupActivity(tabId) {
@@ -1300,7 +1338,7 @@
       if (!Number.isInteger(tabId2)) throw Error("Video page required");
       const settings2 = await stored2(), activity = await activityFor(tabId2);
       const frame = frames.get(tabId2)?.get(sender.frameId || 0), playing = frame?.documentId === sender.documentId && frame?.videos.some((video) => video.playing && video.connected !== false);
-      if (!settings2.enabled || disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) || disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes) || !activity.focused && activity.until <= Date.now() && !playing) throw Error("Video controls are not active on this page");
+      if (!settings2.enabled || disabledOnUrl(sender.tab.url, settings2.disabledSites, settings2.siteModes) || disabledOnUrl(sender.url, settings2.disabledSites, settings2.siteModes) || !activity.focused && activity.until <= Date.now() && !(activity.loadingUntil > Date.now()) && !playing) throw Error("Video controls are not active on this page");
       await chrome.scripting.executeScript({ injectImmediately: true, target: { tabId: tabId2, ...sender.documentId ? { documentIds: [sender.documentId] } : { frameIds: [sender.frameId || 0] } }, world: "MAIN", files: ["page-bridge.js"] });
       return {};
     }
@@ -1308,6 +1346,14 @@
       if (Number.isInteger(sender.tab?.id)) await ensureStartupActivity(sender.tab.id);
       const settings2 = await stored2(), rate = await rateState();
       return { settings: settings2, lastRate: rate.lastRate, rateRevision: rate.rateRevision, pageUrl: sender.tab?.url || "", language, activity: await activityFor(sender.tab?.id) };
+    }
+    if (message.action === "initialized") {
+      const target = targetFor(sender.tab?.id);
+      if (target?.id === message.id && target.frameId === sender.frameId && target.documentId === sender.documentId && tabActivity.finishLoading(sender.tab.id)) {
+        await saveActivity();
+        notifyActivity(sender.tab.id);
+      }
+      return {};
     }
     if (message.action === "report") {
       const hint = message.rememberedRate, token = hint ? rateWriteLedger.begin(hint, sender) : null, settings2 = await stored2();
@@ -1452,6 +1498,7 @@
     if (change.status === "loading") {
       forgetTab(tabId);
       activityRestoreAttempts.delete(tabId);
+      queueActivityEvent({ type: "loading", tabId, at: Date.now() });
     }
     if (change.status === "complete") activityFor(tabId).then((activity) => {
       if (activity.focused || activity.until > Date.now()) notifyActivity(tabId);
@@ -1509,8 +1556,9 @@
       });
     }
   });
-  async function restoreOpenTab(tabId) {
-    if (!await mayContactPage(tabId)) return;
+  async function restoreOpenTab(tabId, { allowLoading = false } = {}) {
+    const eligible = async () => await mayContactPage(tabId) || allowLoading && (await activityFor(tabId)).loadingUntil > Date.now();
+    if (!await eligible()) return;
     const frames2 = await chrome.scripting.executeScript({ injectImmediately: true, target: { tabId, allFrames: true }, world: "ISOLATED", func: (version) => {
       if (/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname)) return false;
       const api = globalThis[/* @__PURE__ */ Symbol.for("video-control.api")];
@@ -1527,9 +1575,9 @@
       return true;
     }, args: [VERSION] });
     const frameIds = frames2.filter((frame) => frame.result === true).map((frame) => frame.frameId);
-    if (!frameIds.length || !await mayContactPage(tabId)) return;
+    if (!frameIds.length || !await eligible()) return;
     await chrome.scripting.executeScript({ injectImmediately: true, target: { tabId, frameIds }, world: "MAIN", files: ["page-bridge.js"] });
-    if (!await mayContactPage(tabId)) return;
+    if (!await eligible()) return;
     await chrome.scripting.executeScript({ injectImmediately: true, target: { tabId, frameIds }, world: "ISOLATED", files: ["content.js"] });
   }
   async function restoreOpenTabs() {
@@ -1544,9 +1592,9 @@
       } catch {
       }
     }
-    const snapshot = tabActivity.snapshot(), candidates = /* @__PURE__ */ new Set([snapshot.focusedTabId, ...Object.keys(snapshot.untilByTab).map(Number), ...[...frames.keys()].filter(hasPlayingMedia)]);
+    const snapshot = tabActivity.snapshot(), candidates = /* @__PURE__ */ new Set([snapshot.focusedTabId, ...Object.keys(snapshot.untilByTab).map(Number), ...Object.keys(snapshot.loadingUntilByTab).map(Number), ...[...frames.keys()].filter(hasPlayingMedia)]);
     const tabs = [...candidates].filter(Number.isInteger);
-    for (let index = 0; index < tabs.length; index += 4) await Promise.allSettled(tabs.slice(index, index + 4).map(restoreOpenTab));
+    for (let index = 0; index < tabs.length; index += 4) await Promise.allSettled(tabs.slice(index, index + 4).map((tabId) => restoreOpenTab(tabId, { allowLoading: true })));
   }
   chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === "update") restoreOpenTabs().catch(() => {

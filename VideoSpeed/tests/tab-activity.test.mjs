@@ -4,6 +4,23 @@ import {TabActivity,replayTabActivityEvents} from '../src/tab-activity.js';
 
 function clockAt(start=0){let value=start;return {now:()=>value,set:next=>{value=next;}};}
 
+test('loading has an independent fixed deadline without extending DOM exploration',()=>{
+ const clock=clockAt(1000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
+ assert.equal(activity.startLoading(10),true);activity.setActiveTab(1,11,1100);
+ clock.set(12_000);assert.equal(activity.activity(10).until,0);assert.equal(activity.activity(10).loadingUntil,61_000);
+ assert.equal(activity.startLoading(10),false,'background redirects cannot renew loading');
+ const restored=new TabActivity({now:clock.now}).restore(activity.snapshot());assert.equal(restored.activity(10).loadingUntil,61_000);
+ clock.set(61_000);assert.equal(restored.activity(10).loadingUntil,undefined);assert.deepEqual(restored.snapshot().loadingUntilByTab,{});
+});
+
+test('unknown background pages never acquire loading permission; completion and close revoke it',()=>{
+ const clock=clockAt(1000),activity=new TabActivity({now:clock.now});activity.reconcile({windowId:1,tabId:10});
+ assert.equal(activity.startLoading(20),false);activity.openFrom(10,20);assert.equal(activity.activity(20).loadingUntil,61_000);
+ clock.set(12_000);assert.equal(activity.finishLoading(20),true);assert.equal(activity.activity(20).loadingUntil,undefined);
+ activity.openFrom(10,30);activity.forget(30);assert.equal(activity.activity(30).loadingUntil,undefined);
+ activity.restore({loadingUntilByTab:{40:12_001,41:72_001,42:11_999}});assert.deepEqual(activity.snapshot().loadingUntilByTab,{'40':12_001});
+});
+
 test('starts unvisited tabs inactive and tracks only the focused window active tab',()=>{
  const clock=clockAt(100),activity=new TabActivity({now:clock.now});
  assert.deepEqual(activity.activity(1),{focused:false,until:0,revision:0});

@@ -11,7 +11,7 @@ import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.14',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.15',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -19,7 +19,7 @@ if(!reuse){
  try{previous?.dispose?.();}catch{}
  try{boot();}catch(error){if(!isContextInvalidatedError(error))throw error;}
 }
-function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecent,onIdle,language='en'}){
+function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecent,isLoading,onIdle,language='en'}){
  const qualityDelays=[250,600,1200,2400];
  const videoToast=new VideoToast(document);
  const shownNotice={key:null};
@@ -28,10 +28,11 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  const listen=(target,type,handler,options={})=>target.addEventListener(type,handler,{...(typeof options==='boolean'?{capture:options}:options),signal:abort.signal});
  let settings=initialSettings,ready=true,reportTimer,activeId=null,hasTarget=false,lastRate=initialRate,requestSerial=0,picker=null,rememberedRate=null;
  const states=new Map(),interactions=new WeakMap(),pending=new Map(),rateResponses=new Map();
- let trustedRateInput=null,retained=new WeakMap();
- const eligible=video=>video.isConnected&&!isMediaPreview(video)&&(isRecent()||retained.get(video)===mediaSignature(video)&&!video.paused&&!video.ended);
+ let trustedRateInput=null,retained=new WeakMap(),loadingComplete=false;
+ const waiting=()=>!loadingComplete&&isLoading();
+ const eligible=video=>video.isConnected&&!isMediaPreview(video)&&(isRecent()||waiting()||retained.get(video)===mediaSignature(video)&&!video.paused&&!video.ended);
  const hasRetained=()=>[...registry.videos.values()].some(eligible);
- const report=()=>{if(disposed)return;if(!isRecent()&&!hasRetained()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!hasRetained()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
+ const report=()=>{if(disposed)return;if(!isRecent()&&!waiting()&&!hasRetained()){onIdle();return;}if(!alive()){queueMicrotask(dispose);return;}const urgent=!activeId||!states.has(activeId);if(reportTimer){if(!urgent)return;clearTimeout(reportTimer);}reportTimer=setTimeout(()=>{reportTimer=null;if(!isRecent()&&!waiting()&&!hasRetained()){onIdle();return;}const hint=rememberedRate;rememberedRate=null;send({action:'report',videos:snapshot(),rememberedRate:hint}).then(response=>{if(hint)rateClient.acknowledge(hint.rateWriteId,response);});},urgent?0:120);};
  listen(document,'video-control:rate-result-v3',event=>{
   let data;try{data=JSON.parse(event.detail);}catch{return;}
   const job=rateResponses.get(data?.requestId);if(data?.owner===rateClient.sessionId&&job&&data.videoId===job.id&&event.composedPath().includes(job.video))job.result=data.result;
@@ -72,7 +73,11 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
    readRate:()=>rateOperation(video,id,{op:'read'}),
    writeRate:(_rate,options)=>rateOperation(video,id,options),
    releaseRate:()=>rateOperation(video,id,{op:'release'}),
-   signature:()=>mediaSignature(video),canInitialize:()=>eligible(video)&&mediaCanInitialize(video),initializedKey,onInitialize:key=>video.setAttribute('data-video-control-initialized',key),lastRate,selected:id===activeId,onChange:report,
+   signature:()=>mediaSignature(video),canInitialize:()=>eligible(video)&&mediaCanInitialize(video),initializedKey,onInitialize:key=>{
+    video.setAttribute('data-video-control-initialized',key);
+    if(!isRecent()&&!video.paused&&!video.ended)retained.set(video,key);
+    loadingComplete=true;send({action:'initialized',id});
+   },lastRate,selected:id===activeId,onChange:report,
    onDefaultApplied:()=>state.notice.request(),
    onRate:(rate,source)=>{
     lastRate=rate;const rateWriteId=rateClient.begin(rate),hint={id,rate,source,rateWriteId,rateSessionId:rateClient.sessionId};rememberedRate=hint;
@@ -92,7 +97,8 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
   state.onNoticeSource=()=>state.notice.cancelFrame();
   for(const name of ['play','playing'])listen(video,name,state.onPlayback);
   for(const name of ['loadstart','emptied'])listen(video,name,state.onNoticeSource);
- },report);
+  queueMicrotask(()=>{if(!disposed&&video.isConnected&&states.has(id))video.dispatchEvent(new Event('video-control:media-bind-v1',{bubbles:true,composed:true}));});
+ },report,{exploring:isRecent(),allowMediaEvents:waiting});
  registry.onRemove=(id,video)=>{
   const state=states.get(id);state?.notice.dispose();state?.rate.dispose();clearTimeout(state?.timer);states.delete(id);
   if(videoToast.video===video)videoToast.clear();
@@ -149,12 +155,10 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  function updateLastRate(rate){if(!validRate(rate))return;lastRate=Number(rate);for(const state of states.values())state.rate.lastRate=lastRate;}
  function updateActivity(){
   if(isRecent()){retained=new WeakMap();registry.setExploring(true);return true;}
-  if(registry.exploring){
-   for(const [id,video]of registry.videos){const rate=states.get(id)?.rate,key=mediaSignature(video);if(rate?.initialized&&rate.mediaKey===key&&!video.paused&&!video.ended)retained.set(video,key);}
-   registry.setExploring(false);
-  }
+  for(const [id,video]of registry.videos){const rate=states.get(id)?.rate,key=mediaSignature(video);if(rate?.initialized&&rate.mediaKey===key&&!video.paused&&!video.ended)retained.set(video,key);}
+  registry.setExploring(false);
   for(const [id,video]of [...registry.videos])if(!eligible(video))registry.remove(id,video);
-  return hasRetained();
+  return waiting()||hasRetained();
  }
  function act(id,command,value,language=locale){
   registry.prune();
@@ -188,11 +192,11 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
  let scrollTimer;listen(window,'scroll',()=>{if(!scrollTimer)scrollTimer=setTimeout(()=>{scrollTimer=null;report();},250);},{passive:true,capture:true});
  let routeQueued=false;
  function route(){if(routeQueued)return;routeQueued=true;queueMicrotask(()=>{routeQueued=false;if(disposed)return;for(const state of states.values())state.rate.sync();if(!isRecent())onIdle();report();});}
- listen(document,'video-control:media-ready-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(!video||!eligible(video))return;registry.add(video);const id=registry.ids.get(video),state=states.get(id);state?.rate.sync(true);if(state)queueQuality(video,id);report();},true);
+ listen(document,'video-control:media-ready-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(!video||!eligible(video))return;registry.add(video,{mediaEvent:true});const id=registry.ids.get(video),state=states.get(id);state?.rate.sync(true);if(state)queueQuality(video,id);report();},true);
  for(const name of ['popstate','hashchange','yt-navigate-finish','video-control:route'])listen(window,name,route,true);
  listen(window,'pagehide',()=>{clearTimeout(reportTimer);if(rememberedRate){send({action:'report',videos:snapshot(),rememberedRate});rememberedRate=null;}marker({clear:true});send({action:'report',videos:[]});});
  listen(window,'pageshow',report);
- listen(document,'video-control:shadow',event=>{for(const node of event.composedPath())if(node.shadowRoot)registry.scan(node.shadowRoot);},true);
+ listen(document,'video-control:shadow',event=>{for(const node of event.composedPath())if(node.shadowRoot){if(isRecent())registry.scan(node.shadowRoot);else if(waiting())registry.observe(node.shadowRoot);}},true);
  function cancelPick(){picker?.cancel();picker=null;}
  function startPick(language=locale){
   cancelPick();registry.scan(document,true);marker({clear:true});
@@ -255,7 +259,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isRecen
 function boot(){
  let disposed=false,session=null,settings=normalizeSettings({enabled:false}),lastRate=null,lifeline,configuration=0,pageUrl=window===window.top?location.href:'',contextReady=window===window.top,language='en',localPolicyKnown=false;
  const activity=new ActivityLease();let activityTimer=null,idleQueued=false,rateRefresh=null,bridgeReady=false;
- const isRecent=()=>activity.isRecent();
+ const isRecent=()=>activity.isRecent(),isLoading=()=>activity.isLoading();
  const rateClient=new RateClient(rate=>{lastRate=rate;session?.updateLastRate(rate);});
  let stopStorage=()=>{},stopMessages=()=>{},stopDisconnect=()=>{};
  delete globalThis[Symbol.for('video-control.recovering')];
@@ -263,7 +267,8 @@ function boot(){
  function acceptActivity(value){
   if(!activity.accept(value))return false;
   clearTimeout(activityTimer);activityTimer=null;
-  if(!activity.focused&&activity.until>Date.now())activityTimer=setTimeout(()=>{activityTimer=null;if(isRecent())acceptActivity(activity);reconcile();},activity.until-Date.now());
+  const now=Date.now(),deadlines=[!activity.focused?activity.until:0,activity.loadingUntil].filter(until=>until>now);
+  if(deadlines.length)activityTimer=setTimeout(()=>{activityTimer=null;acceptActivity(activity);reconcile();},Math.min(...deadlines)-now);
   return true;
  }
  function onIdle(){
@@ -278,7 +283,7 @@ function boot(){
   if(disposed)return;
   if(!contextReady)return;
   const localSettings=settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl);
-  const recent=isRecent(),keep=localSettings.enabled&&session?.updateActivity(),enabled=localSettings.enabled&&validRate(lastRate)&&(recent||keep);
+  const recent=isRecent(),keep=localSettings.enabled&&session?.updateActivity(),enabled=localSettings.enabled&&validRate(lastRate)&&(recent||keep||!session&&isLoading());
   if(!enabled){
    bridgeReady=false;
    const previous=session;session=null;previous?.dispose();
@@ -287,10 +292,10 @@ function boot(){
    return;
   }
   bridgeReady=false;
-  document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:true,exploring:recent,qualityEnabled:localSettings.qualityEnabled})}));
+  document.dispatchEvent(new CustomEvent('video-control:bridge-state-v4',{detail:JSON.stringify({owner:rateClient.sessionId,enabled:true,exploring:recent,waiting:isLoading(),qualityEnabled:localSettings.qualityEnabled})}));
   if(!bridgeReady){bridgeStartup.ensure({force:true,reason:'missing-page-bridge'});return;}
   if(session)session.update(localSettings,lastRate);
-  else session=startSession(localSettings,lastRate,send,messenger.alive,rateClient,{isRecent,onIdle,language});
+  else session=startSession(localSettings,lastRate,send,messenger.alive,rateClient,{isRecent,isLoading,onIdle,language});
  }
  function acceptConfiguration(response){
   if(!response?.settings||!validRate(response.lastRate)||!Number.isSafeInteger(response.rateRevision)||response.rateRevision<0||!Number.isSafeInteger(response.activity?.revision)||response.activity.revision<0||typeof response.activity.focused!=='boolean'||!Number.isSafeInteger(response.activity.until)||response.activity.until<0)return false;
@@ -301,16 +306,16 @@ function boot(){
   return true;
  }
  const startup=new StartupHandshake({request:()=>send({action:'settings'}),accept:acceptConfiguration,alive:messenger.alive,
-  mayRetry:()=>!disposed&&(isRecent()||document.visibilityState!=='hidden'),onError:error=>console.error('[VideoSpeed] startup failed',error)});
+  mayRetry:()=>!disposed&&(isRecent()||isLoading()||document.visibilityState!=='hidden'),onError:error=>console.error('[VideoSpeed] startup failed',error)});
  const bridgeStartup=new StartupHandshake({request:()=>send({action:'repairBridge'}),accept:()=>{reconcile();return bridgeReady;},alive:messenger.alive,
-  mayRetry:()=>!disposed&&(isRecent()||!!session),delays:[200,800],onError:error=>console.error('[VideoSpeed] page bridge failed',error)});
+  mayRetry:()=>!disposed&&(isRecent()||isLoading()||!!session),delays:[200,800],onError:error=>console.error('[VideoSpeed] page bridge failed',error)});
  const bridgeAcknowledged=event=>{
   let value;try{value=JSON.parse(event.detail);}catch{return;}
   if(value?.owner===rateClient.sessionId&&value.version===VERSION&&value.enabled===true){bridgeReady=true;bridgeStartup.acknowledge();}
  };
  document.addEventListener('video-control:bridge-ready-v1',bridgeAcknowledged,true);
  const wake=event=>{
-  if(disposed||document.visibilityState==='hidden'&&!isRecent())return;
+  if(disposed||document.visibilityState==='hidden'&&!isRecent()&&!isLoading())return;
   connectLifeline();
   if(event?.type==='pageshow'&&event.persisted){startup.ensure({force:true,reason:'page-restored'});return;}
   if(session)return;

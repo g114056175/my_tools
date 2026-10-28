@@ -46,16 +46,19 @@ export function mediaCanInitialize(video,target=globalThis){
  }catch{return false;}
 }
 export class MediaRegistry{
- constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true}={}){
-  Object.assign(this,{document,onAdd,onChange,owner,exploring,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
+ constructor(document,onAdd,onChange,{owner=globalThis.crypto?.randomUUID?.()||String(Math.random()),exploring=true,allowMediaEvents=()=>false}={}){
+  Object.assign(this,{document,onAdd,onChange,owner,exploring,allowMediaEvents,videos:new Map(),ids:new WeakMap(),serial:0,observers:new Map(),titleCache:new WeakMap(),walkQueue:[],walkDeferred:new Map(),walkedRoots:new WeakSet(),mutationQueue:[],pendingMutationNodes:0,pendingMutationRecords:0,walkTurn:false,walkTimer:null,disposed:false});
   const seenEvents=new WeakSet();
-  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video))){this.add(video);if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
-  this.scan(document);this.enqueue(document);
+  this.discover=event=>{if(seenEvents.has(event))return;seenEvents.add(event);const video=event.composedPath?.().find(node=>node?.tagName==='VIDEO');if(video&&(this.exploring||this.ids.has(video)||this.allowMediaEvents())){this.add(video,{mediaEvent:true});if(!this.ids.has(video))return;if(event.type==='play')this.notePlay(video);this.onChange();}};
+  this.observe(document);this.scan(document);this.enqueue(document);
+  // A slow document/worker may start after the media's first events. Catch up
+  // once on direct videos; passive waiting never queues a DOM/shadow walk.
+  if(!exploring&&allowMediaEvents()){let count=0;for(const video of document.querySelectorAll?.('video')||[]){this.add(video,{mediaEvent:true});if(++count>=64)break;}}
  }
- add(video){
+ add(video,{mediaEvent=false}={}){
   if(this.disposed||!video.isConnected)return;
   if(isMediaPreview(video,this.document.defaultView)){const id=this.ids.get(video);if(id)this.remove(id,video);return;}
-  if(!this.exploring||this.ids.has(video))return;
+  if(!this.exploring&&!(mediaEvent&&this.allowMediaEvents())||this.ids.has(video))return;
   if(this.videos.size>=64){this.prune();if(this.videos.size>=64){const victim=[...this.videos].find(([,item])=>item.paused)||this.videos.entries().next().value;if(victim)this.remove(...victim);}}
   const id=this.owner+':v'+(++this.serial);this.ids.set(video,id);this.videos.set(id,video);video.setAttribute('data-video-control-registry',this.owner);video.setAttribute('data-video-control-id',id);if(!video.paused&&!video.ended&&!video.getAttribute('data-video-control-last-played'))this.notePlay(video);this.onAdd(video,id);
  }

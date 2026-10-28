@@ -11,7 +11,7 @@ import {TrustedRateInput} from './trusted-rate-input.js';
 import {ActivityLease} from './activity-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.13',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='0.6.14',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}
@@ -309,8 +309,11 @@ function boot(){
   if(value?.owner===rateClient.sessionId&&value.version===VERSION&&value.enabled===true){bridgeReady=true;bridgeStartup.acknowledge();}
  };
  document.addEventListener('video-control:bridge-ready-v1',bridgeAcknowledged,true);
- const wake=()=>{
-  if(disposed||session||document.visibilityState==='hidden'&&!isRecent())return;
+ const wake=event=>{
+  if(disposed||document.visibilityState==='hidden'&&!isRecent())return;
+  connectLifeline();
+  if(event?.type==='pageshow'&&event.persisted){startup.ensure({force:true,reason:'page-restored'});return;}
+  if(session)return;
   if(startup.ready&&!settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)return;
   startup.ensure({force:startup.ready,reason:'page-event'});
  };
@@ -358,8 +361,14 @@ function boot(){
  if(disposed){stopStorage();stopMessages();return;}
  const api={version:VERSION,alive:()=>!disposed&&messenger.alive(),enabled:()=>!!session,dispose,startup:()=>({...startup.snapshot(),bridge:bridgeStartup.snapshot()}),snapshot:()=>session?.snapshot()||[],diagnostics:()=>session?.diagnostics()||[],refresh:async()=>{await initial;if(!session)await startup.ensure({force:true,reason:'refresh'});if(!session)await bridgeStartup.task;return session?session.refresh():[];}};
  globalThis[API]=api;
- lifeline=messenger.guard(()=>messenger.call(chrome.runtime,'connect',{name:'video-control-content'}))();
- if(lifeline&&!disposed)stopDisconnect=messenger.guard(()=>messenger.listen(lifeline.onDisconnect,()=>{if(!messenger.alive())messenger.invalidate();else lifeline=null;}))()||(()=>{});
+ function connectLifeline(){
+  if(disposed||lifeline)return;
+  stopDisconnect();stopDisconnect=()=>{};
+  const port=messenger.call(chrome.runtime,'connect',{name:'video-control-content'});if(!port||disposed)return;
+  lifeline=port;
+  stopDisconnect=messenger.listenDisconnect(port,()=>{if(lifeline===port){lifeline=null;stopDisconnect();stopDisconnect=()=>{};}});
+ }
+ connectLifeline();
  if(disposed){stopStorage();stopMessages();stopDisconnect();messenger.cleanup(()=>lifeline?.disconnect());}
  function dispose(){
   if(disposed)return;disposed=true;clearTimeout(activityTimer);session?.dispose();session=null;

@@ -124,3 +124,28 @@ test('guard rethrows programming errors and invalidate does not hide dispose bug
  const broken=createRuntimeMessenger({id:'test'},()=>{throw Error('dispose bug');});
  assert.throws(()=>broken.invalidate(),/dispose bug/);
 });
+
+test('disconnect consumes callback-scoped lastError before checking context liveness',()=>{
+ let inside=false,reads=0,listener,removed=0;const order=[],messages=[];
+ const runtime={id:'live',getManifest(){if(inside)order.push('alive');return {};},get lastError(){assert.ok(inside);reads++;order.push('error');return {message:'The page keeping the extension port is moved into back/forward cache, so the message channel is closed.'};}};
+ const event={addListener(value){listener=value;},removeListener(value){assert.equal(value,listener);removed++;}};
+ const messenger=createRuntimeMessenger(runtime),stop=messenger.listenDisconnect({onDisconnect:event},error=>messages.push(error));
+ inside=true;listener();inside=false;
+ assert.equal(reads,1);assert.deepEqual(order,['error','alive']);assert.match(messages[0],/back\/forward cache/);assert.equal(messenger.alive(),true);
+ stop();stop();assert.equal(removed,1);
+});
+
+test('a disconnected invalid context disposes without another native liveness call',()=>{
+ let listener,disposed=0,callbacks=0,checks=0,invalid=false;
+ const runtime={id:'old',getManifest(){checks++;assert.equal(invalid,false);return {};},get lastError(){return invalid?{message:'Extension context invalidated.'}:undefined;}};
+ const messenger=createRuntimeMessenger(runtime,()=>disposed++);
+ messenger.listenDisconnect({onDisconnect:{addListener(value){listener=value;}}},()=>callbacks++);
+ const before=checks;invalid=true;assert.doesNotThrow(()=>listener());
+ assert.equal(disposed,1);assert.equal(callbacks,0);assert.equal(checks,before);assert.equal(messenger.alive(),false);
+});
+
+test('a port getter invalidated during connection is caught and produces a safe no-op cleanup',()=>{
+ let disposed=0;const messenger=createRuntimeMessenger({id:'old'},()=>disposed++);
+ const stop=messenger.listenDisconnect({get onDisconnect(){throw Error('Extension context invalidated.');}},()=>assert.fail());
+ assert.equal(disposed,1);assert.doesNotThrow(stop);assert.equal(messenger.alive(),false);
+});

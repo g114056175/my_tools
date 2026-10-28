@@ -2,8 +2,9 @@ import {normalizeSettings,validateSettings,rankTargets} from './settings.js';
 import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
-import {TabActivity,replayTabActivityEvents} from './tab-activity.js';
-const SCOPE='video-control',VERSION='0.6.13',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
+import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS} from './tab-activity.js';
+import {consumeRuntimeError} from './runtime.js';
+const SCOPE='video-control',VERSION='0.6.14',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
 const optionsOf=target=>target.documentId?{documentId:target.documentId}:{frameId:target.frameId};
 const tabGenerations=new Map(),frameGenerations=new Map();let navigationSerial=0;
@@ -27,7 +28,7 @@ let settingsCache,settingsTask,powerSignature,powerQueue=Promise.resolve(),setti
 const rateMemory=new RateMemory(chrome.storage.local);
 const rateWriteLedger=new RateWriteLedger();
 const tabActivity=new TabActivity(),activityNoticeQueues=new Map(),activityRestoreAttempts=new Set(),activityRestoreTasks=new Map();
-let activityReady,activityInitialized=false,activityEventRevision=0,activityGeneration=0,activityEvents=[],activityWrites=Promise.resolve();
+let activityReady,activityInitialized=false,activityEventRevision=0,activityGeneration=0,activityEvents=[],activityWrites=Promise.resolve(),activityCheckpointSignature='',migrateRecentActivity=false;
 const titleFor=(settings,blocked=false)=>translate(language,!settings.enabled?"VideoSpeed (disabled)":blocked?"VideoSpeed (disabled on this site)":'VideoSpeed');
 async function stored(){
  if(settingsCache)return settingsCache;
@@ -42,7 +43,11 @@ async function rateState(){await stored();return rateMemory.read();}
 async function optionalRateState(){try{return await rateState();}catch{return null;}}
 function saveActivity(){
  const snapshot=tabActivity.snapshot();
- activityWrites=activityWrites.catch(()=>{}).then(()=>chrome.storage.session.set({tabActivity:snapshot}));
+ const checkpoint={version:1,revision:snapshot.revision,untilByTab:snapshot.untilByTab},signature=JSON.stringify(checkpoint);
+ activityWrites=activityWrites.catch(()=>{}).then(async()=>{
+  await chrome.storage.session.set({tabActivity:snapshot});
+  if(signature!==activityCheckpointSignature){await chrome.storage.local.set({tabActivityGrace:checkpoint});activityCheckpointSignature=signature;}
+ });
  return activityWrites;
 }
 async function readFocusedContext(){
@@ -57,6 +62,12 @@ function queueActivityEvent(event){
  applyActivityEvent(event);
 }
 function applyActivityEvent(event){
+ if(event.type==='created'){
+  const affected=tabActivity.openFrom(event.openerTabId,event.tabId,event.at);
+  if(affected.length)saveActivity().catch(()=>{});
+  for(const tabId of affected)notifyActivity(tabId);
+  return;
+ }
  if(event.type==='activated'){
   const cached=tabActivity.rememberActiveTab(event.windowId,event.tabId);
   if(event.windowId===tabActivity.focusedWindowId)activityGeneration++;
@@ -85,7 +96,13 @@ function applyActivityEvent(event){
 async function initializeTabActivity(){
  const startedAt=Date.now(),windowAtStart=chrome.windows.getLastFocused().catch(()=>null);
  let session={};try{session=await chrome.storage.session.get('tabActivity');}catch{}
- tabActivity.restore(session.tabActivity);
+ if(session.tabActivity)tabActivity.restore(session.tabActivity);
+ else{
+  let checkpoint;try{checkpoint=(await chrome.storage.local.get('tabActivityGrace')).tabActivityGrace;}catch{}
+  migrateRecentActivity=checkpoint?.version!==1;
+  const entries=Object.entries(checkpoint?.untilByTab||{}).slice(0,256).filter(([id,until])=>Number.isInteger(Number(id))&&Number(id)>=0&&Number.isSafeInteger(until)&&until>startedAt&&until<=startedAt+TAB_ACTIVITY_GRACE_MS);
+  tabActivity.restore({revision:checkpoint?.revision,untilByTab:Object.fromEntries(entries)});
+ }
  const initialWindow=await windowAtStart;
  let context;const affected=new Set(),buffered=[];
  for(;;){
@@ -112,10 +129,15 @@ async function initializeTabActivity(){
 activityReady=initializeTabActivity();
 activityReady.then(affected=>{for(const tabId of affected)notifyActivity(tabId);}).catch(()=>{});
 chrome.tabs.onActivated.addListener(info=>queueActivityEvent({type:'activated',tabId:info.tabId,windowId:info.windowId,at:Date.now()}));
-chrome.tabs.onCreated?.addListener(tab=>{if(tab.active)queueActivityEvent({type:'activated',tabId:tab.id,windowId:tab.windowId,at:Date.now()});});
+chrome.tabs.onCreated?.addListener(tab=>{const at=Date.now();if(tab.active)queueActivityEvent({type:'activated',tabId:tab.id,windowId:tab.windowId,at});else if(!tab.discarded&&Number.isInteger(tab.openerTabId))queueActivityEvent({type:'created',tabId:tab.id,openerTabId:tab.openerTabId,at});});
 chrome.windows.onFocusChanged.addListener(windowId=>queueActivityEvent({type:'focus',windowId,at:Date.now()}));
 chrome.windows.onRemoved?.addListener(windowId=>{const at=Date.now();activityReady.then(()=>{for(const tabId of tabActivity.forgetWindow(windowId,at))notifyActivity(tabId);saveActivity().catch(()=>{});}).catch(()=>{});});
 async function activityFor(tabId){await activityReady;return tabActivity.activity(tabId);}
+function hasPlayingMedia(tabId){return [...(frames.get(tabId)?.values()||[])].some(frame=>frame.videos.some(video=>video.connected!==false&&video.playing));}
+async function mayContactPage(tabId){
+ const activity=await activityFor(tabId);
+ return activity.focused||activity.until>Date.now()||hasPlayingMedia(tabId)||[...ports.values()].some(item=>item.tabId===tabId);
+}
 let activityRecheck=null;
 async function ensureStartupActivity(tabId){
  const activity=await activityFor(tabId);if(activity.focused)return;
@@ -137,10 +159,11 @@ async function activityFields(tabId,pageUrl){
 async function sendActivityUpdate(tabId){
  let tab;try{tab=await chrome.tabs.get(tabId);}catch{return;}
  const fields=await activityFields(tabId,tab.url||''),message={scope:SCOPE,action:'activity',...fields};
+ if(!await mayContactPage(tabId))return;
  try{const response=await chrome.tabs.sendMessage(tabId,message);if(response?.ok===true&&response.version===VERSION)return;}catch{}
  // New documents receive manifest scripts at document_start; do not queue an
  // idle-time recovery in front of later blur/focus notifications.
- if(tab.status==='loading'||activityRestoreAttempts.has(tabId)||!/^https?:/i.test(tab.url||''))return;
+ if(tab.status==='loading'||activityRestoreAttempts.has(tabId)||!/^https?:/i.test(tab.url||'')||!await mayContactPage(tabId))return;
  activityRestoreAttempts.add(tabId);
  if(!activityRestoreTasks.has(tabId)){
   const task=restoreOpenTab(tabId).then(()=>notifyActivity(tabId)).catch(()=>{}).finally(()=>{if(activityRestoreTasks.get(tabId)===task)activityRestoreTasks.delete(tabId);});
@@ -158,7 +181,7 @@ function syncPower(settings){
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{
   const enabled=settings.enabled,signature=JSON.stringify([enabled,settings.disabledSites,settings.siteModes]);if(powerSignature===signature)return;powerSignature=signature;
   const cached=await chrome.storage.session.get('pausedTargets'),frozen={...cached.pausedTargets};
-  const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger));
+  const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger)),playingTabs=new Set([...tabs].filter(hasPlayingMedia));
   if(!enabled){
    for(const tabId of selectionDeliveries.keys())clearSelectionDelivery(tabId);
    for(const tabId of frames.keys()){const target=targetFor(tabId);if(target)frozen[tabId]=target;}
@@ -166,19 +189,20 @@ function syncPower(settings){
    frames.clear();announced.clear();pinned.clear();
   }
   const rate=await optionalRateState();
-  await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate)));
+  await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate,playingTabs.has(tabId))));
   await chrome.action.setIcon({path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
   await chrome.action.setTitle({title:titleFor(settings)});
   for(const [port,item]of ports)try{port.postMessage({action:'updated',tabId:item.tabId});}catch{}
  });return powerQueue;
 }
-async function applyPagePolicy(tabId,pageUrl,settings,rate){
+async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPlaying=false){
  settings=settings||await stored();if(pageUrl===undefined)pageUrl=(await chrome.tabs.get(tabId)).url||'';
+ const contact=wasPlaying||await mayContactPage(tabId);
  const blocked=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes),enabled=settings.enabled&&!blocked;
  if(!enabled){clearSelectionDelivery(tabId);frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);}
  if(rate===undefined)rate=await optionalRateState();
  const message={scope:SCOPE,action:'power',settings,pageUrl,language,activity:await activityFor(tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
- await chrome.tabs.sendMessage(tabId,message).catch(()=>{});
+ if(contact)await chrome.tabs.sendMessage(tabId,message).catch(()=>{});
  await chrome.action.setIcon({tabId,path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
  await chrome.action.setTitle({tabId,title:titleFor(settings,blocked)});
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
@@ -188,6 +212,7 @@ function targetFor(tabId){return rankTargets(itemsFor(tabId),pinned.get(tabId))[
 function highlight(tabId,scroll=false,clear=false){
  const previous=markerQueues.get(tabId)||Promise.resolve();
  const next=previous.catch(()=>{}).then(async()=>{
+  if(!await mayContactPage(tabId)){markedTargets.delete(tabId);return;}
   const target=clear||!(await stored()).enabled?null:targetFor(tabId);
   if(!target||markedTargets.get(tabId)?.key!==target.key)await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'highlight',options:{clear:true}}).catch(()=>{});
   if(!target){markedTargets.delete(tabId);return;}
@@ -198,6 +223,7 @@ function highlight(tabId,scroll=false,clear=false){
 }
 async function announce(tabId,force=false){
  if(!(await stored()).enabled)return;
+ if(!await mayContactPage(tabId)){clearSelectionDelivery(tabId);announced.delete(tabId);return;}
  const target=targetFor(tabId),key=target?.key||'';
  const recipients=[...(frames.get(tabId)?.values()||[])],signature=JSON.stringify([key,recipients.map(frame=>[frame.frameId,frame.documentId])]);
  let delivery=selectionDeliveries.get(tabId);
@@ -207,6 +233,7 @@ async function announce(tabId,force=false){
   try{
    const rate=await optionalRateState();
    if(selectionDeliveries.get(tabId)!==delivery)return;
+   if(!await mayContactPage(tabId)){clearSelectionDelivery(tabId);return;}
    const message={scope:SCOPE,action:'activeTarget',hasTarget:!!target};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
    const responses=await Promise.allSettled(recipients.map(async frame=>{
     const id=frame.documentId===target?.documentId&&frame.frameId===target?.frameId?target.id:null;
@@ -391,7 +418,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  run(message,sender).then(result=>respond({ok:true,...result}),error=>respond({ok:false,error:error.message||"Operation failed"}));return true;
 });
 chrome.runtime.onConnect.addListener(port=>{
- if(port.name==='video-control-content'){contentPorts.add(port);port.onDisconnect.addListener(()=>contentPorts.delete(port));return;}
+ if(port.name==='video-control-content'){contentPorts.add(port);port.onDisconnect.addListener(()=>{consumeRuntimeError(chrome.runtime);contentPorts.delete(port);});return;}
  if(port.name!=='video-control-popup')return;
  const item={tabId:null};ports.set(port,item);
  port.onMessage.addListener(message=>{
@@ -401,7 +428,7 @@ chrome.runtime.onConnect.addListener(port=>{
    if(target)chrome.tabs.sendMessage(item.tabId,{scope:SCOPE,action:'highlight',options:{renew:true}},optionsOf(target)).then(result=>{if(!result?.highlighted)highlight(item.tabId);}).catch(()=>{});
   }
  });
- port.onDisconnect.addListener(()=>{ports.delete(port);if(item.tabId&&![...ports.values()].some(other=>other.tabId===item.tabId))highlight(item.tabId,false,true);});
+ port.onDisconnect.addListener(()=>{consumeRuntimeError(chrome.runtime);ports.delete(port);if(item.tabId&&![...ports.values()].some(other=>other.tabId===item.tabId))highlight(item.tabId,false,true);});
 });
 function forgetTab(tabId){
  clearSelectionDelivery(tabId);
@@ -420,6 +447,7 @@ chrome.tabs.onUpdated.addListener((tabId,change)=>{if(change.status==='loading')
 async function frameRoute(details){
  if(details.frameId===0||details.tabId<0)return;
  const settings=await stored();if(!settings.enabled)return;
+ if(!await mayContactPage(details.tabId))return;
  const tab=await chrome.tabs.get(details.tabId),blocked=disabledOnUrl(tab.url,settings.disabledSites,settings.siteModes)||disabledOnUrl(details.url,settings.disabledSites,settings.siteModes);
  if(blocked){frames.get(details.tabId)?.delete(details.frameId);await announce(details.tabId,true);}
  const rate=await optionalRateState(),message={scope:SCOPE,action:'power',settings,pageUrl:tab.url||'',language,activity:await activityFor(details.tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
@@ -440,6 +468,7 @@ chrome.storage.onChanged.addListener((changes,area)=>{
 });
 
 async function restoreOpenTab(tabId){
+ if(!await mayContactPage(tabId))return;
  const frames=await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,allFrames:true},world:'ISOLATED',func:version=>{
   if(/(^|\.)challenges\.cloudflare\.com$/i.test(location.hostname))return false;
   const api=globalThis[Symbol.for('video-control.api')];
@@ -450,15 +479,26 @@ async function restoreOpenTab(tabId){
   return true;
  },args:[VERSION]});
  const frameIds=frames.filter(frame=>frame.result===true).map(frame=>frame.frameId);
- if(!frameIds.length)return;
+ if(!frameIds.length||!await mayContactPage(tabId))return;
  await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds},world:'MAIN',files:['page-bridge.js']});
+ if(!await mayContactPage(tabId))return;
  await chrome.scripting.executeScript({injectImmediately:true,target:{tabId,frameIds},world:'ISOLATED',files:['content.js']});
 }
 async function restoreOpenTabs(){
- // 僅在更新時被動接管既有分頁，不執行影片深查。
- await stored();
- const tabs=await chrome.tabs.query({url:['http://*/*','https://*/*']});
- for(let index=0;index<tabs.length;index+=4)await Promise.allSettled(tabs.slice(index,index+4).map(tab=>restoreOpenTab(tab.id)));
+ await Promise.all([stored(),activityReady]);
+ if(migrateRecentActivity){
+  migrateRecentActivity=false;
+  // One-time migration from versions without a grace checkpoint. This reads
+  // browser timestamps only; scripting is still limited by the resulting lease.
+  try{
+   const now=Date.now(),tabs=await chrome.tabs.query({url:['http://*/*','https://*/*']});let changed=false;
+   for(const tab of tabs)if(!tab.discarded&&Number.isFinite(tab.lastAccessed))changed=tabActivity.restoreRecent(tab.id,Math.floor(tab.lastAccessed)+TAB_ACTIVITY_GRACE_MS,now)||changed;
+   if(changed)await saveActivity();
+  }catch{}
+ }
+ const snapshot=tabActivity.snapshot(),candidates=new Set([snapshot.focusedTabId,...Object.keys(snapshot.untilByTab).map(Number),...[...frames.keys()].filter(hasPlayingMedia)]);
+ const tabs=[...candidates].filter(Number.isInteger);
+ for(let index=0;index<tabs.length;index+=4)await Promise.allSettled(tabs.slice(index,index+4).map(restoreOpenTab));
 }
 chrome.runtime.onInstalled.addListener(details=>{if(details.reason==='update')restoreOpenTabs().catch(()=>{});});
 settingsReady.catch(()=>{});

@@ -1,3 +1,38 @@
+# VideoSpeed 0.6.14 驗證
+
+2026-10-28。本輪限制更新／背景訊息的分頁範圍，修正 Port 斷線錯誤與 BFCache 返回；VideoPocket 未修改。
+
+## 確認的原因
+
+- 舊 restoreOpenTabs 在更新時列舉全部 HTTP(S) 分頁，再逐頁對所有 frame 執行 API 探查與腳本注入；不要求該頁近期活動或存在影片。本輪隔離 Chromium 已重現三個閒置、無影片的頁面各收到一次探查與兩次注入，共 9 次 executeScript 呼叫。這證實範圍錯誤；同一輪未重現截圖上方完整的 Extension context invalidated 持續條件。
+- 截圖下方的 BFCache 斷線錯誤已實際重現。頁面進入返回／前進快取時 Chrome 關閉 Port；舊 background 斷線回呼沒有讀取 runtime.lastError，collector 收到相同的 Unchecked runtime.lastError，occurrences=2。[Chromium 對此錯誤的原始變更](https://chromium.googlesource.com/chromium/src/+/988c43b97b00934e8df90c9949681e73434e70bb%5E%21/)；[Chrome runtime.lastError 規則](https://developer.chrome.com/docs/extensions/reference/api/runtime#property-lastError)。
+- 第一版候選實際更新測試另抓到近期頁資格遺失：Chrome 在擴充更新／重新載入時清空 storage.session，並非只停止 worker。已改用不含網址或標題的本機分頁 ID／到期時間備份，沿用原期限。[Chrome storage.session 文件](https://developer.chrome.com/docs/extensions/reference/api/storage#storage_areas)。
+
+## 修改範圍
+
+- 更新僅恢復聚焦、10 秒內近期或目前已知仍播放的分頁；每個恢復階段重查資格，排隊工作過期後不繼續注入。
+- 舊閒置空頁的設定／網址／子 frame 路由變動不再觸發背景政策訊息；既有背景播放器仍可收到停用指令。新文件維持 document_start 啟動，沒有依賴 popup 喚醒。
+- 從聚焦或近期頁面中鍵開啟的新背景分頁，依實際建立時間獲得 10 秒載入緩衝。舊頁自行變更網址不會重新取得資格。
+- 跨更新的近期備份只含分頁 ID、期限與版本序號，不寫入影片資訊。到期資料不採用，恢復時不重設為新的 10 秒。
+- 首次從沒有備份的舊版升級，只讀一次瀏覽器分頁時間戳，再對資格內的頁面注入。這是分頁中繼資料，不是全頁影片掃描。舊版沒有保存的「長時間停留後剛離開」資訊無法完整重建；lastAccessed 表示最後成為活動分頁的時間，不是離開時間。[Chrome tabs 文件](https://developer.chrome.com/docs/extensions/reference/api/tabs#property-Tab-lastAccessed)。往後更新採用原到期時間備份。
+- 所有 Port 斷線回呼同步讀取 lastError；失效 context 只清理一次。content 在返回頁面時重建已斷的生命週期連線，BFCache 還原後重新握手；popup 斷線後停止 renew，不新增輪詢。
+
+## 本輪結果
+
+- 單元／整合 288 項、活動範圍 4 項、既有回歸 11 項、主影片／預覽提示 17 項與標示穩定性 3 組通過，共 323 項已列計數檢查。
+- Chromium 與 Brave 的隔離原生瀏覽器更新測試均通過：三個超過 10 秒未活動的空頁，首次更新與 checkpoint 更新均收到 0 次探查／注入；聚焦、近期及中鍵新開背景頁均可調速。
+- 兩者的第二次更新，近期資格到期時間與更新前完全一致，沒有重新續滿 10 秒。首次舊版遷移與後續 checkpoint 恢復分開驗證。
+- 兩者均完成真正 BFCache 往返，pageshow.persisted=true 且頁面 token 不變；錯誤收集器正向 probe 可收錯並已清除。新版往返後新增 runtime errors／warnings 為 0／0，返回頁可改為 2×。
+- 另驗證不開 popup 的 4 次新文件、2 次 SPA、本地快捷鍵、初始設定／選取／橋接器故障恢復及 worker 冷啟動。
+- 提示回歸初跑曾逾時：只讀證據顯示測試器在空 profile 的記憶初始化前直接寫入倍速，與初始種子競爭；等待初始化完成後再設定 fixture，17 項通過。未修改產品記憶流程；失敗狀態保存在本機 work/qa-076-notices-seed-race.json。
+
+這些是本地 HTTP fixture 與隔離瀏覽器的真實更新／快取生命週期驗證，未操作使用者舊分頁，也不是 ChatGPT／TradingView 實站驗收。上方 Extension context invalidated 持續新增的唯一完整條件、以及早先長播卡死與 worker script-fetch 的完整條件仍未定位，不以本輪結果宣稱全部已解決。
+
+npm run test:lifecycle 需要含固定 baseline commit 歷史的 Git checkout；基線固定為 9b488d07d9a0942b7bbc97a5e479f8a53c30c203，避免新版發布後測錯來源。測試建立專用 profile 並檢查路徑後移除，不操作個人瀏覽器。實際結果與成品檢查碼保存在本機輸出的 VideoSpeed-validation.json。
+
+<details>
+<summary>0.6.13 驗證紀錄</summary>
+
 # VideoSpeed 0.6.13 驗證
 
 2026-10-27。改為控制主體影片，略過 YouTube、Bilibili 的縮圖預覽；VideoPocket 未修改。
@@ -96,6 +131,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

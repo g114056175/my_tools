@@ -171,16 +171,18 @@ async function saveFields(patch){
 }
 const saveField=(key,value)=>saveFields({[key]:value});
 const port=chrome.runtime.connect({name:'video-control-popup'});
+let portDisconnected=false,renew;
+port.onDisconnect.addListener(()=>{try{void chrome.runtime.lastError;}catch{}portDisconnected=true;clearInterval(renew);});
 async function refresh(full=false,force=false){
  const request=++refreshRevision;
  try{
   const response=await send({action:full?'getState':'cachedState',refresh:force});if(closed||request!==refreshRevision)return;
   state=response;tabId=response.tabId;unavailableReason='';render();error('feedback');
-  port.postMessage({action:'watch',tabId});
+  if(!portDisconnected)port.postMessage({action:'watch',tabId});
   }catch(problem){if(!closed&&request===refreshRevision){if(!state){let data={};try{data=await chrome.storage.local.get('settings');}catch{}state={settings:normalizeSettings(data.settings),target:null,pageUrl:''};}unavailable(problem?.message||'Could not connect');}}
 }
 port.onMessage.addListener(message=>{if(message.action==='updated'){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>refresh(),100);}});
-const renew=setInterval(()=>{if(!state||!effective().enabled||disabledOnUrl(state.pageUrl,effective().disabledSites,effective().siteModes))return;try{port.postMessage({action:'renew'});}catch{}},3000);
+renew=setInterval(()=>{if(portDisconnected||!state||!effective().enabled||disabledOnUrl(state.pageUrl,effective().disabledSites,effective().siteModes))return;try{port.postMessage({action:'renew'});}catch{}},3000);
 window.addEventListener('pagehide',()=>{if(stepInputDirty&&state&&effective().enabled)commitSteps().catch(()=>{});closed=true;clearTimeout(rateTimer);clearTimeout(stepTimer);clearTimeout(refreshTimer);clearInterval(renew);try{port.disconnect();}catch{}});
 async function flushRate(){
  clearTimeout(rateTimer);if(sendingRate||!pendingRate)return;

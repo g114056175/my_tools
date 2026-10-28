@@ -8,6 +8,7 @@ export function replayTabActivityEvents(activity,events,{windowIdNone=-1}={}){
   if(!event||!Number.isFinite(event.at))continue;
   let changed=[];
   if(event.type==='activated')changed=activity.setActiveTab(event.windowId,event.tabId,event.at);
+  else if(event.type==='created')changed=activity.openFrom(event.openerTabId,event.tabId,event.at);
   else if(event.type==='focus')changed=activity.setFocusedWindow(event.windowId===windowIdNone?null:event.windowId,event.at);
   for(const tabId of changed)affected.add(tabId);
  }
@@ -68,6 +69,16 @@ export class TabActivity{
  rememberActiveTab(windowId,tabId){
   if(!validId(windowId)||!validId(tabId)||this.activeByWindow.get(windowId)===tabId)return false;
   this.activeByWindow.set(windowId,tabId);return true;
+ }
+ openFrom(openerTabId,tabId,now=this.now()){
+  if(!validId(openerTabId)||!validId(tabId)||tabId===openerTabId||tabId===this.focusedTabId)return [];
+  const opener=this.activity(openerTabId,now);if(!opener.focused&&opener.until<=now)return [];
+  const until=now+this.graceMs;if((this.untilByTab.get(tabId)||0)>=until)return [];
+  this.untilByTab.set(tabId,until);this.revision++;return [tabId];
+ }
+ restoreRecent(tabId,until,now=this.now()){
+  if(!validId(tabId)||tabId===this.focusedTabId||!Number.isSafeInteger(until)||until<=now||until>now+this.graceMs||(this.untilByTab.get(tabId)||0)>=until)return false;
+  this.untilByTab.set(tabId,until);this.revision++;return true;
  }
  reconcile({windowId=null,tabId=null}={},now=this.now()){
   const affected=new Set();

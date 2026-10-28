@@ -1,6 +1,6 @@
 # VideoSpeed 發布準備
 
-目前為 GitHub 預覽版，未提交 Chrome Web Store。示範影片與介面截圖可後續補上。
+已在 GitHub 發布，尚未提交 Chrome Web Store。示範影片與介面截圖可後續補上。
 
 ## 商店文案草稿
 
@@ -13,7 +13,7 @@
 - 發布者自行完成開發者註冊、兩步驟驗證與帳戶驗證；本專案不代填個人資料。
 - 補上真實介面截圖：至少一張，1280×800 或 640×400。套件已有 128×128 PNG 圖示。
 - 在 Dashboard 填寫單一用途、權限理由、資料揭露及公開的隱私政策網址，並與最終程式一致。
-- 安裝專用包為 `VideoSpeed.zip`；商店專用包為 `VideoSpeed-chrome-web-store.zip`，後者的 manifest 位於 ZIP 根目錄。
+- 公開下載僅提供 `VideoSpeed.zip` 與 `VideoSpeed-source.zip`。安裝包包含 `VideoSpeed/` 資料夾；本機 `dist/VideoSpeed-chrome-web-store.zip` 的 manifest 位於 ZIP 根目錄，供未來提交商店，程式內容相同。
 - 完成 [驗證紀錄](validation.md) 中尚未覆蓋的實站與原生 popup 驗收。發布新版本時保留版本與檢查碼，避免覆寫同版本下載檔。
 
 ## 權限用途

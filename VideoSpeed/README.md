@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v0.6.20/VideoSpeed.zip)** · Chrome／Brave · 預覽版
+**[下載 ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip)** · Chrome／Brave
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -78,6 +78,8 @@ npm run test:network-loading
 `src/` 為來源，`extension/` 為可直接載入的成品。瀏覽器測試使用隔離環境與本地固定資料；範圍及尚未驗證項目見 [驗證紀錄](docs/validation.md)。
 
 使用 Python 3 執行 `python build/package.py` 可在 `dist/` 產生安裝 ZIP 與 SHA-256 檢查碼。Chrome Web Store 的簡要準備與文案見 [發布準備](docs/store-release.zh-TW.md)。
+
+公開下載提供 `VideoSpeed.zip`（安裝）與 `VideoSpeed-source.zip`（獨立原始碼）。商店包及檢查碼留在本機 `dist/`。
 
 採用 [MIT License](LICENSE)。離線網域解析使用 [tldts](https://github.com/remusao/tldts)，第三方授權隨附於 [THIRD_PARTY_LICENSES.txt](extension/THIRD_PARTY_LICENSES.txt)。
 

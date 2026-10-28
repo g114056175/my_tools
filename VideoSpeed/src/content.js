@@ -13,7 +13,7 @@ import {PendingMediaLease} from './pending-media-lease.js';
 import {StartupHandshake} from './startup-handshake.js';
 import {SelectionOrder} from './selection-order.js';
 import {resolveLanguage,translate,translateMessage} from '../extension/i18n.js';
-const SCOPE='video-control',VERSION='0.6.20',API=Symbol.for('video-control.api');
+const SCOPE='video-control',VERSION='1.0.0',API=Symbol.for('video-control.api');
 const previous=globalThis[API];
 let reuse=false;
 try{reuse=previous?.version===VERSION&&previous.alive?.();}catch(error){if(!isContextInvalidatedError(error))throw error;}

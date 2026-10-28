@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSocialNetworkObserver } from "../extension/social-network.js";
+import { createSocialNetworkObserver } from "../research/network/social-network.js";
 
 function runtime() {
   const makeEvent = () => {

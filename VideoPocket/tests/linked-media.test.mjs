@@ -19,7 +19,7 @@ test('content and document limits are enforced',async()=>{await assert.rejects(r
 test('HTTP failures and aborts remain unchanged',async()=>{const http=Object.assign(new Error('blocked'),{status:403});await assert.rejects(resolveLinkedMedia(link,referer,async()=>{throw http;}),error=>error===http);const abort=Object.assign(new Error('aborted'),{name:'AbortError'});await assert.rejects(resolveLinkedMedia(link,referer,async()=>{throw abort;}),error=>error===abort);});
 
 const xLink={url:'https://x.com/user/status/1234567890',id:'1234567890'},xBid='broadcast-123',xBroadcast='https://x.com/i/broadcasts/'+xBid;
-const broadcastHtml=await readFile(new URL('../work/x-discovery-16/broadcast.html',import.meta.url),'utf8');
+const broadcastHtml=await readFile(new URL('./fixtures/x-broadcast.html',import.meta.url),'utf8');
 const sampleBroadcastId='1RKZzBELBbXKB';
 const xCard={rest_id:xLink.id,card:{legacy:{binding_values:Object.entries({broadcast_id:xBid,broadcast_url:xBroadcast,broadcast_media_key:'28_123456789'}).map(([key,string_value])=>({key,value:{string_value}}))}}};
 const streamed=value=>'$_TSR.stream.push({result:{kind:"Result.Ok",value:'+JSON.stringify(JSON.stringify(value))+'}});';

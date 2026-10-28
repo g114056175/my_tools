@@ -36,6 +36,13 @@ test('capture retries transient failures for the same track and stores the full 
  assert.equal(storage.values[key].value.cues.length,1);
 });
 
+test('capture manager persists cues together with the restore warning code',async()=>{
+ const storage=sessionStorage(),youtubeTrack={...track,pageSource:'youtube-page',pageTrackId:'youtube:0'},manager=createSubtitleCaptureManager({storage,read:async()=>({cues:[{start:0,end:1,text:'字幕保留'}],warningCode:'YT_RESTORE_UNCONFIRMED'})});
+ const scope='scope-restore-warning',key=await captureKey(9,scope,youtubeTrack),result=await manager.start({key,tabId:9,scope,track:youtubeTrack});
+ assert.equal(result.cues[0].text,'字幕保留');assert.equal(result.warningCode,'YT_RESTORE_UNCONFIRMED');
+ assert.deepEqual(storage.values[key].value,{cues:[{start:0,end:1,text:'字幕保留'}],warningCode:'YT_RESTORE_UNCONFIRMED',trackId:youtubeTrack.trackId});
+});
+
 test('an in-flight capture completes in session storage after its popup caller closes',async()=>{
  const storage=sessionStorage();let finishRead;let attempts=0;
  const manager=createSubtitleCaptureManager({storage,read:()=>{attempts++;return new Promise(resolve=>{finishRead=resolve;});},retryDelays:[]});
@@ -61,16 +68,66 @@ test('two popup requests for the same active source share one background read',a
  assert.equal(attempts,1);
 });
 
-test('several tabs retain separate captions and a closed tab cache is removed',async()=>{
+test('a new completed caption replaces the previous completed cache across tabs',async()=>{
  const storage=sessionStorage(),manager=createSubtitleCaptureManager({storage,read:async request=>({cues:[{start:0,end:1,text:request.tabId+'-'+request.scope}]})});
- const requests=await Promise.all([1,2,3].map(async tabId=>{const scope='scope-'+tabId,key=await captureKey(tabId,scope,track);return manager.start({key,tabId,scope,track});}));
- assert.deepEqual(requests.map(value=>value.cues[0].text),['1-scope-1','2-scope-2','3-scope-3']);
- assert.equal((await manager.forTab(2,'scope-2')).length,1);
+ const firstScope='scope-1',firstKey=await captureKey(1,firstScope,track);
+ await manager.start({key:firstKey,tabId:1,scope:firstScope,track});
+ const nextScope='scope-2',nextKey=await captureKey(2,nextScope,track);
+ await manager.start({key:nextKey,tabId:2,scope:nextScope,track});
+ assert.equal(storage.values[firstKey],undefined);
+ assert.equal((await manager.forTab(1,firstScope)).length,0);
+ assert.equal((await manager.forTab(2,nextScope)).length,1);
+ assert.equal(Object.values(storage.values).filter(record=>record?.state==='complete').length,1);
  await manager.removeTab(2);
- assert.equal((await manager.forTab(2,'scope-2')).length,0);
- assert.equal((await manager.forTab(1,'scope-1')).length,1);
+ assert.equal((await manager.forTab(2,nextScope)).length,0);
+ assert.equal(Object.values(storage.values).filter(record=>record?.state==='complete').length,0);
 });
 
+test('concurrent captures retain running records and keep only the last completion',async()=>{
+ const storage=sessionStorage(),finish=new Map(),manager=createSubtitleCaptureManager({storage,read:request=>new Promise(resolve=>finish.set(request.scope,resolve)),retryDelays:[]});
+ const requests=await Promise.all([1,2].map(async tabId=>{const scope='scope-concurrent-'+tabId,key=await captureKey(tabId,scope,track);return {scope,key,tabId};}));
+ const operations=requests.map(request=>manager.start({...request,track}));
+ await new Promise(resolve=>setImmediate(resolve));
+ for(const request of requests)assert.equal(storage.values[request.key].state,'running');
+ finish.get(requests[0].scope)({cues:[{start:0,end:1,text:'第一筆完成'}]});
+ assert.equal((await operations[0]).cues[0].text,'第一筆完成');
+ assert.equal(storage.values[requests[1].key].state,'running');
+ assert.equal(Object.values(storage.values).filter(record=>record?.state==='complete').length,1);
+ finish.get(requests[1].scope)({cues:[{start:0,end:1,text:'第二筆完成'}]});
+ assert.equal((await operations[1]).cues[0].text,'第二筆完成');
+ assert.equal(storage.values[requests[0].key],undefined);
+ assert.equal(storage.values[requests[1].key].state,'complete');
+ assert.equal(Object.values(storage.values).filter(record=>record?.state==='complete').length,1);
+});
+
+test('removing a tab during capture keeps another tab cache and blocks the old completion',async()=>{
+ const storage=sessionStorage();let finishOld;
+ const manager=createSubtitleCaptureManager({storage,read:request=>request.tabId===31?new Promise(resolve=>{finishOld=resolve;}):Promise.resolve({cues:[{start:0,end:1,text:'另一分頁'}]}),retryDelays:[]});
+ const oldScope='scope-closing',oldKey=await captureKey(31,oldScope,track),oldOperation=manager.start({key:oldKey,tabId:31,scope:oldScope,track});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(storage.values[oldKey].state,'running');
+ const keptScope='scope-kept',keptKey=await captureKey(32,keptScope,track);
+ await manager.start({key:keptKey,tabId:32,scope:keptScope,track});
+ await manager.removeTab(31);
+ finishOld({cues:[{start:0,end:1,text:'已關閉分頁的舊字幕'}]});await oldOperation;
+ assert.equal(storage.values[oldKey],undefined);
+ assert.equal(storage.values[keptKey].state,'complete');
+ assert.equal(storage.values[keptKey].value.cues[0].text,'另一分頁');
+ assert.equal(Object.values(storage.values).filter(record=>record?.state==='complete').length,1);
+});
+
+test('an uncachable large result still returns and preserves the prior cache',async()=>{
+ const storage=sessionStorage(),set=storage.set.bind(storage),oldKey=CAPTURE_PREFIX+'33:old';
+ storage.values[oldKey]={version:CAPTURE_VERSION,scope:'old-scope',tabId:33,state:'complete',finishedAt:1,value:{cues:[{start:0,end:1,text:'先前字幕'}]}};
+ storage.set=async items=>{
+  if(Object.values(items).some(record=>record?.state==='complete'&&record.value?.cues?.[0]?.text?.length>100))throw new Error('QUOTA_BYTES');
+  return set(items);
+ };
+ const manager=createSubtitleCaptureManager({storage,read:async()=>({cues:[{start:0,end:1,text:'大'.repeat(500)}]})});
+ const scope='scope-large',key=await captureKey(34,scope,track),result=await manager.start({key,tabId:34,scope,track});
+ assert.equal(result.cues[0].text.length,500);
+ assert.equal(storage.values[key],undefined);
+ assert.equal(storage.values[oldKey].state,'complete');
+});
 test('legacy subtitle caches are not restored after the Bilibili identity fix',async()=>{
  const storage=sessionStorage(),manager=createSubtitleCaptureManager({storage,read:async()=>({cues:[{start:0,end:1,text:'new'}]})});
  const scope='scope-legacy',key=await captureKey(12,scope,track),oldKey=CAPTURE_PREFIX+'12:legacy';

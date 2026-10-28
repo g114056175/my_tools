@@ -23,7 +23,7 @@ test('expired Bilibili URL renews only the selected source once',async()=>{
 
 test('permanent file HTTP failure is specific and stops after two file attempts',async()=>{
  let files=0,preparations=0;
- await assert.rejects(loadBilibiliSubtitle(options({prepare:async()=>{preparations++;return {...caption};},fetchFile:async()=>{files++;return response(403,'');}})),error=>{assert.deepEqual(briefFailure(error),{code:'B05',message:'字幕檔讀取失敗 · HTTP 403'});return true;});
+ await assert.rejects(loadBilibiliSubtitle(options({prepare:async()=>{preparations++;return {...caption};},fetchFile:async()=>{files++;return response(403,'');}})),error=>{assert.deepEqual(briefFailure(error),{code:'B05',message:'Could not read the subtitle file · HTTP 403'});return true;});
  assert.equal(files,2);assert.equal(preparations,2);
 });
 
@@ -35,7 +35,7 @@ test('temporary CDN 503 retries the same file without re-querying the caption li
 
 test('renewal list failure preserves API business code and never downloads a substitute',async()=>{
  let prepared=0,files=0;
- await assert.rejects(loadBilibiliSubtitle(options({prepare:async()=>{if(++prepared===2)throw Object.assign(new Error('BILI_LIST_API'),{code:'BILI_LIST_API',apiCode:-412,subtitleStage:'list'});return {...caption};},fetchFile:async()=>{files++;return response(404,'');}})),error=>{assert.deepEqual(briefFailure(error),{code:'B01',message:'字幕清單 API 拒絕請求 · API -412'});return true;});
+ await assert.rejects(loadBilibiliSubtitle(options({prepare:async()=>{if(++prepared===2)throw Object.assign(new Error('BILI_LIST_API'),{code:'BILI_LIST_API',apiCode:-412,subtitleStage:'list'});return {...caption};},fetchFile:async()=>{files++;return response(404,'');}})),error=>{assert.deepEqual(briefFailure(error),{code:'B01',message:'The subtitle list API rejected the request · API -412'});return true;});
  assert.equal(files,1);assert.equal(prepared,2);
 });
 

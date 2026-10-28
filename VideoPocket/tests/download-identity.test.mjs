@@ -18,6 +18,12 @@ test('owned-source fallback cannot reuse an active download after the player is 
  assert.notEqual(downloadIdentity(d),downloadIdentity({...d,platform:{...d.platform,versions:[{url:'https://cdn/second.mp4',kind:'progressive'}]}}));
 });
 
+test('locally proven owned media keeps its active claim across signed-URL rotation without merging different posts',()=>{
+ const descriptor={...base,recoveryIdentity:true,selectionIdentity:'post:one',mediaContentId:'one',platform:{site:'network-media',binding:'player-owned',bindingSource:'blob:one',versions:[{url:'https://cdn.test/a?sig=old'}]}};
+ assert.equal(downloadIdentity(descriptor),downloadIdentity({...descriptor,platform:{...descriptor.platform,versions:[{url:'https://cdn.test/a?sig=fresh'}]}}));
+ assert.notEqual(downloadIdentity(descriptor),downloadIdentity({...descriptor,mediaContentId:'two'}));
+});
+
 test('same page media keeps identity across inspect ids, quality, and URL refresh',()=>{
   const one=downloadIdentity({...base,url:'https://cdn/a',height:360});
   const two=downloadIdentity({...base,url:'https://cdn/b',height:1080});

@@ -2,6 +2,7 @@
 // side-effect free: callers provide the element/player/network observations.
 // A URL alone is never enough to associate a network request with a video.
 import {xBroadcastIdFromUrl} from './x-media.js';
+import {isMediaPresent} from './media-presence.js';
 
 const MEDIA_RE = /\.(?:mp4|m4v|webm|mov|mkv|ts|m3u8|mpd)(?:[?#]|$)/i;
 const MANIFEST_RE = /\.(?:m3u8|mpd)(?:[?#]|$)/i;
@@ -210,7 +211,7 @@ export function collectMediaEvidence({ video, root, pageUrl = '', network = [], 
     candidate.downloadable = candidate.direct !== false && candidate.confidence >= .7 && !!candidate.url;
   }
   candidates.sort((a, b) => b.confidence - a.confidence || a.url.localeCompare(b.url));
-  return { identity, candidates, best: candidates.find(c => c.downloadable) || null };
+  return { identity, identityBound:!!localId, candidates, best: candidates.find(c => c.downloadable) || null };
 }
 
 export function associateNetworkCandidates(network, videos, context = {}) {
@@ -225,6 +226,7 @@ export function exposeSourceEvidence(target = globalThis) {
   api.collectMediaEvidence = collectMediaEvidence;
   api.associateNetworkCandidates = associateNetworkCandidates;
   api.postIdentity = postIdentity;
+  api.isMediaPresent = video=>isMediaPresent(video,target);
   return api;
 }
 

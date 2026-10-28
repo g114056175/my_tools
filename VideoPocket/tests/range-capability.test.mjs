@@ -18,7 +18,7 @@ test('applies the index probe limit consistently', () => {
   assert.equal(formatRangeCapability({ indexRange: `0-${RANGE_INDEX_MAX_BYTES - 1}` }).supported, true);
   const oversized = formatRangeCapability({ indexRange: `0-${RANGE_INDEX_MAX_BYTES}` });
   assert.equal(oversized.supported, false);
-  assert.match(oversized.reason, /探測上限/);
+  assert.match(oversized.reason, /probe limit/i);
 });
 
 test('requires finite duration, valid segment durations, and a non-empty plan', () => {

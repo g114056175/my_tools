@@ -97,7 +97,7 @@ test('name badge lasts eight seconds and hides while a different modal covers th
 
 test('missing title uses the neutral media label instead of page or aria text',()=>{
  const video=new NodeMock('video');video.getAttribute=()=> '頁面標題';video.title='播放器控制';const state=world([video]);
- try{identities([[video,6]]);highlightMedia({mediaKey:6});assert.equal(state.body.children[0].children[0].textContent,'影片');}
+ try{identities([[video,6]]);highlightMedia({mediaKey:6});assert.equal(state.body.children[0].children[0].textContent,'Video');}
  finally{highlightMedia({clear:true});state.restore();}
 });
 

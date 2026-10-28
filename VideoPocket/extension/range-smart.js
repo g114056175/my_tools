@@ -5,6 +5,17 @@
  const failure=message=>Object.assign(new Error(message),{code:'RANGE_SMART_UNSUPPORTED'});
  function check(signal){if(signal?.aborted)throw Object.assign(new Error('已取消'),{code:'CANCELLED'});}
  function target(access,signal){return new M.StreamTarget(new WritableStream({write(chunk){check(signal);if(access.write(chunk.data,{at:chunk.position})!==chunk.data.length)throw failure('Smart Cut 寫入不完整');}}),{chunked:true,chunkSize:1024*1024});}
+ async function identityTransformMetadata(track){
+  try{
+   if(typeof track?.getTransformationMatrix!=='function'){
+    const rotation=await track?.getRotation?.()??0,flip=await track?.getFlip?.()??false;
+    return rotation===0&&!flip?{rotation,flip}:null;
+   }
+   const matrix=Array.from(await track.getTransformationMatrix()||[]),identity=[1,0,0,0,1,0,0,0,1];
+   if(matrix.length!==9||matrix.some((number,index)=>!Number.isFinite(number)||Math.abs(number-identity[index])>1e-4))return null;
+   return {transformationMatrix:matrix};
+  }catch{return null;}
+ }
  function sameConfig(a,b){
   const profile=c=>String(c?.codec||'').split('.').filter((_,i)=>i!==2).join('.');
   if(profile(a)!==profile(b)||Number(String(b?.codec||'').split('.')[2])>Number(String(a?.codec||'').split('.')[2])||a.codedWidth!==b.codedWidth||a.codedHeight!==b.codedHeight)return false;
@@ -19,13 +30,16 @@
   if(await track.canBeTransparent?.())return null;
   const config=await track.getDecoderConfig();
   if(!/^vp09\.00\.[\d]{2}\.08(?:\.|$)/.test(config?.codec||''))return null;
+  // The boundary is encoded to Matroska, which bakes display transforms into
+  // pixels. Copying the untouched middle packets would then mix orientations.
+  const transform=await identityTransformMetadata(track);if(!transform)return null;
   if(await track.getSquarePixelWidth()!==config.codedWidth||await track.getSquarePixelHeight()!==config.codedHeight)return null;
   const sink=new M.EncodedPacketSink(track);let key=await sink.getKeyPacket(start,{verifyKeyPackets:true})||await sink.getFirstKeyPacket({verifyKeyPackets:true});
   if(!key)return null;
   if(Math.abs(key.timestamp-start)<1e-5)return null; // Existing stream-copy path is already optimal.
   if(key.timestamp<start)key=await sink.getNextKeyPacket(key,{verifyKeyPackets:true});
   if(!key||key.timestamp<=start||key.timestamp>=end-.1)return null;
-  return {sink,key,config,start,end,prefixDuration:key.timestamp-start};
+  return {sink,key,config,transform,start,end,prefixDuration:key.timestamp-start};
  }
  async function convert(input,scope,name,paths,options,signal,onProgress){
   check(signal);const writer=await disk.createSyncMediaFile(scope,name);paths.push(writer.path);let conversion,finished=false;
@@ -43,7 +57,7 @@
   const paths=[],readers=[],report=onProgress;let writer,result,completed=false,lastProgress=0;
   onProgress=value=>{if(Date.now()-lastProgress>100||value>=1){lastProgress=Date.now();report(value);}};
   try{
-   const {config,key,sink}=selection,quality=new M.Quality({quality:'high',preferBitrate:true});
+   const {config,key,sink,transform}=selection,quality=new M.Quality({quality:'high',preferBitrate:true});
    const encode={codec:'vp9',quality,forceTranscode:true};
    if(await M.canEncodeVideo('vp9',{width:config.codedWidth,height:config.codedHeight,quality,hardwareAcceleration:'prefer-hardware'}))encode.hardwareAcceleration='prefer-hardware';
    const prefix=await convert(input,scope,'smart-head.mkv',paths,{trim:{start,end:key.timestamp},video:encode,audio:{discard:true}},signal,p=>onProgress(p*.75));
@@ -58,7 +72,7 @@
    if(expectedAudio&&!audioTrack)throw failure('Smart Cut 輸出缺少音軌');
    check(signal);writer=await disk.createSyncMediaFile(scope,output);paths.push(writer.path);
    const destination=new M.Output({format:output.endsWith('.webm')?new M.WebMOutputFormat():new M.MkvOutputFormat(),target:target(writer.access,signal)});
-   const videoSource=new M.EncodedVideoPacketSource('vp9');destination.addVideoTrack(videoSource,{decoderConfig:config});
+   const videoSource=new M.EncodedVideoPacketSource('vp9');destination.addVideoTrack(videoSource,{decoderConfig:config,...transform});
    const audioConfig=audioTrack&&await audioTrack.getDecoderConfig(),audioSource=audioTrack&&new M.EncodedAudioPacketSource(await audioTrack.getCodec());
    if(audioSource)destination.addAudioTrack(audioSource,{decoderConfig:audioConfig});
    await destination.start();let copiedPackets=0,copiedBytes=0,prefixPackets=0;
@@ -98,5 +112,5 @@
    return {result,stats:{strategy:'smart-vp9',encodedSeconds:selection.prefixDuration,copiedSeconds:end-key.timestamp,prefixPackets,copiedPackets,copiedBytes,hardwareRequested:encode.hardwareAcceleration==='prefer-hardware'}};
   }finally{await Promise.resolve(writer?.abort?.()).catch(()=>{});for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
- root.VideoPocketRangeSmart={plan,sameConfig,tryCut,cancel(){for(const conversion of active)void conversion.cancel().catch(()=>{});}};
+ root.VideoPocketRangeSmart={plan,sameConfig,identityTransformMetadata,tryCut,cancel(){for(const conversion of active)void conversion.cancel().catch(()=>{});}};
 })(self);

@@ -15,7 +15,8 @@ test('A unavailable preferred quality falls back below its ceiling without chang
 
 test('quality policy distinguishes best, preserved fallback and an explicit numeric preference',()=>{
  const stored={height:'1080'},menu=videoQualityOptions(stored.height,[480,720]);
- assert.deepEqual(menu.options.map(o=>[o.value,o.label]),[['0','最佳（720p）'],[PRESERVED_QUALITY,'720p（自動）'],['720','720p'],['480','480p']]);
+ assert.deepEqual(menu.options.map(o=>[o.value,o.label]),[['0','Best (720p)'],[PRESERVED_QUALITY,'720p (Auto)'],['720','720p'],['480','480p']]);
+ assert.equal(menu.options[1].title,'Preferred 1080p; using 720p for this video');
  assert.equal(menu.selected,PRESERVED_QUALITY);assert.equal(resolvedVideoQuality(menu.selected,stored.height,[720,480]),'720');assert.equal(stored.height,'1080');
  assert.equal(videoQualityOptions(stored.height,[1080,720]).selected,'1080');
  assert.equal(videoQualityOptions('0',[720,480]).selected,'0');assert.equal(videoQualityOptions('720',[720,480]).selected,'720');
@@ -24,7 +25,7 @@ test('quality policy distinguishes best, preserved fallback and an explicit nume
 
 test('when every tier is above the target the automatic option uses the smallest available tier',()=>{
  const menu=videoQualityOptions('1080',[2160,1440]);
- assert.equal(menu.options[1].label,'1440p（自動）');assert.equal(resolvedVideoQuality(menu.selected,'1080',[2160,1440]),'1440');
+ assert.equal(menu.options[1].label,'1440p (Auto)');assert.equal(resolvedVideoQuality(menu.selected,'1080',[2160,1440]),'1440');
 });
 
 test('one real quality stays compact except when preserving a missing numeric preference needs an action',()=>{

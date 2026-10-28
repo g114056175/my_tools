@@ -68,8 +68,13 @@ export function mergeTracks(page,native=[]){
   const candidates=page?.platform?.site==='bilibili'?[]:page?.captionInventory?native.filter(t=>ids.has(t.trackId || trackIdentity(t))):native;
   return originalTracks([...(page?.tracks || []),...candidates]);
 }
-export function trackLabel(track,uiLanguage='zh-Hant'){
-  let name=track.name;
-  if(!name || locale(name)===locale(track.language)){try{name=new Intl.DisplayNames([uiLanguage],{type:'language'}).of(track.language);}catch{}name ||= track.language;}
-  return track.automatic?`${String(name).replace(/\s*[（(](?:自動產生|自动生成|自動生成|auto.generated)[）)]/gi,'')} · 語音辨識`:name;
+export function trackLabel(track,uiLanguage='en'){
+  const language=locale(track.language),name=String(track.name||''),withoutAuto=name.replace(/\s*[（(](?:自動產生|自动生成|自動生成|auto.generated)[）)]/gi,'').trim();
+  let displayName=language;
+  try{displayName=new Intl.DisplayNames([uiLanguage],{type:'language'}).of(language)||language;}catch{}
+  const localizedNames=new Set();
+  for(const localeName of new Set([uiLanguage,language,'zh-Hant','zh-Hans']))try{const label=new Intl.DisplayNames([localeName],{type:'language'}).of(language);if(label)localizedNames.add(label);}catch{}
+  const isLanguageName=localizedNames.has(withoutAuto);
+  let label=!name||locale(name)===language||isLanguageName||withoutAuto!==name?displayName:name;
+  return track.automatic?`${label} · Speech recognition`:label;
 }

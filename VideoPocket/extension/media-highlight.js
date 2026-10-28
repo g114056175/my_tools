@@ -29,6 +29,7 @@ export function highlightMedia(options = {}) {
   walk(globalThis.document);
   const video = videos.find(item => identities.keys.get(item) === wanted);
   if (!video) return {highlighted: false};
+  try{if(globalThis[Symbol.for('video-pocket.mediaObserver')]?.isPresent?.(video)===false)return {highlighted:false};}catch{}
   try {
     const root = globalThis.document?.documentElement;
     if (typeof video.isConnected === 'boolean') {
@@ -59,7 +60,7 @@ export function highlightMedia(options = {}) {
   // Labels are presentation-only. Only a caller-supplied title is trusted;
   // generic aria/title/document strings frequently describe the page rather
   // than this media element.
-  label.textContent=String(options.title ?? '').trim() || '影片';
+  label.textContent=String(options.title ?? '').trim() || 'Video';
   Object.assign(label.style,{position:'absolute',left:'3px',top:'3px',maxWidth:'min(calc(100% - 6px), calc(100vw - 12px))',boxSizing:'border-box',padding:'3px 6px',borderRadius:'3px',background:'#2b85bf',color:'#fff',font:'600 12px/1.4 "Segoe UI",sans-serif',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',pointerEvents:'none'});
   frame.append(label);
   const blockedByDialog=()=>{
@@ -74,7 +75,7 @@ export function highlightMedia(options = {}) {
   const paint = () => {
     try{
       const value=video.getBoundingClientRect?.();
-      if(video.isConnected===false||!value||value.width<=0||value.height<=0||blockedByDialog()){frame.style.display='none';return;}
+      if(video.isConnected===false||globalThis[Symbol.for('video-pocket.mediaObserver')]?.isPresent?.(video)===false||!value||value.width<=0||value.height<=0||blockedByDialog()){frame.style.display='none';return;}
       // display:none has no offsetParent. Measure in the real containing block
       // before showing the marker, including when returning from a hidden state.
       Object.assign(frame.style,{display:'block',visibility:'hidden'});

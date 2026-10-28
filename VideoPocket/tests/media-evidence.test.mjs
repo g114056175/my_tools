@@ -23,6 +23,13 @@ test('native currentSrc and source tracks are ranked above scoped config', () =>
   assert.ok(result.candidates.some(c => c.url.endsWith('/video-720.mp4') && c.evidence.includes('source-element')));
 });
 
+test('route-only identity stays distinct from a local media binding without changing its existing key',()=>{
+ const video=node({currentSrc:'https://cdn.test/a.mp4'}),pageUrl='https://unknown.test/watch?v=route-id';
+ const route=collectMediaEvidence({video,pageUrl});assert.equal(route.identity.id,'route-id');assert.equal(route.identityBound,false);
+ const local=collectMediaEvidence({video:node({'data-video-id':'local-id',currentSrc:'https://cdn.test/a.mp4'}),pageUrl});
+ assert.equal(local.identity.id,'local-id');assert.equal(local.identityBound,true);
+});
+
 test('empty src attributes resolving to the HTML page are not native media evidence',()=>{
   const pageUrl='https://player.example.test/watch',empty=node({src:pageUrl});
   empty.getAttribute=()=>'';

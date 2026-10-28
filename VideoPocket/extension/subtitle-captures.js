@@ -1,7 +1,6 @@
 import {classifyFailure} from './diagnostics.js';
 export const CAPTURE_PREFIX='subtitleCapture:';
 export const CAPTURE_VERSION=4;
-const MAX_RECORDS=24,MAX_BYTES=8*1024*1024;
 const encoder=new TextEncoder();
 
 export async function digest(value){
@@ -32,18 +31,35 @@ export function captureTrack(track){
 
 export function createSubtitleCaptureManager({storage,read,now=Date.now,sleep=(ms)=>new Promise(resolve=>setTimeout(resolve,ms)),retryDelays=[350,900,1800,3000]}){
  const pending=new Map(),tabGenerations=new Map();let writes=Promise.resolve(),sessionGeneration=0;
+ const current=(tabId,generation,session)=>sessionGeneration===session&&(tabGenerations.get(Number(tabId))||0)===generation;
  const put=async(key,value,generation,session)=>{
   const operation=writes.catch(()=>{}).then(async()=>{
-   if(sessionGeneration!==session||(tabGenerations.get(Number(value.tabId))||0)!==generation)return;
-   const all=await storage.get(null),records=Object.entries(all).filter(([name,record])=>name.startsWith(CAPTURE_PREFIX)&&record?.version===CAPTURE_VERSION);
-   const currentSize=record=>encoder.encode(JSON.stringify(record)).byteLength;
-   let count=records.filter(([name])=>name!==key).length;
-   let bytes=records.filter(([name])=>name!==key).reduce((sum,[,record])=>sum+currentSize(record),0);
-   const incoming=currentSize(value),removable=records.filter(([name,record])=>name!==key&&record.state!=='running').sort((a,b)=>(a[1].finishedAt||a[1].startedAt||0)-(b[1].finishedAt||b[1].startedAt||0));
-   const remove=[];
-   while((count+1>MAX_RECORDS||bytes+incoming>MAX_BYTES)&&removable.length){const [name,record]=removable.shift();remove.push(name);count--;bytes-=currentSize(record);}
-   if(remove.length)await storage.remove(remove);
+   if(!current(value.tabId,generation,session))return;
+   const all=await storage.get(null);
+   if(!current(value.tabId,generation,session))return;
+   const records=Object.entries(all).filter(([name])=>name.startsWith(CAPTURE_PREFIX));
    await storage.set({[key]:value});
+   if(!current(value.tabId,generation,session))return;
+
+   const completed=records.filter(([name,record])=>name!==key&&record?.state==='complete');
+   const remove=new Set();
+   if(value.state==='complete'){
+    for(const [name] of completed)remove.add(name);
+   }else{
+    const keep=completed.sort((a,b)=>(b[1].finishedAt||b[1].startedAt||0)-(a[1].finishedAt||a[1].startedAt||0))[0]?.[0];
+    for(const [name] of completed)if(name!==keep)remove.add(name);
+   }
+   if(value.state==='failed')for(const [name,record] of records)if(name!==key&&name.startsWith(CAPTURE_PREFIX+Number(value.tabId)+':')&&record?.state==='failed')remove.add(name);
+   if(remove.size){
+    const previous=Object.fromEntries(records.filter(([name])=>remove.has(name)));
+    await storage.remove([...remove]);
+    if(!current(value.tabId,generation,session)){
+     if(sessionGeneration===session&&(tabGenerations.get(Number(value.tabId))||0)!==generation){
+      const restore=Object.fromEntries(Object.entries(previous).filter(([,record])=>Number(record?.tabId)!==Number(value.tabId)));
+      if(Object.keys(restore).length)await storage.set(restore).catch(()=>{});
+     }
+    }
+   }
   });
   writes=operation.catch(()=>{});return operation;
  };
@@ -73,7 +89,7 @@ export function createSubtitleCaptureManager({storage,read,now=Date.now,sleep=(m
    const generation=tabGenerations.get(tabId)||0,session=sessionGeneration;
    const task=(async()=>{
     const startedAt=now(),base={version:CAPTURE_VERSION,scope:String(request.scope),tabId,state:'running',startedAt,track:captureTrack(request.track)};
-    await put(key,base,generation,session);
+    await put(key,base,generation,session).catch(()=>{});
     try{
      let result;const delays=request.platform==='bilibili'||request.selector?.pageSource==='bilibili-api'?[]:retryDelays;
      for(let attempt=0;attempt<=delays.length;attempt++){
@@ -82,7 +98,14 @@ export function createSubtitleCaptureManager({storage,read,now=Date.now,sleep=(m
      }
      const value={...result,trackId:request.track.trackId};
      const record={...base,state:'complete',finishedAt:now(),value};
-     await put(key,record,generation,session);
+     try{await put(key,record,generation,session);}catch{
+      const cleanup=writes.catch(()=>{}).then(async()=>{
+       if(!current(tabId,generation,session))return;
+       const saved=await storage.get(key);
+       if(current(tabId,generation,session)&&saved[key]?.state==='running')await storage.remove(key);
+      });
+      writes=cleanup.catch(()=>{});await cleanup.catch(()=>{});
+     }
      return value;
     }catch(error){
      const failureDetail=classifyFailure(error,'subtitle'),failureCode=failureDetail.code;

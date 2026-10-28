@@ -1,3 +1,9 @@
+import {createSourceRetention} from '../extension/source-retention.js';
+import {sharedHttpRequestPolicy,parseRetryAfter} from '../extension/http-resilience.js';
+import {validateMediaRecovery} from '../extension/media-recovery.js';
+import {createMediaRangeVersions} from '../extension/media-range-versions.js';
+import {createYoutubeSourceSessions} from '../extension/youtube-source-session.js';
+import {inspectionReuseKey,inspectionReusable} from '../extension/inspection-reuse.js';
 import {parseByteRange as byteRange,rangeCapability,formatRangeCapability} from '../extension/range-capability.js';
 import {createMediaTransfer} from '../extension/media-transfer.js';
 import {resolveNetworkCandidates} from '../extension/source-candidates.js';
@@ -59,7 +65,7 @@ async function makeRuntime({missing=false,segmentCount=3,failureIndex=missing?1:
  const source=await fs.readFile(new URL('../extension/offscreen.js',import.meta.url),'utf8');
  const code=source.replace(/^import[^;]+;\s*/gm,'');
  const FileCtor=globalThis.File || class File extends Blob{constructor(parts,name,options={}){super(parts,options);this.name=name;}};
- const context={byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl,assembleSegments,createTransferProgress,classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,chrome,fetch,document:{createElement:()=>({})},VideoPocketDiskMedia:disk,crypto:{randomUUID:()=>`id-${Math.random()}`},URL,URLSearchParams,TextEncoder,TextDecoder,AbortSignal,AbortController,Uint8Array,ArrayBuffer,Blob,File:FileCtor,Worker:WorkerMock,setInterval:()=>{},setTimeout,clearTimeout,queueMicrotask,console,performance};
+ const context={createSourceRetention:options=>createSourceRetention({...options,setTimer:(fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref?.();return timer;}}),sharedHttpRequestPolicy,parseRetryAfter,validateMediaRecovery,createMediaRangeVersions,createYoutubeSourceSessions,inspectionReuseKey,inspectionReusable,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl,assembleSegments,createTransferProgress,classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,chrome,fetch,document:{createElement:()=>({})},VideoPocketDiskMedia:disk,crypto:{randomUUID:()=>`id-${Math.random()}`},URL,URLSearchParams,TextEncoder,TextDecoder,AbortSignal,AbortController,Uint8Array,ArrayBuffer,Blob,File:FileCtor,Worker:WorkerMock,setInterval:()=>{},setTimeout,clearTimeout,queueMicrotask,console,performance};
  vm.runInNewContext(code,context,{filename:'offscreen.js'});assert.equal(typeof listener,'function');
  const call=(action,data)=>new Promise((resolve,reject)=>listener({target:'offscreen',action,...data},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'request failed'),reply?.failure||{}))));
  return {call,messages,routes,segmentUrls:urls,disk};

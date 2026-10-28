@@ -4,7 +4,7 @@ function abortReason(signal) {
   return signal?.reason || new DOMException('The operation was aborted', 'AbortError');
 }
 
-export function createIndexedRoutes(urls, { hedgeDelayMs = 1200, maxHedges = 2, dispose } = {}) {
+export function createIndexedRoutes(urls, { hedgeDelayMs = 1200, maxHedges = 2, dispose, retryOrigin, waitForRetryOrigin } = {}) {
   const candidates = [...new Set((Array.isArray(urls) ? urls : []).filter(url => typeof url === 'string' && url))];
   if (!Number.isFinite(hedgeDelayMs) || hedgeDelayMs < 0 || !Number.isInteger(maxHedges) || maxHedges < 0) {
     throw new TypeError('hedgeDelayMs/maxHedges 必須是有效的非負數');
@@ -12,6 +12,31 @@ export function createIndexedRoutes(urls, { hedgeDelayMs = 1200, maxHedges = 2, 
   let preferred = candidates[0];
   let activeHedges = 0;
   const hedgeWaiters = new Set();
+  const retryOrigins = new Map();
+  let retryEpoch = 0;
+
+  function noteRetry(error) {
+    if (typeof retryOrigin !== 'function' || typeof waitForRetryOrigin !== 'function') return false;
+    let origin;
+    try { origin = retryOrigin(error); } catch { return false; }
+    if (typeof origin !== 'string' || !origin) return false;
+    retryOrigins.set(origin, ++retryEpoch);
+    return true;
+  }
+
+  async function waitForRetries(signal) {
+    while (retryOrigins.size) {
+      if (signal?.aborted) throw abortReason(signal);
+      const epoch = retryEpoch;
+      const origins = [...retryOrigins.keys()];
+      const waiter = new AbortController();
+      const waitSignal = signal ? AbortSignal.any([signal, waiter.signal]) : waiter.signal;
+      try { await Promise.all(origins.map(origin => waitForRetryOrigin(origin, waitSignal))); }
+      catch (error) { waiter.abort(error); throw error; }
+      if (epoch !== retryEpoch) continue;
+      for (const [origin, observedAt] of retryOrigins) if (observedAt <= epoch) retryOrigins.delete(origin);
+    }
+  }
 
   function discard(value) {
     if (typeof dispose !== 'function') return;
@@ -88,7 +113,10 @@ export function createIndexedRoutes(urls, { hedgeDelayMs = 1200, maxHedges = 2, 
         else signal.addEventListener('abort', parentAbort, { once: true });
         listeners.set(controller.signal, parentAbort);
       }
-      Promise.resolve().then(() => operation(url, controller.signal)).then(value => {
+      Promise.resolve().then(async () => {
+        await waitForRetries(controller.signal);
+        return operation(url, controller.signal);
+      }).then(value => {
         completed++; pending--;
         if (isHedge) { activeHedges--; releaseHedge(); }
         listeners.delete(controller.signal);
@@ -105,6 +133,8 @@ export function createIndexedRoutes(urls, { hedgeDelayMs = 1200, maxHedges = 2, 
         listeners.delete(controller.signal);
         if (signal) signal.removeEventListener('abort', parentAbort);
         if (settled) return;
+        const retryObserved = noteRetry(error);
+        if (retryObserved) clearTimer();
         errors.push(error);
         if (signal?.aborted) {
           settled = true; cleanup();

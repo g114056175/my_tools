@@ -1,18 +1,18 @@
-// Independent player routes. Keep platform detection here separate from
-// the vocabulary and model stores used by the existing discovery pipeline.
-const protectedDomains=['youtube.com','youtu.be','youtube-nocookie.com','bilibili.com','b23.tv','x.com','twitter.com','facebook.com','fb.watch','instagram.com','threads.net','threads.com','tiktok.com','twitch.tv','reddit.com','redd.it','dailymotion.com','dai.ly','vimeo.com','anime1.me','gamer.com.tw'];
-const protectedSites=new Set(['youtube','bilibili','facebook','instagram','threads','tiktok','twitch','twitch-clip','reddit','x','twitter','dailymotion','vimeo','anime1']);
+// Preserve established provider scheduling and source-refresh policy. This
+// list never excludes a selected player from recovery after a missing source.
+const providerDomains=['youtube.com','youtu.be','youtube-nocookie.com','bilibili.com','b23.tv','x.com','twitter.com','facebook.com','fb.watch','instagram.com','threads.net','threads.com','tiktok.com','twitch.tv','reddit.com','redd.it','dailymotion.com','dai.ly','vimeo.com','anime1.me','gamer.com.tw'];
+const pageUrl=raw=>{try{const page=new URL(raw);return /^https?:$/.test(page.protocol)&&!page.username&&!page.password?page:null;}catch{return null;}};
 export function genericPageUrl(raw){
- try{
-  const page=new URL(raw);
-  if(!/^https?:$/.test(page.protocol)||page.username||page.password)return false;
-  return !protectedDomains.some(domain=>page.hostname===domain||page.hostname.endsWith('.'+domain));
- }catch{return false;}
+ const page=pageUrl(raw);
+ return !!page&&!providerDomains.some(domain=>page.hostname===domain||page.hostname.endsWith('.'+domain));
 }
 export function genericFallbackEligible(descriptor={}){
- if(descriptor.drm||protectedSites.has(descriptor.platform?.site))return false;
+ if(descriptor.drm)return false;
  if(!Number.isInteger(descriptor.tabId)||descriptor.tabId<0||!Number.isInteger(descriptor.frameId)||descriptor.frameId<0||typeof descriptor.documentId!=='string'||!descriptor.documentId||descriptor.mediaKey==null)return false;
- return genericPageUrl(descriptor.referer);
+ return !!pageUrl(descriptor.referer);
+}
+export function earlyPlayerEligible(descriptor={}){
+ return genericFallbackEligible(descriptor)&&!descriptor.platform&&!descriptor.linkedMedia&&genericPageUrl(descriptor.referer);
 }
 
 // Only URLs obtained from the selected player's own metadata may be delegated.
@@ -47,7 +47,7 @@ const changed=()=>Object.assign(new Error('影片已變更，請重新選取'),{
 // Only one explicitly owned source can bypass the broad document scan.
 // Video.js and multi-version probing keep their existing order.
 export function earlyPlayerPlatform(descriptor,proposal,hash){
- if(!genericFallbackEligible(descriptor)||descriptor.platform||descriptor.linkedMedia||!proposal?.valid||!['jwplayer','json-ld'].includes(proposal.parser))return null;
+ if(!earlyPlayerEligible(descriptor)||!proposal?.valid||!['jwplayer','json-ld'].includes(proposal.parser))return null;
  const binding=proposal.binding,candidates=proposal.candidates;
  if(!binding||binding.mediaKey!==descriptor.mediaKey||binding.pageUrl!==descriptor.referer||!/^blob:/i.test(binding.source||'')||!binding.fingerprint||!Number.isFinite(proposal.duration)||proposal.duration<=0||!Array.isArray(candidates)||candidates.length!==1)return null;
  const item=candidates[0];if(!['hls','dash','progressive'].includes(item.kind))return null;
@@ -65,7 +65,7 @@ export function createGenericFallback({primary,collect,validate,forget,cancelPri
   if(controller)controller.abort(cancelled());
   else {cancelledIds.add(id);while(cancelledIds.size>50)cancelledIds.delete(cancelledIds.values().next().value);}
  };
- const inspect=async(descriptor,inspectionId,{skipFallback=false}={})=>{
+ const inspect=async(descriptor,inspectionId,{skipFallback=false,force=false}={})=>{
   let originalError;
   const prepared=descriptor.platform?.binding==='generic-early'?descriptor.platform.earlyPlan:null;
   const owner=prepared?.descriptor || descriptor;
@@ -77,7 +77,7 @@ export function createGenericFallback({primary,collect,validate,forget,cancelPri
   }else{
   // Success returns the exact result object. It does not collect, probe,
   // validate, mutate or spend any budget in the new route.
-  try{return {result:await primary(descriptor,inspectionId),descriptor};}
+  try{return {result:await primary(descriptor,inspectionId,{force}),descriptor};}
   catch(error){
    if(skipFallback||classify(error).code!=='SOURCE_UNAVAILABLE'||Number(error.status||error.httpStatus)>=400||!genericFallbackEligible(descriptor)){cancelledIds.delete(inspectionId);throw error;}
    originalError=error;
@@ -109,7 +109,7 @@ export function createGenericFallback({primary,collect,validate,forget,cancelPri
    }else if(embedded.length===1)platform=embedded[0];
    if(!platform)throw originalError;
    const candidate={...descriptor,url:undefined,sourceType:undefined,linkedMedia:undefined,platform};
-   const pending=primary(candidate,inspectionId);
+   const pending=primary(candidate,inspectionId,{force});
    void Promise.resolve(pending).then(value=>{if(signal.aborted&&value?.id)return forget(value.id);}).catch(()=>{});
    recovered=await bounded(pending);signal.throwIfAborted();
    if(!await bounded(validate(owner,proposal.binding,signal,prepared?.mode)))throw changed();

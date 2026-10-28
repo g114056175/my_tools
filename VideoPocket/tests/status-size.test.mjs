@@ -4,8 +4,8 @@ import {visibleJobs,jobLabel} from '../extension/jobs.js';
 import {sourceSize,videoSize,audioSize,progressTracker} from '../native/sizes.mjs';
 import {buildCapabilities} from '../native/capabilities.mjs';
 test('KB/MB/GB use one decimal and rounding promotes the next unit',()=>{
-  assert.equal(formatSize({bytes:123.4*1024**2,approximate:false}),'約 123.4 MB');
-  assert.equal(formatBytes(1536),'1.5 KB');assert.equal(formatBytes(1.25*1024**2),'1.3 MB');assert.equal(formatBytes(3*1024**3),'3.0 GB');assert.equal(formatBytes(1024**2-1),'1.0 MB');assert.equal(formatBytes(NaN),null);assert.equal(formatSize(null),'大小未知');assert.equal(formatSize({bytes:2048,approximate:true}),'約 2.0 KB');
+  assert.equal(formatSize({bytes:123.4*1024**2,approximate:false}),'~ 123.4 MB');
+  assert.equal(formatBytes(1536),'1.5 KB');assert.equal(formatBytes(1.25*1024**2),'1.3 MB');assert.equal(formatBytes(3*1024**3),'3.0 GB');assert.equal(formatBytes(1024**2-1),'1.0 MB');assert.equal(formatBytes(NaN),null);assert.equal(formatSize(null),'Unknown size');assert.equal(formatSize({bytes:2048,approximate:true}),'~ 2.0 KB');
 });
 test('Exact filesize wins, otherwise use approximate size or duration/bitrate',()=>{
   assert.deepEqual(sourceSize({filesize:1000,filesize_approx:2000,tbr:500},10),{bytes:1000,approximate:false});assert.deepEqual(sourceSize({filesize_approx:2000},10),{bytes:2000,approximate:true});assert.equal(sourceSize({tbr:800},10).bytes,1000000);assert.equal(sourceSize({},10),null);
@@ -27,5 +27,11 @@ test('Progress combines two streams instead of resetting after the video',()=>{
 });
 test('Terminal notifications expire and do not reappear in a new popup',()=>{
   const jobs=[{id:'old',state:'done',finishedAt:900},{id:'new',state:'done',finishedAt:1100},{id:'queue',state:'queued',createdAt:1},{id:'running',state:'running',createdAt:2}];
-  assert.deepEqual(visibleJobs(jobs,1000,1200).map(j=>j.id),['running','queue','new']);assert.deepEqual(visibleJobs(jobs,1000,5200).map(j=>j.id),['running','queue']);assert.equal(jobLabel({state:'queued'}),'等待中');
+  assert.deepEqual(visibleJobs(jobs,1000,1200).map(j=>j.id),['running','queue','new']);assert.deepEqual(visibleJobs(jobs,1000,5200).map(j=>j.id),['running','queue']);assert.equal(jobLabel({state:'queued'}),'Queued');
+});
+
+test('a lost page-dependent source remains visible across popup sessions until dismissed',()=>{
+ const job={id:'lost',state:'error',errorCode:'PAGE_MEDIA_GONE',requiresDismiss:true,resumable:false,finishedAt:100};
+ assert.deepEqual(visibleJobs([job],5000,10000),[job]);
+ assert.equal(visibleJobs([{...job,requiresDismiss:false}],5000,10000).length,0);
 });

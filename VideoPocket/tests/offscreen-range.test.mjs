@@ -1,3 +1,9 @@
+import {createSourceRetention} from '../extension/source-retention.js';
+import {sharedHttpRequestPolicy,parseRetryAfter} from '../extension/http-resilience.js';
+import {validateMediaRecovery} from '../extension/media-recovery.js';
+import {createMediaRangeVersions} from '../extension/media-range-versions.js';
+import {createYoutubeSourceSessions} from '../extension/youtube-source-session.js';
+import {inspectionReuseKey,inspectionReusable} from '../extension/inspection-reuse.js';
 import {parseByteRange as byteRange,rangeCapability,formatRangeCapability} from '../extension/range-capability.js';
 import {fullCutPolicy} from '../extension/full-cut-policy.js';
 import {createMediaTransfer} from '../extension/media-transfer.js';
@@ -11,6 +17,7 @@ import { HlsParser, parseDash } from '../extension/vendor/parsers.js';
 import { mediaChoices, selectedPlan, metadataCodecs, codec, parseMp4Codecs } from '../extension/browser-media.js';
 import { parseSubtitles } from '../extension/subtitles.js';
 import { classifyFailure } from '../extension/diagnostics.js';
+import { createProcessingWatchdog } from '../extension/processing-watchdog.js';
 import { TransferControl } from '../extension/transfer-control.js';
 import { assembleSegments } from '../extension/ordered-segments.js';
 import { createTransferProgress } from '../extension/transfer-progress.js';
@@ -31,7 +38,11 @@ function diskMock() {
   return { files,cleanups,removeMediaFiles: async scope => {cleanups.push(scope);for(const path of files.keys())if(!scope||path.startsWith(scope+'-'))files.delete(path);}, removeMediaFile: async p => files.delete(p), readMediaFile: async p => new Blob([files.get(p) || new Uint8Array()]),
     createMediaFile: async (scope, name) => { const path = `${scope}-${name}-${++n}`, parts = []; let size = 0; return { path, append: async b => { parts.push(new Uint8Array(b)); size += b.length; }, finish: async () => { const out = new Uint8Array(size); let p = 0; for (const b of parts) { out.set(b, p); p += b.length; } files.set(path, out); return { path, size }; }, abort: async () => {} }; } };
 }
-async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false,saveMode='normal',fullCutFixture=false } = {}) {
+function fakeTimers() {
+ let now=0,nextId=1;const pending=new Map();
+ return {setTimer(callback,delay){const id=nextId++;pending.set(id,{at:now+delay,callback});return id;},clearTimer(id){pending.delete(id);},tick(ms){const target=now+ms;for(;;){const next=[...pending.entries()].filter(([,task])=>task.at<=target).sort((a,b)=>a[1].at-b[1].at||a[0]-b[0])[0];if(!next)break;pending.delete(next[0]);now=next[1].at;next[1].callback();}now=target;},get pendingCount(){return pending.size;}};
+}
+async function runtime({ badRange = false,cutFailure=false,cutMode='normal',watchdogTimeoutMs=120000,indexCount=3,indexDelay=0,requestDelay=0,segmentBytes=10,failPrimary=false,sourcePath,chunkDelay=0,allowFullIndexed=false,saveMode='normal',fullCutFixture=false } = {}) {
   let mediaCompleted=0;
   const master = 'https://range.test/master.m3u8', child = 'https://range.test/child.m3u8';
   const urls = [1, 2, 3].map(i => `https://range.test/${i}.ts`), calls = [], mux = [], messages = [],indexLength=32+12*indexCount;
@@ -54,14 +65,16 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
     if (options.headers?.Range && badRange) return response(new Uint8Array([1]), { status: 206, range: 'bytes=99-99/100' });
     return response(new Uint8Array([i + 1]), { type: 'video/mp2t', range: options.headers?.Range ? (badRange ? 'bytes=99-99/100' : 'bytes=0-0/1') : null });
   };
-  const disk = diskMock(); let listener;
+  const disk = diskMock(),timers=fakeTimers(),workers=[]; let listener;
   class Worker {
-    constructor(url){this.url=url;this.onmessage=null;}
+    constructor(url){this.url=url;this.onmessage=null;this.terminated=false;workers.push(this);}
     postMessage(data){
       mux.push({url:this.url,...data});queueMicrotask(()=>{
         const send=message=>this.onmessage?.({data:message});
         if(data.action==='cancel'){send({type:'error',code:'CANCELLED',errorCode:'CANCELLED',error:'已取消'});return;}
         const cutting=this.url==='range-cut-worker.js',saving=this.url==='save-worker.js';
+        if(cutting&&cutMode==='hang-normalizing'){send({type:'cutActivity',stage:'initializing',progress:0});send({type:'cutActivity',stage:'initializing',progress:1});send({type:'cutActivity',stage:'normalizing',progress:0});return;}
+        if(cutting)for(const [stage,progress] of [['initializing',0],['initializing',1],['normalizing',0],['normalizing',1],['cutting',0],['cutting',1],['validating',0],['validating',1]])send({type:'cutActivity',stage,progress});
         if(cutting)for(const progress of [.5,.6,1])send({type:'cutProgress',progress});
         if(cutting&&cutFailure){send({type:'error',errorCode:'RANGE_ENCODER_UNAVAILABLE',error:'unsupported encoder'});return;}
         if(!cutting&&saveMode==='processing-crash'){this.onerror?.({message:'processing failed'});return;}
@@ -77,18 +90,18 @@ async function runtime({ badRange = false,cutFailure=false,indexCount=3,indexDel
         send({type:'done',path,size,saved:false,...(!cutting&&saveMode==='target-failure'?{saveFailure}:{})});
       });
     }
-    terminate(){}
+    terminate(){this.terminated=true;}
   }
   const FileCtor = globalThis.File || class File extends Blob { constructor(parts, name, options = {}) { super(parts, options); this.name = name; } };
   const source = await fs.readFile(sourcePath || new URL('../extension/offscreen.js', import.meta.url), 'utf8');
   const code = source.replace(/^import[^;]+;\s*/gm, '');
   const chrome = { runtime: { id: 'range-test', getURL: n => n, sendMessage: async message => {messages.push({...message,mediaCompleted});return { ok: true, result: {} };}, onMessage: { addListener: fn => { listener = fn; } } } };
-  const context = { fullCutPolicy,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,HlsParser, parseDash, mediaChoices, selectedPlan, metadataCodecs, codec, parseMp4Codecs, parseSubtitles, classifyFailure: e => ({ code: e.code || 'INTERNAL_ERROR', message: e.stack || e.message }), TransferControl, assembleSegments, createTransferProgress,
+  const context = {createSourceRetention:options=>createSourceRetention({...options,setTimer:(fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref?.();return timer;}}),sharedHttpRequestPolicy,parseRetryAfter,validateMediaRecovery,createMediaRangeVersions,createYoutubeSourceSessions,inspectionReuseKey,inspectionReusable, fullCutPolicy,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,platformSource,HlsParser, parseDash, mediaChoices, selectedPlan, metadataCodecs, codec, parseMp4Codecs, parseSubtitles, classifyFailure,createProcessingWatchdog:options=>createProcessingWatchdog({...options,timeoutMs:watchdogTimeoutMs,setTimer:timers.setTimer,clearTimer:timers.clearTimer}), TransferControl, assembleSegments, createTransferProgress,
 
     normalizeRange, planSegmentRange, parseSidx, planIndexedRange, coalesceIndexedSegments, createIndexedRoutes, directTransfer: async (format,request,signal,onBytes,sink) => {const response=await request(format.url,{signal}),reader=response.body.getReader();for(;;){const {done,value}=await reader.read();if(done)break;await sink.append(value);onBytes(value.length);}return sink.finish();}, downloadYoutube: async () => [], chrome, fetch, VideoPocketDiskMedia: disk, crypto: { randomUUID: () => Math.random().toString() }, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal, Uint8Array, ArrayBuffer, Blob, File: FileCtor, Worker, setInterval: () => {}, setTimeout, clearTimeout, queueMicrotask, console, performance, document: { createElement: () => { const v = { videoHeight: 720, duration: 3, removeAttribute() {}, load() {} }; Object.defineProperty(v, 'src', { set() { queueMicrotask(() => v.onloadedmetadata?.()); } }); return v; } }, readMp4Metadata: async () => ({}), parseTransportStreamCodecs: () => ({}), mediaCredentials: () => undefined, resolveAnime1: async x => x, decryptHlsSample: async x => x, hlsIv: () => new Uint32Array(4), twitchVodManifest: async () => ({}), verifiedSocialSource: () => true, socialPageResponse: async () => {}, resolveDailymotion: async () => ({}), resolveLinkedMedia: async () => ({}) };
   vm.runInNewContext(code, context, { filename: 'offscreen.js' });
   const call = (action, data) => new Promise((resolve, reject) => listener({ target: 'offscreen', action, ...data }, { id: 'range-test' }, r => r?.ok ? resolve(r.result) : reject(Object.assign(new Error(r?.error), r?.failure || {}, { detail: r }))));
-  return { call, calls, mux, urls, messages,disk,indexLength,indexedBytes,get peakIndexes(){return peakIndexes;} };
+  return { call, calls, mux, urls, messages,disk,indexLength,indexedBytes,timers,workers,get peakIndexes(){return peakIndexes;} };
 }
 
 test('full and range target-save failures retain finished bytes until browser download releases them',async()=>{
@@ -198,6 +211,25 @@ test('precise-cut progress is separate from transfer progress and throttles inte
  const rt=await runtime();const source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',referer:'https://range.test/watch',title:'range'}});
  await rt.call('download',{sourceId:source.id,id:'progress-cut',kind:'video',height:720,filename:'cut',range:{start:1.2,end:1.8}});
  assert.deepEqual(rt.messages.filter(m=>m.action==='progress'&&m.state==='processing'&&Number.isFinite(m.progress)).map(m=>m.progress),[50,100]);
+ assert.equal(rt.timers.pendingCount,0,'completed range cutting cancels its idle timer');
+});
+
+test('a stalled range worker times out with the safe phase and terminates',async()=>{
+ const rt=await runtime({cutMode:'hang-normalizing',watchdogTimeoutMs:25}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'range'}});
+ const pending=rt.call('download',{sourceId:source.id,id:'stalled-cut',kind:'video',height:720,filename:'cut',range:{start:1.2,end:1.8}});
+ for(let i=0;i<100&&!rt.mux.length;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.mux.at(-1).url,'range-cut-worker.js');assert.equal(rt.timers.pendingCount,1);
+ rt.timers.tick(25);
+ await assert.rejects(pending,error=>error.code==='RANGE_PROCESSING_TIMEOUT'&&error.category==='merge'&&error.processingStage==='normalizing');
+ assert.equal(rt.workers.at(-1).terminated,true);assert.equal(rt.timers.pendingCount,0);
+});
+
+test('cancelling a pending range worker clears its watchdog before expiry',async()=>{
+ const rt=await runtime({cutMode:'hang-normalizing',watchdogTimeoutMs:25}),source=await rt.call('inspect',{descriptor:{url:'https://range.test/master.m3u8',title:'range'}});
+ const pending=rt.call('download',{sourceId:source.id,id:'cancel-stalled-cut',kind:'video',height:720,filename:'cut',range:{start:1.2,end:1.8}}),rejected=assert.rejects(pending,{code:'CANCELLED'});
+ for(let i=0;i<100&&!rt.mux.length;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.timers.pendingCount,1);await rt.call('cancel',{id:'cancel-stalled-cut'});await rejected;
+ assert.equal(rt.workers.at(-1).terminated,true);assert.equal(rt.timers.pendingCount,0);rt.timers.tick(100);assert.equal(rt.timers.pendingCount,0);
 });
 
 function indexedDescriptor(rt,duration=3){return{referer:'https://www.bilibili.com/video/BVfixture',title:'bili',platform:{site:'bilibili',duration,data:{dash:{video:[{baseUrl:'https://range.test/indexed.mp4',backupUrl:['https://range.test/backup.mp4'],codecs:'avc1',height:720,SegmentBase:{Initialization:'0-9',indexRange:`10-${9+rt.indexLength}`}}],audio:[{baseUrl:'https://range.test/indexed.mp4',backupUrl:['https://range.test/backup.mp4'],codecs:'mp4a',bandwidth:128000,SegmentBase:{Initialization:'0-9',indexRange:`10-${9+rt.indexLength}`}}]}}}};}
@@ -237,7 +269,7 @@ test('oversized SIDX is not advertised for ranges while full download remains av
  const rt=await runtime({indexCount:11000,allowFullIndexed:true});
  const inspected=await rt.call('inspect',{descriptor:indexedDescriptor(rt,11000)});
  assert.equal(inspected.range.supported,false);
- assert.match(inspected.range.reason,/探測上限|可用/);
+ assert.match(inspected.range.reason,/SIDX index exceeds the probe limit/);
  await rt.call('download',{sourceId:inspected.id,id:'oversized-full',kind:'video',height:720,filename:'oversized-full'});
  const full=rt.calls.filter(c=>c.url.endsWith('indexed.mp4')&&!c.options.headers?.Range);
  assert.ok(full.length>0,'full download should still use the source without a Range header');

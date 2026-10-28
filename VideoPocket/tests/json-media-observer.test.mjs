@@ -155,7 +155,11 @@ test('installation is idempotent and disposal does not overwrite another wrapper
 });
 
 test('the shipped MAIN bundle captures application JSON parsing and restores its native parser',async()=>{
- const context=vm.createContext({URL:class extends URL{},WeakRef,TextEncoder,TextDecoder,location:{href:'https://unseen.example/video/selected',hostname:'unseen.example'}});
+ let timerId=0;const timers=new Map();
+ const context=vm.createContext({URL:class extends URL{},WeakRef,TextEncoder,TextDecoder,
+  setTimeout:(callback,delay)=>{const id=++timerId;timers.set(id,{callback,delay});return id;},
+  clearTimeout:id=>timers.delete(id),
+  location:{href:'https://unseen.example/video/selected',hostname:'unseen.example'}});
  vm.runInContext('const nativeParse=JSON.parse;',context);
  vm.runInContext(await fs.readFile(new URL('../extension/media-observer.js',import.meta.url),'utf8'),context);
  const result=vm.runInContext(`
@@ -167,4 +171,5 @@ test('the shipped MAIN bundle captures application JSON parsing and restores its
   observer.dispose();({url:model?.manifestUrl,observed:stats.json.observed,restored:JSON.parse===nativeParse});
  `,context);
  assert.equal(result.url,'https://cdn.example/main.m3u8');assert.equal(result.observed,1);assert.equal(result.restored,true);
+ assert.equal(timers.size,0,'dispose clears the observer lease timer');
 });

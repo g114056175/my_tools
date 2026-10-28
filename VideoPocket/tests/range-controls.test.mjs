@@ -28,7 +28,7 @@ test('handles cannot cross and invalid text restores the valid endpoint',()=>{
  const f=fixture(),c=f.controller;c.setCapability({duration:120,supported:true});c.setEnabled(true);c.setRange({start:30,end:60});
  f.startSlider.value='100';f.startSlider.events.input();assert.equal(Number(f.startSlider.value),59.9);
  f.end.reportValidity=()=>assert.fail('no native validation bubble');
- f.end.value='bad';f.end.events.change();assert.equal(f.end.value,'00:01:00.0');assert.equal(f.end['aria-invalid'],'true');assert.equal(f.end.validationMessage,'');assert.equal(f.message.textContent,'時間格式不正確，已還原');assert.equal(f.message.hidden,false);
+ f.end.value='bad';f.end.events.change();assert.equal(f.end.value,'00:01:00.0');assert.equal(f.end['aria-invalid'],'true');assert.equal(f.end.validationMessage,'');assert.equal(f.message.textContent,'Invalid time; restored');assert.equal(f.message.hidden,false);
  f.endSlider.value='90';f.endSlider.events.input();assert.equal(f.message.hidden,true);assert.equal(f.end['aria-invalid'],'false');
  c.reset();assert.equal(f.details.open,false);assert.equal(c.getRange(),undefined);
 });

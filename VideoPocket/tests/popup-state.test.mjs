@@ -10,7 +10,7 @@ import {mediaAvailability,popupAvailability,restoredKind,sourceVisibility,source
 
 test('named media precede numbered placeholders without changing selection indices or within-group order',()=>{
  const videos=[{title:'影片 1'},{title:'Lecture'},{title:''},{title:'影片2'},{title:'影片 1 的生活'}];
- assert.deepEqual(orderedMediaOptions(videos),[{index:1,title:'Lecture'},{index:4,title:'影片 1 的生活'},{index:0,title:'影片 1'},{index:2,title:'影片 3'},{index:3,title:'影片2'}]);
+ assert.deepEqual(orderedMediaOptions(videos),[{index:1,title:'Lecture'},{index:4,title:'影片 1 的生活'},{index:0,title:'影片 1'},{index:2,title:'Video 3'},{index:3,title:'影片2'}]);
  assert.equal(videos[0].title,'影片 1');
 });
 
@@ -110,15 +110,17 @@ test('restored mode falls back to an available media mode when the selected mode
   assert.equal(restoredKind('audio', {...mediaAvailability(info), subtitle: false}), 'video');
 });
 
-test('a selected video without any download controls never receives a normal source header',()=>{
+test('source failures keep a selected-video header while no-video failures use the header error',()=>{
+ assert.deepEqual(sourceHeader({hasVideo:false,phase:'detecting'}),{label:'Scanning videos…',detail:'Checking this tab for videos',error:false});
  for(const phase of ['idle','ready','failed']){
-  const header=sourceHeader({hasVideo:true,info:{},phase});
-  assert.equal(header.error,true);assert.equal(header.label,'找到影片，但無下載來源');
+  const header=sourceHeader({hasVideo:true,info:{},phase,error:'Video found, but no downloadable source',detail:'No downloadable media formats are available'});
+  assert.equal(header.error,false);assert.equal(header.label,'Video:');assert.equal(header.detail,'');
  }
  const pending=sourceHeader({hasVideo:true,info:null,phase:'inspecting'});
- assert.equal(pending.label,'解析影片中…');assert.equal(pending.error,false);
- assert.equal(sourceHeader({hasVideo:true,info,phase:'ready'}).label,'影片：');
- assert.equal(sourceHeader({hasVideo:true,phase:'failed',error:'來源拒絕下載',detail:'HTTP 403'}).detail,'HTTP 403');
+ assert.equal(pending.label,'Checking video source…');assert.equal(pending.error,false);
+ assert.equal(sourceHeader({hasVideo:true,info,phase:'ready'}).label,'Video:');
+ const noVideo=sourceHeader({hasVideo:false,phase:'failed',error:'Source denied the download',detail:'HTTP 403'});
+ assert.deepEqual(noVideo,{label:'Source denied the download',detail:'HTTP 403',error:true});
 });
 
 test('source validation has a deadline even when the background never responds',async()=>{

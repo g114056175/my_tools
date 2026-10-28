@@ -81,7 +81,7 @@ export function createRangeController(elements = {}, callbacks = {}) {
       state={enabled:false,start:0,end:duration};
     }
     state.enabled=supported&&!!details?.open;
-    if(details)details.title=supported?'':value?.reason||'此來源不支援區間下載';
+    if(details)details.title=supported?'':value?.reason||'Clip download is unavailable for this source';
     render();
   };
   const reset=()=>{clearMessage();supported=false;duration=0;initialized=false;state={enabled:false,start:0,end:0};if(details)details.open=false;render();};
@@ -89,9 +89,9 @@ export function createRangeController(elements = {}, callbacks = {}) {
     const value=parseTime(element?.value),valid=value!=null&&value<=duration;
     element?.setCustomValidity?.(''); // Use the inline status, never the native bubble.
     element?.setAttribute?.('aria-invalid',String(!valid));
-    if(!valid){set(element,'value',inputTime(state[which]));showMessage(value==null?'時間格式不正確，已還原':'超過影片長度，已還原');return;}
+    if(!valid){set(element,'value',inputTime(state[which]));showMessage(value==null?'Invalid time; restored':'Beyond video duration; restored');return;}
     update({[which]:value});
-    if(Math.abs(state[which]-value)>0.051)showMessage('已調整至有效區間');
+    if(Math.abs(state[which]-value)>0.051)showMessage('Adjusted to a valid range');
   };
   details?.addEventListener?.('toggle',()=>update({enabled:supported&&!!details.open}));
   bindTimeInput(start,()=>onText('start',start),clearMessage);bindTimeInput(end,()=>onText('end',end),clearMessage);

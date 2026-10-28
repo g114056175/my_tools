@@ -41,13 +41,26 @@ test('picker selects the hovered second video and prevents site click', async ()
   second.title = '第二部'; const state = world([first, second]);
   try {
     const picked = startMediaPicker({requestId: 'r1', frameId: 4, documentId: 'doc'});
+    assert.equal(state.documentMock.body.children[1].textContent,'Select video');
+    assert.equal(state.documentMock.body.children[2].textContent,'Click a video, then reopen VideoPocket · Esc cancels');
     state.documentMock.dispatch('pointermove', {clientX: 130, clientY: 20, composedPath: () => [second]});
+    assert.equal(state.documentMock.body.children[1].textContent,'Selected: 第二部','the source video title is preserved');
     let prevented = false; let stopped = false;
     state.documentMock.dispatch('click', {clientX: 130, clientY: 20, composedPath: () => [second], preventDefault: () => { prevented = true; }, stopImmediatePropagation: () => { stopped = true; }});
     const result = await picked;
     assert.equal(result.action, MEDIA_PICKER_ACTIONS.selected); assert.equal(result.localMediaIndex, 1); assert.equal(result.frameId, 4); assert.equal(result.documentId, 'doc');
     assert.equal(prevented, true); assert.equal(stopped, true); assert.equal(state.documentMock.body.children.length, 0, 'picker overlay and label are cleaned up');
   } finally { state.restore(); }
+});
+
+test('picker uses an English fallback label when the page exposes only a generic title',async()=>{
+ const video=new NodeMock('video');video.title='影片';const state=world([video]);
+ try{
+  const pending=startMediaPicker({requestId:'english-fallback'});
+  state.documentMock.dispatch('pointermove',{clientX:20,clientY:20,composedPath:()=>[video]});
+  assert.equal(state.documentMock.body.children[1].textContent,'Selected: Video 1');
+  state.documentMock.dispatch('keydown',{key:'Escape',preventDefault(){},stopImmediatePropagation(){}});await pending;
+ }finally{state.restore();}
 });
 
 test('Escape cancels and removes the active overlay without touching playback', async () => {

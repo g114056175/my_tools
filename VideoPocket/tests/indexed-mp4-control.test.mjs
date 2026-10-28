@@ -1,3 +1,5 @@
+import {classifyFailure} from '../extension/diagnostics.js';
+import {createMediaRangeVersions} from '../extension/media-range-versions.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -18,7 +20,7 @@ async function runtime(){
   const read={url,referer,signal,range,pageContext,resolve,reject};reads.push(read);
   signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
  });
- const context={Worker,transfer,chrome:{runtime:{getURL:path=>path}},AbortController,AbortSignal,Error,Promise};
+ const context={classifyFailure,createMediaRangeVersions,Worker,transfer,chrome:{runtime:{getURL:path=>path}},AbortController,AbortSignal,Error,Promise};
  vm.runInNewContext(code+';globalThis.download=downloadIndexedMp4;',context);
  const controller=new AbortController(),control=new TransferControl(controller.signal);
  const pending=context.download({url:'https://cdn.test/video.mp4'},{referer:'https://page.test/',descriptor:{pageContext:{tabId:7,documentId:'doc'}}},{start:1,end:2},controller.signal,'test','video',true,()=>{},control);

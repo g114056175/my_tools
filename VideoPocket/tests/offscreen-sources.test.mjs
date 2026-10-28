@@ -1,3 +1,9 @@
+import {createSourceRetention} from '../extension/source-retention.js';
+import {sharedHttpRequestPolicy,parseRetryAfter} from '../extension/http-resilience.js';
+import {validateMediaRecovery} from '../extension/media-recovery.js';
+import {createMediaRangeVersions} from '../extension/media-range-versions.js';
+import {createYoutubeSourceSessions} from '../extension/youtube-source-session.js';
+import {inspectionReuseKey,inspectionReusable} from '../extension/inspection-reuse.js';
 import {parseByteRange as byteRange,rangeCapability,formatRangeCapability} from '../extension/range-capability.js';
 import {createMediaTransfer} from '../extension/media-transfer.js';
 import {resolveNetworkCandidates,prioritizeMediaVersions} from '../extension/source-candidates.js';
@@ -62,7 +68,7 @@ function silentMp4(){
  return join(mp4Box('ftyp',new Uint8Array(8)),mp4Box('moov',mp4Box('trak',mp4Box('mdia',join(mp4Box('hdlr',handler),mp4Box('minf',mp4Box('stbl',mp4Box('stsd',table))))))));
 }
 
-async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20000,pageReply,parseDocument,manifestReply,mediabunny}={}){
+async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20000,pageReply,parseDocument,manifestReply,mediabunny,clock}={}){
   const messages=[];let listener;
   const chrome={runtime:{id:'test-extension',sendMessage:async message=>{messages.push({kind:'rpc',message});return {ok:true,result:message.action==='observedManifest'&&manifestReply?await manifestReply(message):message.action==='socialPageFetch'&&pageReply?await pageReply(message):{}}},onMessage:{addListener:fn=>{listener=fn}}}};
   const fetchLog=[];
@@ -70,7 +76,8 @@ async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20
   const source=await fs.readFile(new URL('../extension/offscreen.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
   const runtimeSetTimeout=(fn,ms,...args)=>setTimeout(fn,ms===20000?requestTimeoutMs:ms,...args);
-  const context={qualityOfFormat,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,prioritizeMediaVersions,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,DOMException,AbortController,AbortSignal:{any:signals=>AbortSignal.any(signals),timeout:ms=>AbortSignal.timeout(ms===25000?inspectionTimeoutMs:ms===20000?requestTimeoutMs:ms)},Uint8Array,ArrayBuffer,File:class{},Worker:class{},setInterval:()=>{},setTimeout:runtimeSetTimeout,clearTimeout,queueMicrotask,console};
+  const RuntimeDate=clock?class extends Date{static now(){return clock.now;}}:Date;
+  const context={createSourceRetention:options=>createSourceRetention({...options,setTimer:(fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref?.();return timer;}}),sharedHttpRequestPolicy,parseRetryAfter,validateMediaRecovery,createMediaRangeVersions,createYoutubeSourceSessions,inspectionReuseKey,inspectionReusable,qualityOfFormat,byteRange,rangeCapability,formatRangeCapability,createMediaTransfer,resolveNetworkCandidates,prioritizeMediaVersions,platformSource,assembleSegments,HlsParser,parseDash,mediaChoices,selectedPlan,metadataCodecs,codec,parseMp4Codecs,parseSubtitles,directTransfer:async()=>{},downloadYoutube:async()=>{},TransferControl:class{},classifyFailure,resolveAnime1,mediaCredentials,parseTransportStreamCodecs,readMp4Metadata,decryptHlsSample,hlsIv,chrome,fetch,document:{createElement:()=>fakeVideo()},VideoPocketDiskMedia:{removeMediaFiles:async()=>{}},crypto,URL,URLSearchParams,TextEncoder,TextDecoder,DOMException,AbortController,AbortSignal:{any:signals=>AbortSignal.any(signals),timeout:ms=>AbortSignal.timeout(ms===25000?inspectionTimeoutMs:ms===20000?requestTimeoutMs:ms)},Uint8Array,ArrayBuffer,File:class{},Worker:class{},Date:RuntimeDate,setInterval:()=>{},setTimeout:runtimeSetTimeout,clearTimeout,queueMicrotask,console};
   if(mediabunny){
     class BlobSource{constructor(blob){this.blob=blob;}}
     class Input{constructor({source}){this.source=source;}async getPrimaryVideoTrack(){return {}; }async dispose(){}}
@@ -79,9 +86,264 @@ async function makeRuntime(routes,{inspectionTimeoutMs=25000,requestTimeoutMs=20
   }
     vm.runInNewContext(code,{...context,Response,twitchVodManifest,twitchClipManifest,tokenizedTwitchClipUrl,verifiedSocialSource,socialPageResponse,resolveDailymotion,resolveLinkedMedia:(link,referer,request,options)=>resolveLinkedMedia(link,referer,request,{...options,...(parseDocument?{parseDocument}:{})})},{filename:'offscreen.js'});
   assert.equal(typeof listener,'function');
-  async function inspect(descriptor,inspectionId){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor,inspectionId},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
-  return {inspect,fetchLog,messages,cancel:inspectionId=>new Promise(resolve=>listener({target:'offscreen',action:'cancelInspect',inspectionId},{id:'test-extension'},resolve))};
+  async function inspect(descriptor,inspectionId,options={}){return new Promise((resolve,reject)=>listener({target:'offscreen',action:'inspect',descriptor,inspectionId,...options},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'inspect failed'),reply?.failure||{}))));}
+  const call=message=>new Promise((resolve,reject)=>listener({target:'offscreen',...message},{id:'test-extension'},reply=>reply?.ok?resolve(reply.result):reject(Object.assign(new Error(reply?.error||'operation failed'),reply?.failure||{}))));
+  return {inspect,call,fetchLog,messages,cancel:inspectionId=>new Promise(resolve=>listener({target:'offscreen',action:'cancelInspect',inspectionId},{id:'test-extension'},resolve))};
 }
+
+test('leaving a tab drops unused sources and defers active source removal until release',async()=>{
+ const bytes=timedMp4(10,360,640);
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const descriptor={tabId:7,documentId:'doc',referer:'https://example.test/watch',url:'https://cdn.test/a.mp4',title:'First'};
+ const active=await rt.inspect(descriptor),unused=await rt.inspect({...descriptor,url:'https://cdn.test/b.mp4'}),other=await rt.inspect({...descriptor,tabId:8,url:'https://cdn.test/c.mp4'});
+ await rt.call({action:'retain',sourceId:active.id});await rt.call({action:'dropTabSources',tabId:7});
+ await assert.rejects(rt.call({action:'retain',sourceId:unused.id}));
+ assert.ok(await rt.call({action:'retain',sourceId:other.id}));
+ await rt.call({action:'retain',sourceId:active.id});await rt.call({action:'forget',sourceId:active.id});
+ assert.ok(await rt.call({action:'retain',sourceId:active.id}));
+ await rt.call({action:'forget',sourceId:active.id});await rt.call({action:'forget',sourceId:active.id});
+ await assert.rejects(rt.call({action:'retain',sourceId:active.id}));
+});
+
+function replacementDescriptor(patch={}){return {tabId:7,frameId:0,documentId:'replacement-document',mediaKey:'selected-player',mediaContentId:'selected-content',referer:'https://example.test/watch',url:'https://cdn.example/selected.mp4',title:'Selected video',...patch};}
+async function replacementRuntime(options={}){
+ const bytes=timedMp4(12,360,640);
+ return makeRuntime([{match:()=>true,reply:(url,request)=>options.refused?.()?response('',{status:403}):request.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}],options);
+}
+
+test('ten accepted refreshes replace unused versions without losing the current inspected result',async()=>{
+ const rt=await replacementRuntime(),descriptor=replacementDescriptor();let current=await rt.inspect(descriptor,undefined,{activeSourceTabs:[7]});
+ await rt.call({action:'acceptSource',sourceId:current.id,ownerId:'popup-a'});
+ const retired=[];
+ for(let i=0;i<10;i++){
+  const previous=current;current=await rt.inspect(descriptor,undefined,{force:true});
+  await rt.call({action:'acceptSource',sourceId:current.id,ownerId:'popup-a'});
+  await assert.rejects(rt.call({action:'retain',sourceId:previous.id}));retired.push(previous.id);
+ }
+ const before=rt.fetchLog.length;assert.equal((await rt.inspect(descriptor)).id,current.id);assert.equal(rt.fetchLog.length,before,'the accepted newest source still reuses its probe');
+ const removed=rt.messages.filter(entry=>entry.message.action==='sourcesExpired').flatMap(entry=>entry.message.sourceIds);
+ assert.deepEqual(new Set(removed),new Set(retired));assert.equal(removed.includes(current.id),false);
+});
+
+test('replacement keeps a download version until its last reference is released',async()=>{
+ const rt=await replacementRuntime(),descriptor=replacementDescriptor(),old=await rt.inspect(descriptor,undefined,{activeSourceTabs:[7]});
+ await rt.call({action:'acceptSource',sourceId:old.id,ownerId:'popup-a'});await rt.call({action:'retain',sourceId:old.id});
+ const current=await rt.inspect(descriptor,undefined,{force:true});await rt.call({action:'acceptSource',sourceId:current.id,ownerId:'popup-a'});
+ assert.ok(await rt.call({action:'retain',sourceId:old.id}));await rt.call({action:'forget',sourceId:old.id});
+ await rt.call({action:'forget',sourceId:old.id});await assert.rejects(rt.call({action:'retain',sourceId:old.id}));
+ assert.ok(await rt.call({action:'retain',sourceId:current.id}));await rt.call({action:'forget',sourceId:current.id});
+});
+
+test('a second popup may keep its own previous source until it closes',async()=>{
+ const rt=await replacementRuntime(),descriptor=replacementDescriptor(),old=await rt.inspect(descriptor,undefined,{activeSourceTabs:[7]});
+ await rt.call({action:'acceptSource',sourceId:old.id,ownerId:'popup-a'});
+ const current=await rt.inspect(descriptor,undefined,{force:true});await rt.call({action:'acceptSource',sourceId:current.id,ownerId:'popup-b'});
+ assert.ok(await rt.call({action:'retain',sourceId:old.id}));await rt.call({action:'forget',sourceId:old.id});
+ await rt.call({action:'releaseSourceOwner',ownerId:'popup-a'});await assert.rejects(rt.call({action:'retain',sourceId:old.id}));
+ assert.ok(await rt.call({action:'retain',sourceId:current.id}));await rt.call({action:'forget',sourceId:current.id});
+});
+
+test('selecting an older cached player uses the new popup request order, not the source creation order',async()=>{
+ const rt=await replacementRuntime(),a=replacementDescriptor(),b=replacementDescriptor({mediaKey:'second-player'});
+ const first=await rt.inspect(a,undefined,{activeSourceTabs:[7]});await rt.call({action:'acceptSource',sourceId:first.id,ownerId:'popup-a',ownerRequestOrder:1});
+ const second=await rt.inspect(b);await rt.call({action:'acceptSource',sourceId:second.id,ownerId:'popup-a',ownerRequestOrder:2});
+ const cached=await rt.inspect(a);assert.equal(cached.id,first.id);await rt.call({action:'acceptSource',sourceId:cached.id,ownerId:'popup-a',ownerRequestOrder:3});
+ const refreshed=await rt.inspect(a,undefined,{force:true});await rt.call({action:'acceptSource',sourceId:refreshed.id,ownerId:'popup-b',ownerRequestOrder:4});
+ await rt.call({action:'acceptSource',sourceId:second.id,ownerId:'popup-a',ownerRequestOrder:2});
+ assert.ok(await rt.call({action:'retain',sourceId:first.id}),'a late request cannot steal the current cached player ownership');await rt.call({action:'forget',sourceId:first.id});
+ await rt.call({action:'releaseSourceOwner',ownerId:'popup-a'});await assert.rejects(rt.call({action:'retain',sourceId:first.id}));
+});
+
+test('a refused probe or rejected candidate never replaces the previous accepted source',async()=>{
+ let refused=false;const rt=await replacementRuntime({refused:()=>refused}),descriptor=replacementDescriptor(),old=await rt.inspect(descriptor,undefined,{activeSourceTabs:[7]});
+ await rt.call({action:'acceptSource',sourceId:old.id,ownerId:'popup-a'});refused=true;
+ await assert.rejects(rt.inspect(descriptor,undefined,{force:true}),{code:'HTTP_AUTH'});refused=false;
+ assert.ok(await rt.call({action:'retain',sourceId:old.id}));await rt.call({action:'forget',sourceId:old.id});
+ const candidate=await rt.inspect(descriptor,undefined,{force:true});await rt.call({action:'forget',sourceId:candidate.id,discardInspection:true});
+ await assert.rejects(rt.call({action:'retain',sourceId:candidate.id}));assert.ok(await rt.call({action:'retain',sourceId:old.id}));await rt.call({action:'forget',sourceId:old.id});
+ const current=await rt.inspect(descriptor,undefined,{force:true});await rt.call({action:'acceptSource',sourceId:current.id,ownerId:'popup-a'});
+ await assert.rejects(rt.call({action:'retain',sourceId:old.id}));
+});
+
+test('pending candidates are not shared and inspection disposal cannot release a job reference',async()=>{
+ const clock={now:Date.now()},rt=await replacementRuntime({clock}),descriptor=replacementDescriptor();
+ const first=await rt.inspect(descriptor),second=await rt.inspect(descriptor);assert.notEqual(first.id,second.id,'an unverified candidate is not reused');
+ await rt.call({action:'forget',sourceId:first.id,discardInspection:true});await rt.call({action:'acceptSource',sourceId:second.id,ownerId:'popup-a'});
+ await rt.call({action:'retain',sourceId:second.id});await rt.call({action:'forget',sourceId:second.id,discardInspection:true});
+ await rt.call({action:'releaseSourceOwner',ownerId:'popup-a'});clock.now+=120_000;
+ assert.ok(await rt.call({action:'retain',sourceId:second.id}),'discarding an inspection must not consume the existing download reference');
+ await rt.call({action:'forget',sourceId:second.id});await rt.call({action:'forget',sourceId:second.id});
+});
+
+test('same title and content id in another player or frame cannot retire the selected player',async()=>{
+ const rt=await replacementRuntime(),descriptor=replacementDescriptor(),first=await rt.inspect(descriptor,undefined,{activeSourceTabs:[7]});
+ await rt.call({action:'acceptSource',sourceId:first.id,ownerId:'popup-a'});
+ for(const patch of [{mediaKey:'another-player'},{frameId:2},{documentId:'another-document'},{tabId:8}]){
+  const other=await rt.inspect(replacementDescriptor(patch));await rt.call({action:'acceptSource',sourceId:other.id,ownerId:'popup-b'});
+  assert.ok(await rt.call({action:'retain',sourceId:first.id}));await rt.call({action:'forget',sourceId:first.id});
+ }
+});
+
+test('a successful inspection is reused only for the exact, complete selected input',async()=>{
+ const bytes=timedMp4(10,360,640),url='https://cdn.example/reuse.mp4';
+ const rt=await makeRuntime([{match:()=>true,reply:(requestUrl,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const descriptor={tabId:7,frameId:2,documentId:'reuse-doc',mediaKey:'reuse-key',mediaContentId:'reuse-media',referer:'https://example.test/watch',url,title:'Selected video'};
+ const first=await rt.inspect(descriptor),calls=rt.fetchLog.length;
+ await rt.call({action:'acceptSource',sourceId:first.id});
+ const repeated=await rt.inspect(descriptor);
+ assert.equal(repeated.id,first.id);
+ assert.equal(rt.fetchLog.length,calls,'reusing a successful source performs no additional requests');
+
+ const changes=[
+  ['URL',{url:'https://cdn.example/other.mp4'}],
+  ['media ID',{mediaContentId:'different-media'}],
+  ['document ID',{documentId:'different-document'}],
+  ['frame ID',{frameId:3}],
+  ['media key',{mediaKey:'different-key'}]
+ ];
+ for(const [label,patch] of changes){
+  const before=rt.fetchLog.length,result=await rt.inspect({...descriptor,...patch});
+  assert.notEqual(result.id,first.id,`${label} change must inspect a fresh source`);
+  assert.ok(rt.fetchLog.length>before,`${label} change must read its source again`);
+ }
+ const beforeDrm=rt.fetchLog.length;
+ await assert.rejects(rt.inspect({...descriptor,drm:true}));
+ assert.equal(rt.fetchLog.length,beforeDrm,'a DRM input cannot reuse the earlier source');
+});
+
+test('force clears same-scope reuse before a DRM rejection, while non-force DRM is rejected',async()=>{
+ const bytes=timedMp4(10,360,640),url='https://cdn.example/force-drm.mp4';
+ const rt=await makeRuntime([{match:()=>true,reply:(requestUrl,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const descriptor={tabId:18,frameId:1,documentId:'force-drm-doc',mediaKey:'force-drm-key',referer:'https://example.test/watch',url,title:'Selected video'};
+ const first=await rt.inspect(descriptor),beforeForce=rt.fetchLog.length;
+ await assert.rejects(rt.inspect({...descriptor,drm:true},undefined,{force:true}));
+ const afterDrmForce=await rt.inspect(descriptor);
+ await rt.call({action:'acceptSource',sourceId:afterDrmForce.id});
+ assert.notEqual(afterDrmForce.id,first.id,'a forced DRM failure invalidates the earlier same-scope entry');
+ assert.ok(rt.fetchLog.length>beforeForce);
+
+ const beforeNonForceDrm=rt.fetchLog.length;
+ await assert.rejects(rt.inspect({...descriptor,drm:true}));
+ assert.equal(rt.fetchLog.length,beforeNonForceDrm,'a non-forced DRM selection is rejected without probing');
+ assert.equal((await rt.inspect(descriptor)).id,afterDrmForce.id,'a non-forced DRM rejection leaves the valid source untouched');
+ assert.equal(rt.fetchLog.length,beforeNonForceDrm);
+});
+
+test('forget with invalidateInspection prevents reuse while retaining a referenced source',async()=>{
+ const bytes=timedMp4(10,360,640),url='https://cdn.example/forget-invalidates.mp4';
+ const rt=await makeRuntime([{match:()=>true,reply:(requestUrl,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const descriptor={tabId:19,frameId:0,documentId:'forget-doc',mediaKey:'forget-key',referer:'https://example.test/watch',url,title:'Selected video'};
+ const first=await rt.inspect(descriptor);
+ await rt.call({action:'retain',sourceId:first.id});
+ await rt.call({action:'forget',sourceId:first.id,invalidateInspection:true});
+ const before=rt.fetchLog.length,second=await rt.inspect(descriptor);
+ assert.notEqual(second.id,first.id,'invalidating forget removes the key even when the source remains present');
+ assert.ok(rt.fetchLog.length>before);
+});
+
+test('force, tab removal, cleanup and expiry all require a new source inspection',async()=>{
+ const bytes=timedMp4(10,360,640),url='https://cdn.example/reuse-life.mp4';
+ const clock={now:1_000_000};
+ const rt=await makeRuntime([{match:()=>true,reply:(requestUrl,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}],{clock});
+ const descriptor={tabId:17,frameId:0,documentId:'reuse-life-doc',mediaKey:'reuse-life-key',referer:'https://example.test/watch',url,title:'Selected video'};
+ const first=await rt.inspect(descriptor),afterFirst=rt.fetchLog.length;
+ await rt.call({action:'acceptSource',sourceId:first.id});
+ assert.equal((await rt.inspect(descriptor)).id,first.id);
+ assert.equal(rt.fetchLog.length,afterFirst);
+
+ const forced=await rt.call({action:'inspect',descriptor,force:true});
+ assert.notEqual(forced.id,first.id);
+ assert.ok(rt.fetchLog.length>afterFirst,'force bypasses a reusable source');
+
+ const beforeDrop=rt.fetchLog.length;
+ await rt.call({action:'dropTabSources',tabId:descriptor.tabId});
+ const afterDrop=await rt.inspect(descriptor);
+ assert.notEqual(afterDrop.id,forced.id);
+ assert.ok(rt.fetchLog.length>beforeDrop,'dropTabSources removes the source from reuse');
+
+ const beforeCleanup=rt.fetchLog.length;
+ await rt.call({action:'cleanup'});
+ const afterCleanup=await rt.inspect(descriptor);
+ await rt.call({action:'acceptSource',sourceId:afterCleanup.id});
+ assert.notEqual(afterCleanup.id,afterDrop.id);
+ assert.ok(rt.fetchLog.length>beforeCleanup,'cleanup removes the source from reuse');
+
+ const afterCleanupRequests=rt.fetchLog.length;
+ clock.now+=59_999;
+ assert.equal((await rt.inspect(descriptor)).id,afterCleanup.id,'a read within 60 seconds reuses the original success');
+ assert.equal(rt.fetchLog.length,afterCleanupRequests);
+ clock.now+=1;
+ const expired=await rt.inspect(descriptor);
+ assert.notEqual(expired.id,afterCleanup.id,'age 60 seconds is expired from the first successful inspection');
+ assert.ok(rt.fetchLog.length>afterCleanupRequests);
+});
+
+test('popup and job ownership keep a source beyond 60 seconds; the final release expires it in both layers',async()=>{
+ const bytes=timedMp4(10,360,640),clock={now:Date.now()};
+ const rt=await makeRuntime([{match:()=>true,reply:(url,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}],{clock});
+ const descriptor={tabId:23,documentId:'held-document',mediaKey:'held-video',referer:'https://example.test/watch',url:'https://cdn.example/held.mp4',title:'Held source'};
+ const first=await rt.inspect(descriptor,undefined,{activeSourceTabs:[23]}),requests=rt.fetchLog.length;
+ await rt.call({action:'acceptSource',sourceId:first.id});
+ clock.now+=180_000;
+ assert.equal((await rt.inspect(descriptor,undefined,{activeSourceTabs:[23]})).id,first.id);
+ assert.equal(rt.fetchLog.length,requests,'a long-lived popup does not age out its successful source');
+ await rt.call({action:'retain',sourceId:first.id});
+ await rt.call({action:'sourceActivity',activeSourceTabs:[]});clock.now+=3_600_000;
+ assert.equal((await rt.inspect(descriptor)).id,first.id,'a retained download owns its source after the popup closes');
+ await rt.call({action:'forget',sourceId:first.id});clock.now+=59_999;
+ assert.equal((await rt.inspect(descriptor)).id,first.id);
+ clock.now++;
+ const replacement=await rt.inspect(descriptor);assert.notEqual(replacement.id,first.id);
+ const notification=rt.messages.find(entry=>entry.message.action==='sourcesExpired'&&entry.message.sourceIds.includes(first.id));
+ assert.ok(notification,'expiry notifies the background to remove its matching metadata');
+ await assert.rejects(rt.call({action:'retain',sourceId:first.id}));
+});
+
+test('source expiry removes an old YouTube capture even when another source in the same tab is retained',async()=>{
+ const clock={now:Date.now()},rt=await makeRuntime([],{clock});
+ const descriptor=id=>({tabId:25,documentId:'yt-retention-doc',mediaKey:id,referer:'https://www.youtube.com/watch?v='+id,title:id,platform:{site:'youtube',id,duration:10,streamingData:{serverAbrStreamingUrl:'https://rr.googlevideo.com/videoplayback?id='+id,adaptiveFormats:[{itag:1,url:'https://cdn.test/video',height:360,mimeType:'video/mp4; codecs="avc1.64001f"'},{itag:2,url:'https://cdn.test/audio',mimeType:'audio/mp4; codecs="mp4a.40.2"'}]}}});
+ const one=await rt.inspect(descriptor('one')),two=await rt.inspect(descriptor('two'));
+ for(const [source,id]of [[one,'one'],[two,'two']])await rt.call({action:'youtubeSourceSession',sourceId:source.id,capture:{tabId:25,documentId:'yt-retention-doc',frameId:0,streamId:id,body:'request-body-'+id,createdAt:clock.now}});
+ await rt.call({action:'retain',sourceId:two.id});clock.now+=60_000;
+ await rt.call({action:'sourceActivity',activeSourceTabs:[]});
+ assert.equal(await rt.call({action:'youtubeSourceSession',sourceId:one.id}),null);
+ assert.equal((await rt.call({action:'youtubeSourceSession',sourceId:two.id})).body,'request-body-two');
+});
+
+test('incomplete scope and inspections without downloadable choices are never reused',async()=>{
+ const bytes=timedMp4(10,360,640),url='https://cdn.example/non-reusable.mp4';
+ const rt=await makeRuntime([{match:()=>true,reply:(requestUrl,options)=>options.method==='HEAD'?response('',{type:'video/mp4',length:bytes.length}):response(bytes,{type:'video/mp4'})}]);
+ const incomplete={tabId:4,documentId:'incomplete-doc',referer:'https://example.test/watch',url,title:'No media key'};
+ const first=await rt.inspect(incomplete),before=rt.fetchLog.length,repeated=await rt.inspect(incomplete);
+ assert.notEqual(repeated.id,first.id,'a missing mediaKey is not a reusable scope');
+ assert.ok(rt.fetchLog.length>before);
+
+ const noChoices={tabId:5,frameId:0,documentId:'no-choice-doc',mediaKey:'no-choice-key',referer:'https://www.youtube.com/watch?v=abcdefghijk',title:'Video without a downloadable audio pair',platform:{site:'youtube',id:'abcdefghijk',duration:12,streamingData:{formats:[{itag:18,url:'https://cdn.example/video-only.mp4',mimeType:'video/mp4; codecs="avc1.42001E"',height:360,approxDurationMs:12000}]}}};
+ const nonDownloadable=await rt.inspect(noChoices);
+ assert.equal(nonDownloadable.choices.video.auto.enabled,false);
+ assert.equal(nonDownloadable.choices.audio.original.enabled,false);
+ const checkedAgain=await rt.inspect(noChoices);
+ assert.notEqual(checkedAgain.id,nonDownloadable.id,'a successful but non-downloadable result is not cached');
+});
+
+test('YouTube source sessions survive a new inspection but are cleared on navigation and engine cleanup',async()=>{
+ const rt=await makeRuntime([]);
+ const descriptor={tabId:7,frameId:0,documentId:'yt-doc',title:'YouTube repeat',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://rr.googlevideo.com/videoplayback?id=stream-a',adaptiveFormats:[{itag:137,mimeType:'video/mp4; codecs="avc1.640028"',width:1920,height:1080},{itag:140,mimeType:'audio/mp4; codecs="mp4a.40.2"',audioQuality:'AUDIO_QUALITY_MEDIUM'}]},videoDetails:{lengthSeconds:'60'}}};
+ const capture={tabId:7,frameId:0,documentId:'yt-doc',streamId:'stream-a',body:'bounded-session',createdAt:Date.now()};
+ const first=await rt.inspect(descriptor);
+ assert.equal((await rt.call({action:'youtubeSourceSession',sourceId:first.id,capture})).body,capture.body);
+ const second=await rt.inspect(descriptor);assert.notEqual(second.id,first.id);
+ assert.equal((await rt.call({action:'youtubeSourceSession',sourceId:second.id})).body,capture.body);
+ const otherDocument=await rt.inspect({...descriptor,documentId:'another-document'});
+ assert.equal(await rt.call({action:'youtubeSourceSession',sourceId:otherDocument.id}),null);
+ await rt.call({action:'dropTabSources',tabId:7});
+ const afterNavigation=await rt.inspect(descriptor);
+ assert.equal(await rt.call({action:'youtubeSourceSession',sourceId:afterNavigation.id}),null);
+ await rt.call({action:'youtubeSourceSession',sourceId:afterNavigation.id,capture});
+ await rt.call({action:'cleanup'});
+ const afterCleanup=await rt.inspect(descriptor);
+ assert.equal(await rt.call({action:'youtubeSourceSession',sourceId:afterCleanup.id}),null);
+});
 
 test('Anime1 API and CDN requests use include credentials and produce a video choice',async()=>{
   const referer='https://anime1.me/12/34';
@@ -175,6 +437,36 @@ test('a complete DASH manifest explicitly declaring video-only adaptations allow
  const rt=await makeRuntime([{match:u=>u===init,reply:response(silentMp4(),{type:'video/mp4'})}]);
  const result=await rt.inspect({referer:'https://video.xx.fbcdn.net/master.mpd',title:'Silent',platform:{site:'embedded',id:'silent',manifestXml:xml}});
  assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,false);
+});
+
+test('Brightcove video-only HLS uses the complete init track table to keep silent video downloadable',async()=>{
+ const master='https://manifest.example/master.m3u8',child='https://manifest.example/720.m3u8',init='https://manifest.example/init.m4f';
+ const playlist='#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3834600,RESOLUTION=1280x720,CODECS="avc1.64001f"\n720.m3u8\n';
+ const media='#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:10\n#EXT-X-MAP:URI="init.m4f"\n#EXTINF:10,\nsegment0.m4f\n#EXTINF:3.8,\nsegment1.m4f\n#EXT-X-ENDLIST\n';
+ const rt=await makeRuntime([
+  {match:u=>u===master,reply:response(playlist)},
+  {match:u=>u===child,reply:response(media)},
+  {match:u=>u===init,reply:response(silentMp4(),{type:'video/mp4'})},
+ ]);
+ const result=await rt.inspect({referer:'https://players.brightcove.net/account/player/index.html',title:'Living Desert Giraffe',platform:{site:'embedded',manifestUrl:master,manifestType:'hls'}});
+ assert.equal(result.choices.video.auto.enabled,true);assert.equal(result.choices.audio.original.enabled,false);
+ assert.deepEqual([...result.choices.video.auto.heights],[720]);assert.equal(result.duration,13.8);
+ assert.equal(rt.fetchLog.filter(item=>item.url===init).length,1,'reuse the existing bounded header probe');
+ assert.equal(rt.fetchLog.some(item=>/segment\d/.test(item.url)),false,'inspection must not download media segments');
+});
+
+test('HLS missing audio metadata, incomplete init, unknown audio tracks and broken audio groups do not prove silence',async()=>{
+ const full=silentMp4(),unknownAudio=full.slice();
+ const handlerAt=Buffer.from(unknownAudio).indexOf('vide');unknownAudio.set(new TextEncoder().encode('soun'),handlerAt);
+ for(const [name,bytes,group] of [['incomplete',full.subarray(0,full.length-1),''],['unknown-audio',unknownAudio,''],['codecs-only',new TextEncoder().encode('avc1'), ''],['missing-audio-rendition',full,',AUDIO="missing"']]){
+  const rt=await makeRuntime([
+   {match:u=>u==='https://cdn.test/master.m3u8',reply:response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360,CODECS="avc1.42E01E"${group}\nvideo.m3u8\n`)},
+   {match:u=>u==='https://cdn.test/video.m3u8',reply:response('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,\nseg.m4s\n#EXT-X-ENDLIST\n')},
+   {match:u=>u==='https://cdn.test/init.mp4',reply:response(bytes,{type:'video/mp4'})},
+  ]);
+  const result=await rt.inspect({url:'https://cdn.test/master.m3u8',referer:'https://player.test/watch',title:name});
+  assert.equal(result.choices.video.auto.enabled,false,name);assert.equal(result.choices.audio.original.enabled,false,name);
+ }
 });
 
 test('platform sources preserve Bilibili DASH and durl dimensions',()=>{

@@ -405,6 +405,37 @@ export function createMediaModelStore({
     }
     return found;
   };
+  const routeMatches = (identity, evidence) => {
+    const matches = models.filter(
+      (model) => hasModelSource(model) && identity.id && model.aliases.includes(identity.id),
+    );
+    if (matches.length < 2) return matches;
+    // A route ID can be shared by distinct posts (for example, a resource ID
+    // attached to multiple TikTok posts). Only the actual player source can
+    // narrow that ambiguity; page metadata and unrelated network URLs cannot.
+    const playerEvidence = new Set([
+      "video.currentSrc",
+      "video.src",
+      "source-element",
+      "player-owned-source",
+      "player.url",
+      "player.uri",
+      "player.resolvedUri",
+      "player.masterPlaylist_",
+      "player.mainPlaylist_",
+      "player.playlist",
+    ]);
+    const playerUrls = new Set(
+      (evidence?.candidates || [])
+        .filter((candidate) => candidate.evidence?.some((item) => playerEvidence.has(item)))
+        .map((candidate) => candidate.url),
+    );
+    if (!playerUrls.size) return matches;
+    const sourceMatches = matches.filter((model) =>
+      playerUrls.has(model.manifestUrl) || model.versions.some((version) => playerUrls.has(version.url)),
+    );
+    return sourceMatches.length === 1 ? sourceMatches : matches;
+  };
   const modelFor = (video, pageUrl = "") => {
     prune();
     const configuration=ownedPlayerConfiguration(video,target);
@@ -417,7 +448,8 @@ export function createMediaModelStore({
       return extracted.find(model=>model.id===configuration.id) || null;
     }
     const root = video?.ownerDocument || undefined;
-    const identity = collectMediaEvidence({ video, root, pageUrl }).identity;
+    const evidence = collectMediaEvidence({ video, root, pageUrl });
+    const identity = evidence.identity;
     const owned=ownedPlayerMetadata(video,{pageUrl});
     if(owned.payloads.length)merge(owned.payloads.flatMap(value=>extractMediaModels(value,{baseUrl:pageUrl})));
     if(owned.ids.length){
@@ -433,11 +465,8 @@ export function createMediaModelStore({
     if (associated && hasModelSource(associated.model) && Date.now()-associated.model.updatedAt<ttl && associated.key === (identity.key || identity.id || "") && associated.source===(video?.currentSrc || video?.src || ''))
       return associated.model;
     if (associated) associations.delete?.(video);
-    return (
-      models.find(
-        (model) => hasModelSource(model)&&identity.id && model.aliases.includes(identity.id),
-      ) || null
-    );
+    const matches = routeMatches(identity, evidence);
+    return matches.length === 1 ? matches[0] : null;
   };
   return {
     merge,
@@ -454,8 +483,8 @@ export function createMediaModelStore({
       return documentCandidates.validate(token,video,{pageUrl,videos,hasIdentity:!!(owned.ids.length||identity.id||ownedPlayerConfiguration(video,target))});
     },
     diagnosticsFor: (video,pageUrl='') => {
-      prune();const configuration=ownedPlayerConfiguration(video,target),ids=configuration?[configuration.id]:ownedPlayerMetadata(video,{pageUrl}).ids,identity=collectMediaEvidence({video,root:video?.ownerDocument,pageUrl}).identity;
-      const matches=configuration&&configuration.video!==video?[]:models.filter(model=>hasModelSource(model)&&(ids.length?ids.every(id=>model.aliases.includes(id)):identity.id&&model.aliases.includes(identity.id)));
+      prune();const configuration=ownedPlayerConfiguration(video,target),ids=configuration?[configuration.id]:ownedPlayerMetadata(video,{pageUrl}).ids,evidence=collectMediaEvidence({video,root:video?.ownerDocument,pageUrl}),identity=evidence.identity;
+      const matches=configuration&&configuration.video!==video?[]:ids.length?models.filter(model=>hasModelSource(model)&&ids.every(id=>model.aliases.includes(id))):routeMatches(identity,evidence);
       return {models:models.length,playerIds:ids.length,routeIdentity:!!identity.id,matches:matches.length,reason:!models.length?'no-model':!ids.length&&!identity.id?'no-player-identity':!matches.length?'identity-unmatched':matches.length>1?'ambiguous-model':'matched',...documentCandidates.diagnosticsFor(video)};
     },
     models: () => (

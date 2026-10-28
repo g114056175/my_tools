@@ -6,7 +6,7 @@ export function createMediaMenu(source, root, onActivate = () => {}) {
   if (!source || !root || !doc) throw new TypeError('media menu requires select and root');
   const currentValue = '__vp_current__';
   const select = doc.createElement('select');
-  select.setAttribute('aria-label', '目前影片');
+  select.setAttribute('aria-label', 'Current video');
   root.classList.add('media-chooser');
   root.replaceChildren(select);
   const context=doc.createElement('canvas').getContext?.('2d');
@@ -43,7 +43,7 @@ export function createMediaMenu(source, root, onActivate = () => {}) {
     const chosen = options.find(item => item.value === source.value);
     const display = doc.createElement('option');
     display.value = currentValue;
-    display.textContent = chosen?label(chosen):(options.length ? '選取影片' : '沒有可用影片');
+    display.textContent = chosen?label(chosen):(options.length ? 'Select video' : 'No videos available');
     display.hidden = true;display.disabled = true;
     select.replaceChildren(display);
     for (const item of options) {

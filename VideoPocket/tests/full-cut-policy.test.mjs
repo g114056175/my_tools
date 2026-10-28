@@ -43,3 +43,8 @@ test('partial, DRM, SABR and invalid sources do not enter full-cut', () => {
   assert.equal(fullCutPolicy({ duration: 0 }, plan({})).supported, false);
   assert.equal(fullCutPolicy(source,plan({videoCodec:''})).supported,false);
 });
+
+test('unsupported full-cut reasons are concise English UI messages',()=>{
+  assert.equal(fullCutPolicy({duration:0},plan({})).reason,'The full video duration is unavailable.');
+  assert.equal(fullCutPolicy(source,plan({indexRange:'0-10'})).reason,'The source is segmented or indexed. Use the partial range path.');
+});

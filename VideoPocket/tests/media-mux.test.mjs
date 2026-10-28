@@ -57,7 +57,7 @@ function loadMux({ shortWrite = false, failAudio = false } = {}) {
     Error,
   };
   self.self = self;
-  vm.runInNewContext(readFileSync(new URL('../extension/media-mux.js', import.meta.url), 'utf8'), self);
+  vm.runInNewContext(readFileSync(new URL('../research/media-mux/media-mux.js', import.meta.url), 'utf8'), self);
   return { self, files, writes, disposed };
 }
 

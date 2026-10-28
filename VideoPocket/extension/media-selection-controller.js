@@ -45,31 +45,46 @@ export function selectedMediaIndex(videos,selection,pageUrl){
   });
 }
 
-export function createMediaSelectionController(api){
+export function createMediaSelectionController(api,{acquireIntent}={}){
   const active=new Map(),selectionWrites=new Map(),latestRequests=new Map();
+  const releaseIntent=async request=>{
+    if(!request||request.intentReleased)return;
+    request.intentReleased=true;
+    try{await request.intentLease?.release?.();}catch{}
+  };
   const stop=async(tabId,requestId)=>{
     if(!requestId)latestRequests.delete(tabId);
     const current=active.get(tabId);
-    if(current && (!requestId || current.requestId===requestId))active.delete(tabId);
+    if(current && (!requestId || current.requestId===requestId)){active.delete(tabId);await releaseIntent(current);}
     // Cleanup only touches an existing picker. Waiting for unrelated frames
     // to finish loading can otherwise stall a refresh before discovery starts.
     try{await api.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:cancelMediaPicker,args:[{requestId}],injectImmediately:true});}catch{}
   };
+  const stopRequest=async(tabId,request)=>{
+    if(active.get(tabId)?.requestId===request.requestId)await stop(tabId,request.requestId);
+    else await releaseIntent(request);
+  };
   const begin=async tabId=>{
     const requestId=crypto.randomUUID();
+    const intentLease=acquireIntent?.(tabId);
     latestRequests.set(tabId,requestId);
     const previous=active.get(tabId);
     // Claim the tab before any await. A second begin therefore invalidates
     // this request immediately; its late frame results cannot clear the new
     // request's selection.
-    active.set(tabId,{requestId,complete:false});
-    if(previous)void stop(tabId,previous.requestId);
+    const current={requestId,complete:false,intentLease,intentReleased:false};
+    active.set(tabId,current);
+    if(previous){void releaseIntent(previous);void stop(tabId,previous.requestId);}
     let frames;
-    try{frames=await api.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:()=>({url:location.href})});}
-    catch(error){if(active.get(tabId)?.requestId===requestId)active.delete(tabId);throw error;}
-    if(active.get(tabId)?.requestId!==requestId)return {started:false};
-    const top=frames.find(frame=>frame.frameId===0);
-    if(!top?.result?.url || !/^https?:/i.test(top.result.url)){active.delete(tabId);throw new Error('請在影片網頁使用選取功能');}
+    try{
+      if(intentLease?.ready)await intentLease.ready;
+      if(active.get(tabId)?.requestId!==requestId){await releaseIntent(current);return {started:false};}
+      frames=await api.scripting.executeScript({target:{tabId,allFrames:true},world:'MAIN',func:()=>({url:location.href})});
+    }
+    catch(error){await stopRequest(tabId,current);throw error;}
+    if(active.get(tabId)?.requestId!==requestId){await releaseIntent(current);return {started:false};}
+    const top=Array.isArray(frames)?frames.find(frame=>frame.frameId===0):null;
+    if(!top?.result?.url || !/^https?:/i.test(top.result.url)){await stopRequest(tabId,current);throw new Error('請在影片網頁使用選取功能');}
     let remaining=frames.length;
     const finish=async(result,frame)=>{
       const current=active.get(tabId);
@@ -87,15 +102,15 @@ export function createMediaSelectionController(api){
           // A rejected session write must release this request. Otherwise
           // current.complete leaves the picker permanently active and the
           // next popup cannot start a fresh selection.
-          if(active.get(tabId)?.requestId===requestId){active.delete(tabId);await stop(tabId,requestId);}
+          await stopRequest(tabId,current);
           return;
         }
         finally{if(selectionWrites.get(tabId)===write)selectionWrites.delete(tabId);}
-        if(active.get(tabId)?.requestId===requestId){active.delete(tabId);await stop(tabId,requestId);}
+        await stopRequest(tabId,current);
         await reopenPopupIfStillFocused(tabId,requestId,current);
       }else if(result?.reason==='cancelled'){
-        current.complete=true;if(active.get(tabId)?.requestId===requestId){active.delete(tabId);await stop(tabId,requestId);}
-      }else if(--remaining===0 && active.get(tabId)?.requestId===requestId)active.delete(tabId);
+        current.complete=true;await stopRequest(tabId,current);
+      }else if(--remaining===0 && active.get(tabId)?.requestId===requestId)await stopRequest(tabId,current);
     };
     for(const frame of frames){
       void api.scripting.executeScript({target:{tabId,documentIds:[frame.documentId]},world:'MAIN',func:startMediaPicker,args:[{requestId,frameId:frame.frameId,documentId:frame.documentId,timeoutMs:30000}]}).then(results=>finish(results[0]?.result,frame)).catch(()=>finish(null,frame));

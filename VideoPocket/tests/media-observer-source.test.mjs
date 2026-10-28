@@ -57,6 +57,7 @@ function browser() {
       return Promise.resolve(this.value);
     }
     json() {
+      if (this.deferJson) return new Promise(resolve => { this.resolveJson = resolve; });
       return Promise.resolve(typeof this.value === "string" ? JSON.parse(this.value) : this.value);
     }
   }
@@ -68,12 +69,15 @@ function browser() {
     addEventListener(name, cb) {
       this.listeners[name] = cb;
     }
+    removeEventListener(name, cb) {
+      if (this.listeners[name] === cb) delete this.listeners[name];
+    }
     open(method, url) {
       this.url = url;
     }
     send() {
       this.response = new ArrayBuffer(4);
-      this.listeners.load?.();
+      if (!this.deferLoad) this.listeners.load?.();
     }
   }
   class FakeSourceBuffer {
@@ -107,6 +111,93 @@ function browser() {
     blobs,
   };
 }
+
+function fakeTimers(target) {
+  let nextId=1;
+  const jobs=new Map();
+  target.setTimeout=(callback,delay)=>{const id=nextId++;jobs.set(id,{callback,delay});return id;};
+  target.clearTimeout=id=>jobs.delete(id);
+  return {
+    jobs,
+    fire(delay){
+      const match=[...jobs].find(([,job])=>job.delay===delay);
+      assert.ok(match,`expected a ${delay}ms timer`);
+      jobs.delete(match[0]);match[1].callback();
+    },
+  };
+}
+
+test('observer lease renews on same-build install and disposes at expiry',()=>{
+  const target=browser(),timers=fakeTimers(target),nativeFetch=async()=>{};
+  target.fetch=nativeFetch;
+  const observer=installMediaObserver(target,{leaseMs:100});
+  try{
+    const firstTimer=[...timers.jobs.values()][0];assert.equal(firstTimer.delay,100);
+    assert.equal(installMediaObserver(target,{leaseMs:200}),observer);
+    assert.equal(timers.jobs.size,1);assert.equal([...timers.jobs.values()][0].delay,200);
+    assert.equal(observer.renew(300),true);
+    assert.equal(timers.jobs.size,1);assert.equal([...timers.jobs.values()][0].delay,300);
+    timers.fire(300);
+    assert.equal(target[OBSERVER_SYMBOL],undefined);
+    assert.equal(target.fetch,nativeFetch);
+    assert.equal(observer.renew(),false);
+    assert.equal(timers.jobs.size,0);
+  }finally{observer.dispose();}
+});
+
+test('pagehide disposes even for bfcache and a later install creates fresh hooks',()=>{
+  const target=browser(),listeners=new Map(),nativeFetch=async()=>{};
+  target.fetch=nativeFetch;
+  target.addEventListener=(name,callback)=>listeners.set(name,callback);
+  target.removeEventListener=(name,callback)=>{if(listeners.get(name)===callback)listeners.delete(name);};
+  const selectionKey=Symbol.for('video-pocket.selection'),videos=[{}],tracks=new Map([[videos[0],['caption']]]);
+  const identities=target[Symbol.for('video-pocket.identities')]=new WeakMap();
+  const evidence=target[Symbol.for('video-pocket.sourceEvidence')]= {keep:true};
+  target[selectionKey]={videos,tracks};
+  const observer=installMediaObserver(target);
+  assert.notEqual(target.fetch,nativeFetch);
+  const pagehide=listeners.get('pagehide');assert.equal(typeof pagehide,'function');
+  pagehide({persisted:true});
+  assert.equal(target.fetch,nativeFetch);
+  assert.equal(target[OBSERVER_SYMBOL],undefined);
+  assert.equal(listeners.has('pagehide'),false);
+  assert.equal(videos.length,0);assert.equal(tracks.size,0);
+  assert.equal(target[selectionKey],undefined);
+  assert.equal(target[Symbol.for('video-pocket.identities')],identities);
+  assert.equal(target[Symbol.for('video-pocket.sourceEvidence')],evidence);
+  const renewed=installMediaObserver(target);
+  try{assert.notEqual(renewed,observer);assert.notEqual(target.fetch,nativeFetch);}
+  finally{renewed.dispose();}
+});
+
+test('late fetch, response, XHR, Worker, and JSON callbacks cannot repopulate disposed state',async()=>{
+  const target=browser();target.JSON={parse:JSON.parse};
+  let releaseFetch;
+  target.fetch=()=>new Promise(resolve=>{releaseFetch=resolve;});
+  target.Worker=class{
+    addEventListener(type,callback){if(type==='message')this.receive=callback;}
+    removeEventListener(type,callback){if(this.receive===callback)this.receive=null;}
+    postMessage(){}
+  };
+  const observer=installMediaObserver(target);
+  const pendingFetch=target.fetch('/api/graphql/');
+  const worker=new target.Worker('worker.js'),lateWorkerMessage=worker.receive;
+  const xhr=new target.XMLHttpRequest();xhr.deferLoad=true;xhr.open('GET','https://social.example/api/graphql/');xhr.responseType='';xhr.send();
+  const lateXhrLoad=xhr.listeners.load;xhr.responseText=feedRecord('late-xhr');
+  const response=new target.Response('https://social.example/api/graphql/',null,'application/json');response.deferJson=true;
+  const pendingJson=response.json();
+  const lateJsonParse=target.JSON.parse;
+  observer.dispose();
+  lateXhrLoad?.call(xhr);
+  lateWorkerMessage?.({data:{__typename:'Video',id:'late-worker',playAddr:'https://cdn.example/worker.mp4'}});
+  lateJsonParse(feedRecord('late-parse'));
+  response.resolveJson(JSON.parse(feedRecord('late-response')));
+  releaseFetch(new target.Response('https://social.example/api/graphql/',feedRecord('late-fetch'),'application/json'));
+  await Promise.all([pendingFetch,pendingJson]);
+  assert.equal(xhr.listeners.load,undefined,'dispose removes pending XHR listeners');
+  assert.equal(observer.diagnosticsFor().metadataQueue,0);
+  assert.equal(observer.modelFor({closest:()=>null}),null);
+});
 
 test('FB worker metadata binds only to the exact rendered player identity',()=>{
  const target=browser();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};

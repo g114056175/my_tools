@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {genericFallbackEligible,genericEmbedPlatform,createGenericFallback,earlyPlayerPlatform} from '../extension/generic-fallback.js';
+import {genericFallbackEligible,genericEmbedPlatform,createGenericFallback,earlyPlayerEligible,earlyPlayerPlatform} from '../extension/generic-fallback.js';
 import {classifyFailure} from '../extension/diagnostics.js';
 import {stableHash} from '../extension/download-identity.js';
 
@@ -10,7 +10,7 @@ const proposal=()=>({binding:{mediaKey:7,source:'blob:a',pageUrl:descriptor.refe
 function make(options={}){
  const calls={primary:[],collect:0,validate:0,forget:[],cancel:[]};const firstError=options.firstError || noSource(),result=options.result || {id:'recovered',title:'影片 1'};
  const instance=createGenericFallback({
-  primary:async(d,id)=>{calls.primary.push({d,id});if(calls.primary.length===1&&!options.success)throw firstError;return options.pending?options.pending:result;},
+  primary:async(d,id,primaryOptions)=>{calls.primary.push({d,id,options:primaryOptions});if(calls.primary.length===1&&!options.success)throw firstError;return options.pending?options.pending:result;},
   collect:async(...args)=>{calls.collect++;return options.collect?options.collect(...args):proposal();},
   validate:async(...args)=>{calls.validate++;return options.validate?options.validate(calls.validate,...args):true;},
   forget:async id=>calls.forget.push(id),cancelPrimary:async id=>calls.cancel.push(id),
@@ -19,25 +19,36 @@ function make(options={}){
  return {instance,calls,firstError,result};
 }
 
-test('old successes return the identical object with zero new discovery, validation, hashing or probing',async()=>{
- for(const referer of [descriptor.referer,'https://x.com/a/status/1','https://www.youtube.com/watch?v=one']){
-  const result=Object.freeze({id:'old',title:'real title',choices:{video:{heights:[1080]}}}),rt=make({success:true,result});
+const providerPages=['https://www.youtube.com/watch?v=one','https://www.bilibili.com/video/BV123','https://x.com/a/status/1','https://www.facebook.com/watch/?v=1','https://www.instagram.com/reel/one/','https://www.tiktok.com/@a/video/1','https://www.threads.net/@a/post/one','https://www.twitch.tv/videos/123','https://www.reddit.com/r/videos/comments/one/','https://vimeo.com/1084537','https://www.dailymotion.com/video/x123','https://anime1.me/123','https://ani.gamer.com.tw/animeVideo.php?sn=123'];
+
+test('existing results including silent video and subtitles return unchanged with zero fallback work',async()=>{
+ for(const referer of [descriptor.referer,...providerPages])for(const choices of [{video:{heights:[1080]}},{video:{enabled:true},audio:{enabled:false}},{video:{enabled:false},audio:{enabled:false}}]){
+  const result=Object.freeze({id:'old',title:'real title',choices,tracks:[{language:'en'}]}),rt=make({success:true,result});
   const resolved=await rt.instance.inspect({...descriptor,referer},'old');
   assert.equal(resolved.result,result);assert.equal(rt.calls.primary.length,1);assert.equal(rt.calls.collect,0);assert.equal(rt.calls.validate,0);assert.deepEqual(rt.calls.cancel,[]);
  }
 });
 
-test('all protected platform failures stay on the existing route',async()=>{
- for(const host of ['youtube.com','m.youtube.com','youtu.be','youtube-nocookie.com','bilibili.com','b23.tv','x.com','twitter.com','facebook.com','fb.watch','instagram.com','threads.net','threads.com','tiktok.com','twitch.tv','clips.twitch.tv','reddit.com','redd.it','dailymotion.com','vimeo.com','anime1.me','ani.gamer.com.tw']){
-  const rt=make();await assert.rejects(rt.instance.inspect({...descriptor,referer:'https://'+host+'/watch'},host),e=>e===rt.firstError);
-  assert.equal(rt.calls.collect,0,host);assert.equal(rt.calls.primary.length,1);
+test('missing sources can use selected-player evidence on every host without a platform allowlist',async()=>{
+ for(const referer of providerPages){
+  const p={...proposal(),binding:{...proposal().binding,pageUrl:referer}},rt=make({collect:()=>p});
+  const resolved=await rt.instance.inspect({...descriptor,referer},referer);
+  assert.equal(resolved.result,rt.result);assert.equal(rt.calls.collect,1);assert.equal(rt.calls.primary.length,2);assert.equal(rt.calls.validate,2);
  }
- for(const site of ['youtube','bilibili','x','twitch-clip','facebook','instagram','tiktok','dailymotion'])assert.equal(genericFallbackEligible({...descriptor,platform:{site}}),false);
+ for(const site of ['youtube','bilibili','x','twitch-clip','facebook','instagram','tiktok','dailymotion','future-provider'])assert.equal(genericFallbackEligible({...descriptor,platform:{site}}),true);
+});
+
+test('no owned player evidence preserves the original failure instead of borrowing network candidates',async()=>{
+ for(const referer of providerPages){
+  const rt=make({collect:()=>({valid:false})});
+  await assert.rejects(rt.instance.inspect({...descriptor,referer},referer),e=>e===rt.firstError);
+  assert.equal(rt.calls.collect,1);assert.equal(rt.calls.primary.length,1);assert.equal(rt.calls.validate,0);
+ }
 });
 
 test('only exact scoped HTTP player descriptors are eligible',()=>{
  assert.equal(genericFallbackEligible(descriptor),true);
- for(const patch of [{tabId:null},{frameId:null},{documentId:''},{mediaKey:null},{referer:'file:///clip'},{referer:'https://u:p@unknown.test'},{drm:true}])assert.equal(genericFallbackEligible({...descriptor,...patch}),false);
+ for(const patch of [{tabId:null},{tabId:-1},{frameId:null},{frameId:-1},{documentId:''},{mediaKey:null},{referer:'file:///clip'},{referer:'https://u:p@unknown.test'},{drm:true}])assert.equal(genericFallbackEligible({...descriptor,...patch}),false);
  assert.equal(genericFallbackEligible({...descriptor,referer:'https://youtube.com.evil.example/'}),true);
 });
 
@@ -76,6 +87,16 @@ test('fallback has an independent timeout even if collection never resolves',asy
  assert.ok(performance.now()-start<500);assert.deepEqual(rt.calls.cancel,['timeout']);
 });
 
+test('force is forwarded to primary discovery on both the direct and fallback routes',async()=>{
+ const direct=make({success:true});
+ await direct.instance.inspect(descriptor,'forced-direct',{force:true});
+ assert.deepEqual(direct.calls.primary.map(call=>call.options),[{force:true}]);
+
+ const fallback=make();
+ await fallback.instance.inspect(descriptor,'forced-fallback',{force:true});
+ assert.deepEqual(fallback.calls.primary.map(call=>call.options),[{force:true},{force:true}]);
+});
+
 test('cancel before and during fallback stops further probes',async()=>{
  const rt=make();rt.instance.cancel('early');await assert.rejects(rt.instance.inspect(descriptor,'early'),{code:'CANCELLED'});assert.equal(rt.calls.collect,0);
  const active=make({collect:()=>new Promise(()=>{})}),pending=active.instance.inspect(descriptor,'active');
@@ -109,6 +130,9 @@ test('early routing admits only one owned JW/JSON-LD source and leaves existing 
  for(const patch of [{parser:'videojs'},{parser:'data-setup'},{valid:false},{duration:Infinity},{candidates:base.candidates},{binding:{...p.binding,mediaKey:8}},{binding:{...p.binding,source:'https://cdn.test/live.mp4'}}])assert.equal(earlyPlayerPlatform(descriptor,{...p,...patch},stableHash),null);
  assert.equal(earlyPlayerPlatform({...descriptor,platform:{site:'embedded'}},p,stableHash),null);
  assert.equal(earlyPlayerPlatform({...descriptor,referer:'https://x.com/a/status/1'},p,stableHash),null);
+ assert.equal(earlyPlayerEligible(descriptor),true);
+ for(const referer of providerPages)assert.equal(earlyPlayerEligible({...descriptor,referer}),false,'provider discovery keeps its original order');
+ assert.equal(earlyPlayerEligible({...descriptor,platform:{site:'future-provider'}}),false);
 });
 
 test('prepared early sources skip primary discovery but are revalidated before and after the media probe',async()=>{

@@ -357,6 +357,43 @@ test('post descriptors and resource-only player descriptors coalesce without mer
  assert.equal(store.models().length,2);
 });
 
+test('a shared route alias stays ambiguous while a unique route model remains compatible',()=>{
+ const shared='7690095904514297106',store=createMediaModelStore();
+ const make=(id,url)=>extractMediaModels({id,videoID:shared,playAddr:url});
+ store.merge(make('post-a','https://cdn.example/a.mp4'));
+ store.merge(make('post-b','https://cdn.example/b.mp4'));
+ const video={closest:()=>null,getAttribute:()=>null};
+ const pageUrl=`https://unknown.example/video/${shared}`;
+ assert.equal(store.diagnosticsFor(video,pageUrl).reason,'ambiguous-model');
+ assert.equal(store.modelFor(video,pageUrl),null);
+
+ const unique=createMediaModelStore();unique.merge(make('post-a','https://cdn.example/a.mp4'));
+ assert.equal(unique.modelFor(video,pageUrl).id,'post-a');
+});
+
+test('a shared route alias is disambiguated by the actual player URL only',()=>{
+ const shared='7690095904514297106',store=createMediaModelStore();
+ store.merge(extractMediaModels({id:'post-a',videoID:shared,playAddr:'https://cdn.example/a.mp4'}));
+ store.merge(extractMediaModels({id:'post-b',videoID:shared,playAddr:'https://cdn.example/b.mp4'}));
+ const video={currentSrc:'https://cdn.example/b.mp4',closest:()=>null,getAttribute:()=>null};
+ const pageUrl=`https://unknown.example/video/${shared}`;
+ assert.equal(store.modelFor(video,pageUrl).id,'post-b');
+ assert.equal(store.diagnosticsFor(video,pageUrl).reason,'matched');
+});
+
+test('explicit local IDs bind each video correctly on a multi-player page',()=>{
+ const shared='7690095904514297106',store=createMediaModelStore();
+ store.merge(extractMediaModels({id:'post-a',videoID:shared,playAddr:'https://cdn.example/a.mp4'}));
+ store.merge(extractMediaModels({id:'post-b',videoID:shared,playAddr:'https://cdn.example/b.mp4'}));
+ const videoA={closest:()=>null,getAttribute:key=>key==='data-video-id'?'post-a':null};
+ const videoB={closest:()=>null,getAttribute:key=>key==='data-video-id'?'post-b':null};
+ const document={querySelectorAll:selector=>selector==='video'?[videoA,videoB]:[]};
+ videoA.ownerDocument=document;videoB.ownerDocument=document;
+ const pageUrl=`https://unknown.example/video/${shared}`;
+ assert.equal(store.modelFor(videoA,pageUrl).id,'post-a');
+ assert.equal(store.modelFor(videoB,pageUrl).id,'post-b');
+});
+
 test('new FB delivery must agree independently even when legacy delivery has the correct ID',()=>{
  const [model]=extractMediaModels({__typename:'Video',id:'current',videoDeliveryLegacyFields:{id:'current',browser_native_hd_url:'https://cdn.example/right.mp4'},videoDeliveryResponseFragment:{videoDeliveryResponseResult:{id:'other',progressive_urls:[{progressive_url:'https://cdn.example/wrong.mp4'}]}}});
  assert.deepEqual(model.versions.map(v=>v.url),['https://cdn.example/right.mp4']);

@@ -28,11 +28,11 @@ test('native menu follows current title and options after feed refresh',()=>{
 });
 test('native menu follows empty, disabled and hidden state',()=>{
  const s=setup();s.source.hidden=true;s.source.disabled=true;s.api.render();assert.equal(s.root.hidden,true);assert.equal(s.select.disabled,true);
- s.source.options=[];s.source.value='';s.api.render();assert.equal(s.select.options[0].textContent,'沒有可用影片');assert.equal(s.select.disabled,true);
+ s.source.options=[];s.source.value='';s.api.render();assert.equal(s.select.options[0].textContent,'No videos available');assert.equal(s.select.disabled,true);
 });
 test('disabled options and display-only option never activate a video',()=>{
  const s=setup();s.source.options[1].disabled=true;s.api.render();s.select.value='1';s.select.listeners.change();s.select.listeners.change();
- assert.deepEqual(s.calls,[]);assert.equal(s.select.attributes['aria-label'],'目前影片');
+ assert.deepEqual(s.calls,[]);assert.equal(s.select.attributes['aria-label'],'Current video');
 });
 
 test('native option widths follow the rendered field and preserve full source titles after resize',()=>{

@@ -1,4 +1,4 @@
-// Serialized into MAIN only after the old route has failed on an unknown site.
+// Read only the selected player, for early discovery or missing-source recovery.
 // All helpers are local: no observer hooks, model/cache writes, eval, setup,
 // playback changes, global-object walks, page-wide iframe scans or persistence.
 export function genericPlayerSnapshot({mediaKey,pageUrl,binding:expected,mode}={}){

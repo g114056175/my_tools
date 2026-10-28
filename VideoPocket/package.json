@@ -6,7 +6,10 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "build:observer": "node build/build-media-observer.mjs",
-    "build:mediabunny": "node evaluation/build.mjs"
+    "build:mediabunny": "node evaluation/build.mjs",
+    "package": "node build/package-extension.mjs package",
+    "check:package": "node build/package-extension.mjs check",
+    "release:check": "npm test && npm run build:observer && npm run package && npm run check:package"
   },
   "devDependencies": {"esbuild":"0.28.2"}
 }

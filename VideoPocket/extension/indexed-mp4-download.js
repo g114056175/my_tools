@@ -64,6 +64,21 @@
     return { sink, first, last: last || undefined, base: first.timestamp };
   }
 
+  async function videoTransformMetadata(track) {
+    if (typeof track?.getTransformationMatrix !== 'function') {
+      return { rotation: await track?.getRotation?.() ?? 0, flip: await track?.getFlip?.() ?? false };
+    }
+    let value;
+    try { value = await track.getTransformationMatrix(); }
+    catch { throw Object.assign(new Error('無法讀取影片顯示變形'), { code: 'RANGE_UNSUPPORTED' }); }
+    const matrix = Array.from(value || []);
+    if (matrix.length !== 9 || matrix.some(number => !Number.isFinite(number))) {
+      throw Object.assign(new Error('影片顯示變形格式無效'), { code: 'RANGE_UNSUPPORTED' });
+    }
+    // Keep the full affine transform. MP4 stores this matrix directly in tkhd.
+    return { transformationMatrix: matrix };
+  }
+
   async function downloadIndexedMp4({ format, range, signal, scope, kind = 'video', expectedAudio = true, readRange, onBytes, onRequest, onProgress=()=>{} }) {
     const M = root.VideoPocketMediabunny, disk = root.VideoPocketDiskMedia;
     if (!M || !disk) throw new Error('Mediabunny/OPFS runtime unavailable');
@@ -76,7 +91,7 @@
       if (kind === 'video' && !videoTrack) throw new Error('MP4 缺少影片軌');
       if (kind === 'video' && expectedAudio && !audioTrack) throw new Error('MP4 缺少音訊軌');
       if (kind === 'audio' && !audioTrack) throw new Error('MP4 缺少音訊軌');
-      const video = videoTrack && { track: videoTrack, ...(await trackWindow(videoTrack, 'video', range, signal)), codec: await videoTrack.getCodec(), config: await videoTrack.getDecoderConfig() };
+      const video = videoTrack && { track: videoTrack, ...(await trackWindow(videoTrack, 'video', range, signal)), codec: await videoTrack.getCodec(), config: await videoTrack.getDecoderConfig(), transform: await videoTransformMetadata(videoTrack) };
       const audio = audioTrack && { track: audioTrack, ...(await trackWindow(audioTrack, 'audio', range, signal)), codec: await audioTrack.getCodec(), config: await audioTrack.getDecoderConfig() };
       const tracks = [video, audio].filter(Boolean), base = Math.min(...tracks.map(t => t.base));
       out = await disk.createSyncMediaFile(scope, 'indexed.mp4');
@@ -84,7 +99,7 @@
       mux = new M.Output({ format: new M.Mp4OutputFormat({ fastStart: false }), target });
       const sources = tracks.map(t => {
         const source = t === video ? new M.EncodedVideoPacketSource(t.codec) : new M.EncodedAudioPacketSource(t.codec);
-        mux[t === video ? 'addVideoTrack' : 'addAudioTrack'](source, { decoderConfig: t.config }); return source;
+        mux[t === video ? 'addVideoTrack' : 'addAudioTrack'](source, { decoderConfig: t.config, ...(t === video ? t.transform : {}) }); return source;
       });
       await mux.start();
       // Each track streams directly to the muxer. No packet array is retained.
@@ -102,5 +117,5 @@
       await mux?.cancel?.().catch(() => {}); await out?.abort?.(); throw error;
     } finally { await input.dispose?.(); }
   }
-  root.VideoPocketIndexedMp4 = { CHUNK_SIZE: CHUNK, MAX_CACHE_CHUNKS: MAX_CHUNKS, createIndexedMp4Reader, downloadIndexedMp4 };
+  root.VideoPocketIndexedMp4 = { CHUNK_SIZE: CHUNK, MAX_CACHE_CHUNKS: MAX_CHUNKS, createIndexedMp4Reader, videoTransformMetadata, downloadIndexedMp4 };
 })(typeof self !== 'undefined' ? self : globalThis);

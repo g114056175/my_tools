@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {pageSubtitles} from '../extension/page.js';
+import {pageSubtitles} from '../extension/page-subtitles.js';
+import {pageSubtitles as pageEntryPoint} from '../extension/page.js';
 
 const VIDEO_ID = 'abcdefghijk';
+const executeScriptFunction = new Function(`return (${pageSubtitles.toString()})`)();
+
+test('page.js re-exports the self-contained executeScript subtitle function',()=>{
+  assert.equal(pageEntryPoint,pageSubtitles);
+});
 
 function responseBody(text, ok = true, status = 200) {
   return {ok, status, url: `https://www.youtube.com/api/timedtext?v=${VIDEO_ID}`, text: async () => text};
@@ -43,7 +49,7 @@ test('multiple original tracks can be fetched while player captions are closed',
   const tracks = [track('en-main', 'en', 'English'), track('zh-main', 'zh-TW', '中文（台灣）')];
   const world = youtubeWorld({tracks, fetchResult: responseBody('{"events":[{"tStartMs":0,"dDurationMs":1000,"segs":[{"utf8":"台灣字幕"}]}]}'), selector: {pageTrackId: 'zh-main'}});
   try {
-    const result = await pageSubtitles('zh-TW', true, 0, false, world.selector);
+    const result = await executeScriptFunction('zh-TW', true, 0, false, world.selector);
     assert.equal(JSON.parse(result.raw).events[0].segs[0].utf8, '台灣字幕');
     assert.equal(result.language, 'zh-TW');
     assert.match(world.calls[0], /lang=zh-TW/);
@@ -54,7 +60,7 @@ test('selected vssId survives list reordering while the player is displaying ano
   const tracks = [track('zh-main', 'zh-TW', '中文（台灣）'), track('en-main', 'en', 'English')];
   const world = youtubeWorld({tracks, activeTrack: tracks[0], fetchResult: responseBody('{"events":[{"tStartMs":1000,"dDurationMs":1000,"segs":[{"utf8":"正確來源"}]}]}'), selector: {pageTrackId: 'en-main',pageTrackIndex:0}});
   try {
-    const result = await pageSubtitles('en', true, 0, false, world.selector);
+    const result = await executeScriptFunction('en', true, 0, false, world.selector);
     assert.equal(JSON.parse(result.raw).events[0].segs[0].utf8, '正確來源');
     assert.match(world.calls[0], /lang=en/);
     assert.doesNotMatch(world.calls[0], /zh-TW/);
@@ -65,7 +71,7 @@ test('same-language author variants require the exact selected vssId', async () 
   const tracks = [track('zh-author-a', 'zh-TW', '作者版 A'), track('zh-author-b', 'zh-TW', '作者版 B')];
   const world = youtubeWorld({tracks, fetchResult: responseBody('{"events":[{"tStartMs":0,"dDurationMs":1000,"segs":[{"utf8":"B 版本"}]}]}'), selector: {pageTrackId: 'zh-author-b'}});
   try {
-    const result = await pageSubtitles('zh-TW', true, 0, false, world.selector);
+    const result = await executeScriptFunction('zh-TW', true, 0, false, world.selector);
     assert.equal(JSON.parse(result.raw).events[0].segs[0].utf8, 'B 版本');
     assert.match(world.calls[0], /name=%E4%BD%9C%E8%80%85%E7%89%88(?:%20|\+)B/);
   } finally { world.restore(); }
@@ -76,7 +82,7 @@ test('HTTP failure and empty body are reported without falling back to another t
     const tracks = [track('zh-main', 'zh-TW', '中文（台灣）'), track('en-main', 'en', 'English')];
     const world = youtubeWorld({tracks, fetchResult, selector: {pageTrackId: 'zh-main'}});
     try {
-      const result = await pageSubtitles('zh-TW', true, 0, false, world.selector);
+      const result = await executeScriptFunction('zh-TW', true, 0, false, world.selector);
       assert.equal(result.errorCode, code);
       assert.equal(world.calls.length, 1);
       assert.match(world.calls[0], /lang=zh-TW/);
@@ -88,7 +94,7 @@ test('caption capture does not control the player', async () => {
   const tracks = [track('zh-main', 'zh-TW', '中文（台灣）')];
   const world = youtubeWorld({tracks, fetchResult: responseBody('{"events":[{"tStartMs":0,"dDurationMs":1000,"segs":[{"utf8":"字幕"}]}]}'), selector: {pageTrackId: 'zh-main'}});
   try {
-    const result = await pageSubtitles('zh-TW', true, 0, false, world.selector);
+    const result = await executeScriptFunction('zh-TW', true, 0, false, world.selector);
     assert.equal(JSON.parse(result.raw).events[0].segs[0].utf8, '字幕');
     assert.equal(world.calls.length, 1);
     assert.deepEqual(world.controls, {play: 0, pause: 0, load: 0});

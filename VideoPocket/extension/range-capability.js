@@ -24,10 +24,10 @@ function reasonResult(supported, reason, kind = null) {
 
 /** Decide whether one format can provide a precise range plan. */
 export function formatRangeCapability(format, { maxIndexBytes = RANGE_INDEX_MAX_BYTES } = {}) {
-  if (!format || typeof format !== 'object') return reasonResult(false, '缺少影音軌');
+  if (!format || typeof format !== 'object') return reasonResult(false, 'A video or audio track is missing.');
   if (Array.isArray(format.segments) && format.segments.length > 0) {
     if (!format.segments.every(segment => finitePositive(segment?.duration))) {
-      return reasonResult(false, '影音片段缺少有效 duration', 'segments');
+      return reasonResult(false, 'A media segment has an invalid duration.', 'segments');
     }
     return reasonResult(true, null, 'segments');
   }
@@ -35,19 +35,19 @@ export function formatRangeCapability(format, { maxIndexBytes = RANGE_INDEX_MAX_
     return reasonResult(true, null, 'mp4-samples');
   }
   const index = parseByteRange(format.indexRange);
-  if (!index) return reasonResult(false, '影音軌缺少可用區間索引', 'sidx');
+  if (!index) return reasonResult(false, 'The media track has no usable range index.', 'sidx');
   if (!Number.isSafeInteger(maxIndexBytes) || maxIndexBytes <= 0 || index.length > maxIndexBytes) {
-    return reasonResult(false, 'SIDX 索引超過探測上限', 'sidx');
+    return reasonResult(false, 'The SIDX index exceeds the probe limit.', 'sidx');
   }
   return reasonResult(true, null, 'sidx');
 }
 
 /** Decide whether a selected video/audio plan is range-capable. */
 export function planRangeCapability(plan, { duration, sabr = false, maxIndexBytes = RANGE_INDEX_MAX_BYTES } = {}) {
-  if (!finitePositive(duration)) return reasonResult(false, '尚未取得完整影片長度');
+  if (!finitePositive(duration)) return reasonResult(false, 'The full video duration is unavailable.');
   const formats = [plan?.video, plan?.audio].filter(Boolean);
   // Array.prototype.every([]) is true; an empty plan must not advertise support.
-  if (!formats.length) return reasonResult(false, '計畫沒有可用影音軌');
+  if (!formats.length) return reasonResult(false, 'The plan has no usable video or audio tracks.');
   if (sabr) return reasonResult(true, null, 'sabr');
   for (const format of formats) {
     const result = formatRangeCapability(format, { maxIndexBytes });
@@ -82,6 +82,6 @@ export function rangeCapability(source, capability, { maxIndexBytes = RANGE_INDE
       audio: Object.fromEntries(Object.entries(audio).map(([key, value]) => [key, value.supported]))
     },
     planDetails: { video, audio },
-    reason: supported ? null : (failure?.reason || '沒有可用的影音區間計畫')
+    reason: supported ? null : (failure?.reason || 'No usable range plan is available.')
   };
 }

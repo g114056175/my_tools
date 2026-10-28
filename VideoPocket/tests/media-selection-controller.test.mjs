@@ -5,6 +5,11 @@ import {stableHash} from '../extension/download-identity.js';
 
 const frames = [{frameId: 0, documentId: 'top-doc', result: {url: 'https://example.test/feed'}}, {frameId: 2, documentId: 'child-doc', result: {url: 'https://example.test/frame'}}];
 
+function intentTracker({ready=()=>Promise.resolve()}={}){
+ const leases=[];
+ return {leases,acquireIntent(tabId){const lease={tabId,released:0,ready:ready(tabId,leases.length),async release(){lease.released++;}};leases.push(lease);return lease;}};
+}
+
 function apiMock() {
   const calls = []; const badges = []; const writes = []; let writeResolve;
   const api = {
@@ -100,16 +105,45 @@ test('explicit clear cancels the picker and waits for a pending selection write 
 });
 
 test('begin claims tab before frame discovery and a later begin owns the tab', async () => {
-  const api = apiMock(); const controller = createMediaSelectionController(api);
+  const api = apiMock(),intents=intentTracker(); const controller = createMediaSelectionController(api,{acquireIntent:intents.acquireIntent});
   let firstDiscoveryResolve; let discoveryCount = 0; api.scripting.executeScript = async request => {
     api.calls.push(request);
     if (!request.args) { discoveryCount++; if (discoveryCount === 1) return new Promise(resolve => { firstDiscoveryResolve = resolve; }); return frames; }
-    return [];
+    if(request.target?.allFrames)return [];
+    return new Promise(()=>{});
   };
-  const first = controller.begin(11); const second = controller.begin(11);
+  const first = controller.begin(11);while(!firstDiscoveryResolve)await new Promise(resolve=>setImmediate(resolve));const second = controller.begin(11);
   firstDiscoveryResolve(frames);
   assert.deepEqual(await first, {started: false});
   assert.equal((await second).started, true);
+  assert.deepEqual(intents.leases.map(lease=>lease.released),[1,0]);
+  await controller.stop(11);assert.deepEqual(intents.leases.map(lease=>lease.released),[1,1]);
+});
+
+test('intent acquisition failure releases its lease and does not keep a picker active',async()=>{
+ const api=apiMock(),intents=intentTracker({ready:()=>Promise.reject(new Error('intent unavailable'))});api.scripting.executeScript=async request=>{api.calls.push(request);return [];};const controller=createMediaSelectionController(api,{acquireIntent:intents.acquireIntent});
+ await assert.rejects(controller.begin(13),/intent unavailable/);
+ assert.equal(intents.leases.length,1);assert.equal(intents.leases[0].released,1);
+});
+
+test('frame discovery failure releases the acquired intent',async()=>{
+ const api=apiMock(),intents=intentTracker();api.scripting.executeScript=async request=>{
+  api.calls.push(request);
+  if(!request.args)throw new Error('frame discovery failed');
+  return [];
+ };
+ const controller=createMediaSelectionController(api,{acquireIntent:intents.acquireIntent});
+ await assert.rejects(controller.begin(15),/frame discovery failed/);
+ assert.equal(intents.leases.length,1);assert.equal(intents.leases[0].released,1);
+ assert.ok(api.calls.some(request=>request.args?.[0]?.requestId),'failed startup cancels any partially installed picker');
+});
+
+test('a pending intent lease is released when the request is stopped before readiness',async()=>{
+ let ready;const api=apiMock(),intents=intentTracker({ready:()=>new Promise(resolve=>{ready=resolve;})});api.scripting.executeScript=async request=>{api.calls.push(request);return [];};const controller=createMediaSelectionController(api,{acquireIntent:intents.acquireIntent});
+ const pending=controller.begin(14);await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(api.calls.length,0,'frame discovery waits for the observer intent');
+ await controller.stop(14);assert.equal(intents.leases[0].released,1);
+ ready();assert.deepEqual(await pending,{started:false});assert.equal(intents.leases[0].released,1);
 });
 
 test('late storage completion from an old selection cannot clear a newer request', async () => {
@@ -152,21 +186,46 @@ function pickerApi({storageSet, frameResult = () => null} = {}) {
 
 test('successful selection cancels every other frame with the same requestId', async () => {
   const api = pickerApi({frameResult: options => options.frameId === 2 ? {ok: true, mediaKey: 7, url: 'https://cdn/selected'} : null});
-  const controller = createMediaSelectionController(api); await controller.begin(20);
+  const intents=intentTracker(),controller = createMediaSelectionController(api,{acquireIntent:intents.acquireIntent}); await controller.begin(20);
   await new Promise(resolve => setImmediate(resolve));
   const picker = api.calls.find(call => call.args?.[0]?.frameId === 2); const requestId = picker.args[0].requestId;
   const cancel = api.calls.find(call => call.target?.allFrames && call.args?.[0]?.requestId === requestId);
   assert.ok(cancel, 'selection completion broadcasts cancellation to all frames');
+  assert.equal(intents.leases[0].released,1,'success releases its observer intent before popup reopen');
   assert.deepEqual(api.badges, [], 'successful selection must not add a toolbar badge');
 });
 
 test('Escape cancellation broadcasts to every frame', async () => {
   const api = pickerApi({frameResult: options => options.frameId === 0 ? {ok: false, reason: 'cancelled'} : null});
-  const controller = createMediaSelectionController(api); await controller.begin(21);
+  const intents=intentTracker(),controller = createMediaSelectionController(api,{acquireIntent:intents.acquireIntent}); await controller.begin(21);
   await new Promise(resolve => setImmediate(resolve));
   const picker = api.calls.find(call => call.args?.[0]?.frameId === 0); const requestId = picker.args[0].requestId;
   assert.ok(api.calls.some(call => call.target?.allFrames && call.args?.[0]?.requestId === requestId));
+  assert.equal(intents.leases[0].released,1);
   assert.deepEqual(api.badges, [], 'cancellation must not change the toolbar badge');
+});
+
+test('picker timeout and frame errors each release only their own observer intent',async()=>{
+ const expiredApi=pickerApi({frameResult:()=>({ok:false,reason:'expired'})}),expiredIntents=intentTracker(),expired=createMediaSelectionController(expiredApi,{acquireIntent:expiredIntents.acquireIntent});
+ assert.deepEqual(await expired.begin(24),{started:true});
+ for(let i=0;i<20&&expiredIntents.leases[0].released===0;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(expiredIntents.leases[0].released,1);
+
+ const errorApi=pickerApi(),errorIntents=intentTracker();errorApi.scripting.executeScript=async request=>{
+  errorApi.calls.push(request);if(!request.args)return frames;if(request.target?.allFrames)return [];
+  throw new Error('frame unavailable');
+ };
+ const errored=createMediaSelectionController(errorApi,{acquireIntent:errorIntents.acquireIntent});
+ assert.deepEqual(await errored.begin(25),{started:true});
+ for(let i=0;i<20&&errorIntents.leases[0].released===0;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(errorIntents.leases[0].released,1);
+});
+
+test('stopping one tab does not release another tab request intent',async()=>{
+ const api=pickerApi(),intents=intentTracker(),controller=createMediaSelectionController(api,{acquireIntent:intents.acquireIntent});
+ assert.deepEqual(await controller.begin(26),{started:true});assert.deepEqual(await controller.begin(27),{started:true});
+ await controller.stop(26);assert.deepEqual(intents.leases.map(lease=>lease.released),[1,0]);
+ await controller.stop(27);assert.deepEqual(intents.leases.map(lease=>lease.released),[1,1]);
 });
 
 test('storage failure releases active request so a later selection can start', async () => {

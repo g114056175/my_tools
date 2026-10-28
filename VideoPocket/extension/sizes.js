@@ -6,4 +6,4 @@ export function formatBytes(bytes){
 }
 // Even a known byte count is rounded for display; keep its provenance in the
 // data while using the same concise approximation marker throughout the UI.
-export function formatSize(size){const text=formatBytes(size?.bytes);return text?`約 ${text}`:'大小未知';}
+export function formatSize(size){const text=formatBytes(size?.bytes);return text?`~ ${text}`:'Unknown size';}

@@ -1,12 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
-import { socialPageResponse } from "../extension/social-page-fetch.js";
+import { socialPageFetch, socialPageResponse } from "../extension/social-page-fetch.js";
 import {directTransfer} from '../extension/transfers.js';
 import {createHash} from 'node:crypto';
 
-const source = await (await import("node:fs/promises")).readFile(new URL("../extension/social-page-fetch.js", import.meta.url), "utf8");
-const serializedFetch = source.match(/export async function socialPageFetch[\s\S]*?\n}\n\nexport async function/)[0].replace(/\n\nexport async function$/, "").replace(/^export /, "");
+const serializedFetch = socialPageFetch.toString();
 const load = (fetchImpl, { now = 1000 } = {}) => {
   const clock = typeof now === "function" ? now : () => now;
   const context = { fetch: fetchImpl, location: { href: "https://www.facebook.com/reel/1" }, URL, URLSearchParams, AbortController, ReadableStream, TextDecoder, Uint8Array, crypto: { randomUUID: () => `h-${clock()}-${Math.random()}` }, setTimeout, clearTimeout, Date: class extends Date { static now() { return clock(); } } };
@@ -68,6 +67,15 @@ test("reads complete chunks with leftover bytes and cancels", async () => {
   assert.equal(tail.data.length, 300000 - 256 * 1024);
   assert.equal(tail.done, false);
   assert.equal((await largeContext.socialPageFetch("read", { handle: large.handle })).done, true);
+});
+
+test('page media disappearance remains typed when the streamed response rejects',async()=>{
+ const response=await socialPageResponse(async message=>{
+  if(message.action==='open')return {status:200,handle:'gone',done:false,headers:{'content-type':'video/mp4'}};
+  if(message.action==='read')throw Object.assign(new Error('original player retired'),{code:'PAGE_MEDIA_GONE'});
+  return {};
+ },{url:'https://video.xx.fbcdn.net/a.mp4',referer:'https://www.facebook.com/reel/1'});
+ await assert.rejects(response.arrayBuffer(),{code:'PAGE_MEDIA_GONE'});
 });
 
 test("caps active readers and expires idle sessions", async () => {

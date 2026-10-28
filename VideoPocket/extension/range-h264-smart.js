@@ -43,6 +43,13 @@
   for(const key of ['primaries','transfer','matrix','fullRange'])if(a.colorSpace?.[key]!=null&&b.colorSpace?.[key]!=null&&a.colorSpace[key]!==b.colorSpace[key])return false;
   return true;
  }
+ async function transformationMetadata(track){
+  if(typeof track?.getTransformationMatrix!=='function')return {rotation:await track?.getRotation?.()??0,flip:await track?.getFlip?.()??false};
+  let value;try{value=await track.getTransformationMatrix();}catch{throw unsupported('無法讀取 H.264 影片顯示變形');}
+  const matrix=Array.from(value||[]);
+  if(matrix.length!==9||matrix.some(number=>!Number.isFinite(number)))throw unsupported('H.264 影片顯示變形格式無效');
+  return {transformationMatrix:matrix};
+ }
  async function plan(track,start,end){
   if(await track.getCodec()!=='avc'||await track.canBeTransparent?.())return null;
   const config=await track.getDecoderConfig();if(!/^avc1\.[0-9a-f]{6}$/i.test(config?.codec||'')||!config.description)return null;
@@ -87,7 +94,7 @@
    if(!count)throw unsupported('H.264 邊界沒有影格');source.close();await output.finalize();check(signal);finished=true;return writer.finish();
   }finally{active.delete(output);if(!finished){await output.cancel().catch(()=>{});await Promise.resolve(writer.abort?.()).catch(()=>{});}}
  }
- async function tryCut({input,start,end,output,scope,kind,expectedAudio,signal,onProgress=()=>{}}){
+ async function tryCut({input,start,end,output,scope,kind,expectedAudio,signal,onProgress=()=>{},videoTransform}){
   if(kind!=='video'||!String(output).toLowerCase().endsWith('.mp4'))return null;
   const video=await input.getPrimaryVideoTrack(),audio=await input.getPrimaryAudioTrack();if(!video||expectedAudio&&!audio)return null;
   const selection=await plan(video,start,end);if(!selection)return null;
@@ -117,10 +124,11 @@
    let audioTrack;
    if(audio){const clip=await convert(input,scope,'avc-audio.mkv',paths,{trim:{start:start+1e-6,end:end-1e-6},video:{discard:true},audio:{},copy:{mode:'preferred',shiftTolerance:0,boundaryPolicy:'shrink',boundaryTolerance:.05}},signal,()=>{});audioTrack=await(await open(clip.path)).getPrimaryAudioTrack();}
    if(expectedAudio&&!audioTrack)throw unsupported('H.264 區間缺少音軌');
+   const transform=videoTransform?.matrix?{transformationMatrix:videoTransform.matrix.slice()}:await transformationMetadata(video);
    writer=await disk.createSyncMediaFile(scope,output);paths.push(writer.path);let moov;
    const destination=new M.Output({format:new M.Mp4OutputFormat({fastStart:false,onMoov(data,position){moov={data:new Uint8Array(data),position};}}),target:target(writer.access,signal)});
    const videoConfig={...headConfig,codec:headConfig.codec.replace(/^avc1/i,'avc3'),description:headAvc.description};
-   const videoSource=new M.EncodedVideoPacketSource('avc');destination.addVideoTrack(videoSource,{decoderConfig:videoConfig});
+   const videoSource=new M.EncodedVideoPacketSource('avc');destination.addVideoTrack(videoSource,{decoderConfig:videoConfig,...transform});
    const audioConfig=audioTrack&&await audioTrack.getDecoderConfig(),audioSource=audioTrack&&new M.EncodedAudioPacketSource(await audioTrack.getCodec());
    if(audioSource)destination.addAudioTrack(audioSource,{decoderConfig:audioConfig});
    await destination.start();let copiedPackets=0,copiedBytes=0,prefixPackets=0,pumpFailure;
@@ -162,5 +170,5 @@
    return {result,stats:{strategy:'smart-h264',encodedSeconds:prefixDuration+tailDuration,copiedSeconds:last.timestamp-key.timestamp,splices:[prefixDuration,last.timestamp-start],prefixPackets,copiedPackets,copiedBytes,presentationDuration:capped.duration,hardwareRequested:encode.hardwareAcceleration==='prefer-hardware'}};
   }finally{await Promise.resolve(writer?.abort?.()).catch(()=>{});for(const reader of readers)reader.dispose();for(const path of paths)if(!completed||path!==result?.path)await disk.removeMediaFile(path).catch(()=>{});}
  }
- root.VideoPocketRangeH264={configuration,units,isIdr,packetData,compatible,plan,tryCut,cancel(){for(const c of active)void c.cancel().catch(()=>{});}};
+ root.VideoPocketRangeH264={configuration,units,isIdr,packetData,compatible,transformationMetadata,plan,tryCut,cancel(){for(const c of active)void c.cancel().catch(()=>{});}};
 })(self);

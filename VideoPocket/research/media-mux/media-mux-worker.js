@@ -1,4 +1,4 @@
-importScripts('destinations.js', 'disk-media.js', 'vendor/mediabunny.js', 'media-mux.js');
+importScripts('../../extension/destinations.js', '../../extension/disk-media.js', '../../extension/vendor/mediabunny.js', './media-mux.js');
 
 let cancelled = false;
 

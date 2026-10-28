@@ -1,3 +1,4 @@
+import {createDownloadStallGuard} from '../extension/download-stall.js';
 import {attachNetworkSources,networkFallbackReason,scopeDocumentCandidates,validateOwnedSourcePlan} from '../extension/network-source.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,6 +8,13 @@ import {webcrypto} from 'node:crypto';
 import {classifyFailure} from '../extension/diagnostics.js';
 import {ACTIVE_STATES} from '../extension/jobs.js';
 import {downloadKey,createDownloadClaims,stableHash} from '../extension/download-identity.js';
+import {createJobAdmission} from '../extension/job-admission.js';
+import {createDestinationMonitor} from '../extension/destination-monitor.js';
+import {pageMediaLease,createPageMediaGuard} from '../extension/page-media-guard.js';
+import {BUILD_ID} from '../extension/build-info.js';
+import {createYoutubeSourceSessions,preferYoutubeSession} from '../extension/youtube-source-session.js';
+import {pageMediaPresence} from '../extension/media-presence.js';
+import {createDiscoveryIntent,existingMediaResources,renewPageObservation,stopPageObservation} from '../extension/discovery-intent.js';
 import {createPopupMarkerController} from '../extension/popup-marker.js';
 import {createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute} from '../extension/media-selection-controller.js';
 import {attachSocialSources} from '../extension/social-source.js';
@@ -14,61 +22,334 @@ import {normalizeRange} from '../extension/media-range.js';
 import {mediaTime} from '../extension/media-time.js';
 import {isGenericMediaTitle} from '../extension/media-titles.js';
 import {validateDocumentMediaPlan} from '../extension/document-media.js';
-import {createGenericFallback,genericFallbackEligible,earlyPlayerPlatform,genericPageUrl} from '../extension/generic-fallback.js';
+import {createGenericFallback,genericFallbackEligible,earlyPlayerEligible,earlyPlayerPlatform,genericPageUrl} from '../extension/generic-fallback.js';
 import {genericPlayerSnapshot} from '../extension/generic-player.js';
+import {createYoutubeCaptionReader,youtubeCaptionAssist} from '../extension/youtube-caption-assist.js';
+import {isExpiredSourceAuth,matchesRecoverySelection,refreshedSourceDescriptor,sourceContentIdentity,sourceRecoveryTarget} from '../extension/source-recovery.js';
 
-async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserSaveError,inspectHandler,genericSnapshots=[],tabUrl}={}) {
+async function loadBackground({frames=[],frameSnapshots=[],networkCandidates=[],inspectionInfo={},downloadFailure=null,downloadResult=null,metadataValidations=[],browserDownloadState,browserDownloadItem={},browserDownloadItems,browserSaveError,inspectHandler,genericSnapshots=[],tabUrl,recoveryValidation,downloadGate,acceptHandler,initialStorage={},initialTabs=[],destinationHandles=new Map(),getYoutubeSession=async()=>null,captionRead,offscreenPresent=false,leaseResults=[]}={}) {
   const source=await fs.readFile(new URL('../extension/background.js',import.meta.url),'utf8');
   const code=source.replace(/^import[^;]+;\s*/gm,'');
-  const stored={};let listener,tabUpdateListener,connectListener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,retainRelease;
-  const sources=new Map(),engineMessages=[],browserDownloads=[],genericCalls=[];let downloadChanged;
-  const browserItem={id:71,state:browserDownloadState};
+  const stored={...initialStorage};let listener,tabUpdateListener,tabRemovedListener,windowRemovedListener,connectListener,inspectNo=0,retainCount=0,retainMode='ok',retainBlocked=false,destinationClearCount=0,destinationMonitor,clockNow=Date.now(),portNo=0,windowCount=1;const retainReleases=[];
+  const sources=new Map(),invalidatedSources=new Set(),youtubeSourceSessions=createYoutubeSourceSessions(),engineMessages=[],browserDownloads=[],genericCalls=[],cancelledDownloadIds=[];let downloadChanged;
+  let browserItem={id:71,state:browserDownloadState,bytesReceived:0,...browserDownloadItem};
+  const RuntimeDate=class extends Date{static now(){return clockNow;}};
+  const timedDownloadStallGuard=options=>createDownloadStallGuard({...options,now:()=>clockNow});
   const pageSnapshotMock=()=>({});
+  const pageSubtitlesMock=()=>({});
   const session={
     async get(key){if(key===null)return {...stored};if(typeof key==='string')return {[key]:stored[key]};return Object.fromEntries(key.map(k=>[k,stored[k]]));},
     async set(value){Object.assign(stored,value);},
     async remove(keys){for(const key of Array.isArray(keys)?keys:[keys])delete stored[key];}
   };
   const chrome={
-    runtime:{id:'ext',getURL:path=>`chrome-extension://ext/${path}`,getContexts:async()=>[],sendMessage:async message=>{
+    runtime:{id:'ext',getURL:path=>`chrome-extension://ext/${path}`,getContexts:async()=>offscreenPresent?[{}]:[],sendMessage:async message=>{
       engineMessages.push(message);
+      if(message.action==='acceptSource'&&acceptHandler){const response=await acceptHandler(message);if(response)return response;}
+      if(message.action==='download'&&downloadGate){const result=await downloadGate(message);if(result)return result;}
       if(message.action==='inspect'&&inspectHandler){const value=await inspectHandler(message);if(value)return value;}
-      if(message.action==='inspect'){const id=`source-${++inspectNo}`,d=message.descriptor;sources.set(id,{title:d.title||'',platform:d.platform?.site||'unknown'});return {ok:true,result:{id,title:d.title||'',platform:d.platform?.site||'unknown',...inspectionInfo}};}
-      if(message.action==='download'&&downloadFailure)return {ok:false,error:'private CDN response',failure:downloadFailure};
-      if(message.action==='download'&&downloadResult)return {ok:true,result:downloadResult};
-      if(message.action==='retain'){retainCount++;if(retainMode==='reject')return {ok:false,error:'retain failed'};const s=sources.get(message.sourceId);if(retainBlocked)return new Promise(resolve=>{retainRelease=()=>resolve({ok:true,result:{title:s?.title||''}})});return {ok:true,result:{title:s?.title||''}};}
-      if(message.action==='forget'||message.action==='cancel'||message.action==='cleanup')return {ok:true,result:{}};
+      if(message.action==='inspect'){const id=`source-${++inspectNo}`,d=message.descriptor;sources.set(id,{title:d.title||'',platform:d.platform?.site||'unknown',descriptor:d});return {ok:true,result:{id,title:d.title||'',platform:d.platform?.site||'unknown',...inspectionInfo}};}
+      if(message.action==='youtubeSourceSession'){const d=sources.get(message.sourceId)?.descriptor;if(message.capture)youtubeSourceSessions.remember(d,message.capture);return {ok:true,result:youtubeSourceSessions.get(d)};}
+      if(message.action==='dropTabSources'){youtubeSourceSessions.removeTab(message.tabId);return {ok:true,result:{}};}
+      if(message.action==='download'&&downloadFailure){const failure=Array.isArray(downloadFailure)?downloadFailure.shift():typeof downloadFailure==='function'?downloadFailure(message):downloadFailure;if(failure)return {ok:false,error:'private CDN response',failure};}
+      if(message.action==='download'&&downloadResult){const result=Array.isArray(downloadResult)?downloadResult.shift():typeof downloadResult==='function'?downloadResult(message):downloadResult;if(result)return {ok:true,result};}
+      if(message.action==='validateRecovery'&&typeof recoveryValidation==='function'){const result=await recoveryValidation(message);if(result?.ok===false)return result;return {ok:true,result:result?.result||{}};}
+      if(message.action==='retain'){retainCount++;if(retainMode==='reject')return {ok:false,error:'retain failed'};if(invalidatedSources.has(message.sourceId))return {ok:false,error:'source expired',failure:{code:'SOURCE_CHANGED'}};const s=sources.get(message.sourceId);if(retainBlocked)return new Promise(resolve=>{retainReleases.push(()=>resolve({ok:true,result:{title:s?.title||''}}))});return {ok:true,result:{title:s?.title||''}};}
+      if(message.action==='forget'||message.action==='cancel'||message.action==='cleanup'||message.action==='releaseSourceOwner')return {ok:true,result:{}};
       return {ok:true,result:{}};
     },onMessage:{addListener:fn=>{listener=fn}},onConnect:{addListener:fn=>{connectListener=fn}}},
     storage:{session,onChanged:{addListener:()=>{}},local:{remove:async()=>{},get:async()=>({})}},
     offscreen:{createDocument:async()=>{}},
     declarativeNetRequest:{getSessionRules:async()=>[],updateSessionRules:async()=>{}},
-    downloads:{onChanged:{addListener:fn=>{downloadChanged=fn;}},search:async()=>browserItem.state?[browserItem]:[],cancel:async()=>{},pause:async()=>{},resume:async()=>{},...(browserDownloadState||browserSaveError?{download:async options=>{browserDownloads.push(options);const error=typeof browserSaveError==='function'?browserSaveError(options,browserDownloads.length):browserSaveError;if(error)throw error;return browserItem.id;}}:{})},
+     downloads:{onChanged:{addListener:fn=>{downloadChanged=fn;}},search:async({id}={})=>browserItem.id===id&&browserItem.state?[{...browserItem}]:[],cancel:async id=>{cancelledDownloadIds.push(id);if(browserItem.id===id)browserItem.state='interrupted';},pause:async id=>{if(browserItem.id===id)browserItem.paused=true;},resume:async id=>{if(browserItem.id===id)browserItem.paused=false;},...(browserDownloadState||browserDownloadItem||browserDownloadItems||browserSaveError?{download:async options=>{browserDownloads.push(options);if(browserDownloadItems){const configured=browserDownloadItems[browserDownloads.length-1]||{};browserItem={id:configured.id??70+browserDownloads.length,bytesReceived:0,...configured};}const error=typeof browserSaveError==='function'?browserSaveError(options,browserDownloads.length):browserSaveError;if(error)throw error;return browserItem.id;}}:{})},
     scripting:{executeScript:async request=>{
       scriptRequests.push(request);
       if(request.files)return [];
+      if(request.func===pageMediaLease)return [{documentId:request.target.documentIds[0],result:leaseResults.shift() || {valid:true}}];
       if(request.func===genericPlayerSnapshot){genericCalls.push(request);return [{documentId:request.target.documentIds[0],result:genericSnapshots.shift() || {valid:false}}];}
+      if(request.func===pageSubtitlesMock&&captionRead)return [{documentId:request.target.documentIds[0],result:await captionRead(request.args)}];
       if(request.func===validateDocumentMediaPlan||request.func===validateOwnedSourcePlan)return [{documentId:request.target.documentIds[0],result:{valid:metadataValidations.shift()===true}}];
       if(request.func===pageSnapshotMock&&request.target?.documentIds){const value=frameSnapshots.shift();return value?[{frameId:request.target.documentIds[0]==='child'?2:0,documentId:request.target.documentIds[0],result:value}]:[];}
       return frames;
     }},
-    tabs:{get:async()=>({url:tabUrl}),onRemoved:{addListener:()=>{}},onUpdated:{addListener:fn=>{tabUpdateListener=fn;}}},
-    windows:{onRemoved:{addListener:()=>{}},getAll:async()=>[{}]},
+    tabs:{query:async()=>initialTabs,get:async()=>({url:tabUrl}),onRemoved:{addListener:fn=>{tabRemovedListener=fn;}},onUpdated:{addListener:fn=>{tabUpdateListener=fn;}}},
+    windows:{onRemoved:{addListener:fn=>{windowRemovedListener=fn;}},getAll:async()=>windowCount?[{}]:[]},
     action:{setBadgeText:async()=>{}}
   };
   const scriptRequests=[];
-  const context={chrome,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,console,setTimeout,clearTimeout,setInterval:()=>0,createGenericFallback,genericFallbackEligible,earlyPlayerPlatform,genericPageUrl,genericPlayerSnapshot,
-    pageSnapshot:pageSnapshotMock,pageSubtitles:()=>({}),createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
-    ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:async()=>null,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
+  const context={createDownloadStallGuard:timedDownloadStallGuard,chrome,BUILD_ID,crypto:webcrypto,URL,URLSearchParams,AbortSignal,TextEncoder,TextDecoder,Date:RuntimeDate,console,setTimeout,clearTimeout,setInterval:()=>0,createDiscoveryIntent:options=>createDiscoveryIntent({...options,setTimer:()=>0,clearTimer:()=>{}}),existingMediaResources,renewPageObservation,stopPageObservation,beginYoutubeSessionObservation:()=>{},endYoutubeSessionObservation:async()=>{},beginYoutubeCaptionObservation:()=>{},endYoutubeCaptionObservation:async()=>{},createGenericFallback,genericFallbackEligible,earlyPlayerEligible,earlyPlayerPlatform,genericPageUrl,genericPlayerSnapshot,createYoutubeCaptionReader,youtubeCaptionAssist,preferYoutubeSession,isExpiredSourceAuth,matchesRecoverySelection,refreshedSourceDescriptor,sourceContentIdentity,sourceRecoveryTarget,
+    pageSnapshot:pageSnapshotMock,pageMediaPresence,pageMediaLease,createPageMediaGuard,createDestinationMonitor:options=>{destinationMonitor=createDestinationMonitor({...options,setTimer:()=>0,clearTimer:()=>{}});return destinationMonitor;},pageSubtitles:pageSubtitlesMock,createBilibiliClient:()=>({}),bilibiliRoute:()=>({}),normalizeCues:x=>x,parseSubtitles:x=>x,
+    ACTIVE_STATES, normalizeRange,mediaTime,isGenericMediaTitle,validateDocumentMediaPlan,validateOwnedSourcePlan,scopeDocumentCandidates,youtubeSession:getYoutubeSession,youtubeCaptionRequest:async()=>null,classifyFailure:(e,stage)=>({...classifyFailure(e,stage),message:e?.message||String(e)}),ERROR_RETENTION_MS:100,
     CAPTURE_PREFIX:'capture:',CAPTURE_VERSION:1,createSubtitleCaptureManager:()=>({start:async()=>{},removeTab:async()=>{},clearAll:async()=>{}}),loadBilibiliSubtitle:async()=>{},fileStem:s=>s,mediaRequestHeaders:()=>[],
-    VideoPocketDestinations:{remove:async()=>{},clear:async()=>{},get:async()=>false},
-    downloadKey,createDownloadClaims,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates}),attachNetworkSources,networkFallbackReason,socialPageFetch:()=>{}};
+    VideoPocketDestinations:{remove:async id=>destinationHandles.delete(id),clear:async()=>{destinationClearCount++;destinationHandles.clear();},get:async id=>destinationHandles.get(id)||false},
+    downloadKey,createDownloadClaims,createJobAdmission,stableHash,createPopupMarkerController,createMediaSelectionController,selectionStorageKey,selectedMediaIndex,collapseBilibiliPlayers,recoverBilibiliRoute,attachSocialSources,waitForMediaSource:async()=>({ready:false,changed:false}),createNetworkMediaObserver:()=>({candidates:()=>networkCandidates,enableTab(){},disableTab(){},seed(){}}),attachNetworkSources,networkFallbackReason,socialPageFetch:()=>{}};
   vm.runInNewContext(code,context,{filename:'background.js'});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(typeof listener,'function');
   const call=(message,sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:'popup-doc'})=>new Promise((resolve,reject)=>listener(message,sender,response=>response?.ok?resolve(response.result):reject(Object.assign(new Error(response?.error||'failed'),response?.failure||{}))));
-  return {scriptRequests,connect(){const callbacks=[];connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html'},onMessage:{addListener(){}},onDisconnect:{addListener:fn=>callbacks.push(fn)}});return()=>callbacks.forEach(fn=>fn());},call,stored,engineMessages,browserDownloads,genericCalls,async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),get retainCount(){return retainCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;retainRelease?.();},jobs:()=>stored.jobs||[]};
+  return {scriptRequests,connect(){const callbacks=[],messages=[],documentId=`popup-port-${++portNo}`;connectListener({name:'popup',sender:{url:'chrome-extension://ext/popup.html',documentId},onMessage:{addListener:fn=>messages.push(fn)},onDisconnect:{addListener:fn=>callbacks.push(fn)}});let disconnected=false;const close=()=>{if(disconnected)return;disconnected=true;callbacks.forEach(fn=>fn());};close.send=message=>{if(!disconnected)messages.forEach(fn=>fn(message));};close.documentId=documentId;return close;},call,stored,engineMessages,browserDownloads,genericCalls,destinationHandles,cancelledDownloadIds,get browserItem(){return browserItem;},advanceTime(ms){clockNow+=ms;},setTime(value){clockNow=value;},get time(){return clockNow;},async completeDownload(){browserItem.state='complete';await downloadChanged({id:browserItem.id,state:{current:'complete'}});},async interruptDownload(details={}){Object.assign(browserItem,details,{state:'interrupted'});await downloadChanged({id:browserItem.id,state:{current:'interrupted'}});},async setBrowserItem(patch){Object.assign(browserItem,patch);},checkBrowserDownloads:()=>vm.runInContext('checkBrowserDownloads()',context),downloadCount:()=>vm.runInContext('downloads.size',context),activeSourceTabs:()=>vm.runInContext('[...activeSourceTabs]',context),sourceMetaIds:()=>vm.runInContext('[...sourceMeta.keys()]',context),navigate:(tabId,changeInfo)=>tabUpdateListener?.(tabId,changeInfo),closeTab:tabId=>tabRemovedListener?.(tabId),closeLastWindow(){windowCount=0;windowRemovedListener?.(1);},metaIds:()=>vm.runInContext('[...sourceMeta.keys()]',context),async expireSource(sourceId){sources.delete(sourceId);invalidatedSources.add(sourceId);return call({action:'sourcesExpired',sourceIds:[sourceId]},{id:'ext',url:'chrome-extension://ext/offscreen.html'});},checkDestinations:()=>destinationMonitor.check(),get retainCount(){return retainCount;},get destinationClearCount(){return destinationClearCount;},set retainMode(value){retainMode=value;},blockRetain(){retainBlocked=true;},releaseRetain(){retainBlocked=false;for(const release of retainReleases.splice(0))release();},jobs:()=>stored.jobs||[]};
 }
+
+async function waitFor(predicate,message='background state did not settle'){
+ for(let i=0;i<500;i++){
+  if(predicate())return;
+  await new Promise(resolve=>setImmediate(resolve));
+ }
+ throw new Error(message);
+}
+test('popup request ownership order follows request arrival even when an older inspection completes last',async()=>{
+ let releaseOlder,startedOlder;const olderStarted=new Promise(resolve=>{startedOlder=resolve;});
+ const rt=await loadBackground({initialStorage:{runSession:'owner-order'},inspectHandler:message=>{
+  const result={id:message.descriptor.title,title:message.descriptor.title,duration:12};
+  if(result.id==='older')return new Promise(resolve=>{releaseOlder=()=>resolve({ok:true,result});startedOlder();});
+  return {ok:true,result};
+ }});
+ const close=rt.connect(),sender={id:'ext',url:'chrome-extension://ext/popup.html',documentId:close.documentId};
+ const descriptor={tabId:7,frameId:0,documentId:'player-doc',mediaKey:'player',url:'https://cdn.test/video.mp4'};
+ const pending=rt.call({action:'inspect',descriptor:{...descriptor,title:'older'}},sender);await olderStarted;
+ await rt.call({action:'inspect',descriptor:{...descriptor,title:'newer'}},sender);releaseOlder();await pending;
+ const accepted=rt.engineMessages.filter(message=>message.action==='acceptSource'&&message.ownerId===close.documentId);
+ assert.deepEqual(accepted.map(message=>message.sourceId),['newer','older']);
+ assert.ok(accepted[0].ownerRequestOrder>accepted[1].ownerRequestOrder,'the late completion keeps its original request order');close();
+});
+function activitySnapshots(rt){return rt.engineMessages.filter(message=>message.action==='sourceActivity').map(message=>JSON.parse(JSON.stringify(message.activeSourceTabs||[])));}
+function popupSender(port){return {id:'ext',url:'chrome-extension://ext/popup.html',documentId:port.documentId};}
+
+test('popup presence checks retain document and frame ownership without starting discovery or the engine',async()=>{
+ const targets=[{frameId:0,documentId:'doc',mediaKey:1},{frameId:0,documentId:'doc',mediaKey:2},{frameId:2,documentId:'child',mediaKey:1},{frameId:3,documentId:'gone',mediaKey:1}];
+ const rt=await loadBackground({initialStorage:{mediaObservationBuild:BUILD_ID},frames:[{frameId:0,documentId:'doc',result:{checked:true,present:['1']}},{frameId:2,documentId:'child',result:{checked:true,present:[]}}]});
+ assert.deepEqual(JSON.parse(JSON.stringify(await rt.call({action:'mediaPresence',tabId:1,targets}))),{checked:true,missing:targets.slice(1)});
+ assert.equal(rt.engineMessages.length,0);assert.equal(rt.scriptRequests.length,1);
+ const request=rt.scriptRequests[0];assert.equal(request.func,pageMediaPresence);assert.equal(request.world,'MAIN');assert.equal(request.injectImmediately,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(request.args)),[['1','2']]);
+});
+
+test('lost page transport errors retain a non-resumable job until an authorized explicit dismissal',async()=>{
+ const rt=await loadBackground({downloadFailure:{code:'PAGE_MEDIA_GONE'}});
+ const source=await rt.call({action:'inspect',descriptor:{title:'Clip',tabId:7,documentId:'doc',url:'https://cdn.test/clip.mp4'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&rt.jobs().find(item=>item.id===job.id)?.state!=='error';i++)await new Promise(resolve=>setImmediate(resolve));
+ const record=rt.jobs().find(item=>item.id===job.id);assert.equal(record.errorCode,'PAGE_MEDIA_GONE');assert.equal(record.requiresDismiss,true);assert.equal(record.resumable,false);
+ const disconnect=rt.connect();await new Promise(resolve=>setImmediate(resolve));disconnect();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.jobs().some(item=>item.id===job.id&&ACTIVE_STATES.has(item.state)),false,'the interrupted job finishes');
+ await assert.rejects(rt.call({action:'dismissJob',id:job.id},{id:'ext',url:'chrome-extension://ext/offscreen.html'}));
+ await rt.call({action:'dismissJob',id:job.id});assert.equal(rt.jobs().some(item=>item.id===job.id),false);
+});
+
+test('closing a tab drops only its unused source metadata without starting new page work',async()=>{
+ const rt=await loadBackground({offscreenPresent:true,initialStorage:{runSession:'live',mediaObservationBuild:BUILD_ID}});
+ const first=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'doc-a',title:'First',url:'https://cdn.test/first.mp4'}});
+ const second=await rt.call({action:'inspect',descriptor:{tabId:8,documentId:'doc-b',title:'Second',url:'https://cdn.test/second.mp4'}});
+ rt.closeTab(7);for(let i=0;i<20&&!rt.engineMessages.some(message=>message.action==='dropTabSources');i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.metaIds().includes(first.id),false);assert.equal(rt.metaIds().includes(second.id),true);
+ assert.ok(rt.engineMessages.some(message=>message.action==='dropTabSources'&&message.tabId===7));
+});
+
+test('a source used by an active download survives tab closure and is removed after the job releases it',async()=>{
+ let finish;
+ const rt=await loadBackground({offscreenPresent:true,initialStorage:{runSession:'live'},downloadGate:()=>new Promise(resolve=>{finish=()=>resolve({ok:true,result:{saved:true}});})});
+ const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'doc',title:'Active',url:'https://cdn.test/active.mp4'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!finish;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(finish);
+ rt.closeTab(7);await new Promise(resolve=>setImmediate(resolve));assert.equal(rt.metaIds().includes(source.id),true);
+ finish();for(let i=0;i<100&&rt.jobs().some(item=>item.id===job.id&&item.state==='running');i++)await new Promise(resolve=>setImmediate(resolve));
+ for(let i=0;i<20&&rt.metaIds().includes(source.id);i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.metaIds().includes(source.id),false);assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+});
+
+test('a bound page transport refuses a disappeared player before opening a credentialed fetch',async()=>{
+ const rt=await loadBackground({leaseResults:[{valid:false,missing:true}]});
+ await assert.rejects(rt.call({action:'socialPageFetch',operation:'open',options:{url:'https://cdn.test/a.mp4'},context:{tabId:7,documentId:'doc',mediaKey:1,playerUrl:'blob:old',contentId:'one'}},{id:'ext',url:'chrome-extension://ext/offscreen.html'}),{code:'PAGE_MEDIA_GONE'});
+ assert.equal(rt.scriptRequests.filter(request=>request.func===pageMediaLease).length,1);
+});
+
+test('a prepared native destination is queued once when the user selects its file handle',async()=>{
+ const destinations=new Map();const rt=await loadBackground({destinationHandles:destinations,downloadResult:{saved:true}});
+ const source=await rt.call({action:'inspect',descriptor:{title:'Destination',url:'https://cdn.test/a.mp4'}});
+ const job=await rt.call({action:'prepareDownload',sourceId:source.id,kind:'video',destinationId:'chosen'});
+ assert.equal(rt.jobs().find(item=>item.id===job.id).state,'choosing');assert.equal(rt.engineMessages.some(message=>message.action==='download'),false);
+ destinations.set('chosen',{});await rt.checkDestinations();await rt.checkDestinations();
+ for(let i=0;i<20&&!rt.engineMessages.some(message=>message.action==='download');i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+});
+
+test('presence checks do not prune unknown or malformed results, and reject untrusted callers before injection',async()=>{
+ const targets=[{frameId:0,documentId:'doc',mediaKey:1}];
+ for(const result of [{checked:false},{checked:true},null]){
+  const rt=await loadBackground({initialStorage:{mediaObservationBuild:BUILD_ID},frames:[{frameId:0,documentId:'doc',result}]});
+  assert.deepEqual(JSON.parse(JSON.stringify(await rt.call({action:'mediaPresence',tabId:1,targets}))),{checked:true,missing:[]});
+ }
+ const rt=await loadBackground({initialStorage:{mediaObservationBuild:BUILD_ID}});
+ await assert.rejects(rt.call({action:'mediaPresence',tabId:1,targets},{id:'ext',url:'chrome-extension://ext/offscreen.html'}));
+ await assert.rejects(rt.call({action:'mediaPresence',tabId:1,targets:[{frameId:0,mediaKey:1}]}));
+ assert.deepEqual(JSON.parse(JSON.stringify(await rt.call({action:'mediaPresence',tabId:1,targets:[]}))),{checked:true,missing:[]});
+ assert.equal(rt.scriptRequests.length,0);assert.equal(rt.engineMessages.length,0);
+});
+
+test('a new build removes legacy hooks once without scanning players or starting the engine',async()=>{
+ const initialTabs=[{id:1,url:'https://site.test/watch'},{id:2,url:'http://site.test/other'},{id:3,url:'chrome://extensions/'}];
+ const rt=await loadBackground({initialTabs,initialStorage:{mediaObservationBuild:'old-build',youtubeSessions:[{body:'old'}],youtubeCaptionRequests:[{url:'old'}]}});
+ assert.equal(rt.stored.mediaObservationBuild,BUILD_ID);assert.equal(rt.stored.youtubeSessions,undefined);assert.equal(rt.stored.youtubeCaptionRequests,undefined);
+ assert.equal(rt.scriptRequests.length,2);assert.ok(rt.scriptRequests.every(request=>request.func===stopPageObservation&&request.injectImmediately));
+ assert.equal(rt.engineMessages.length,0);
+ const current=await loadBackground({initialTabs,initialStorage:{mediaObservationBuild:BUILD_ID}});assert.equal(current.scriptRequests.length,0);
+});
+
+test('a queued YouTube download owns its session after popup observation ends, scoped to the same stream',async()=>{
+ const descriptor={tabId:1,frameId:0,documentId:'doc',mediaKey:1,title:'YouTube title',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=stream-a'}}};
+ let capture={tabId:1,documentId:'doc',streamId:'stream-a',body:'bounded-session',createdAt:Date.now()},finish;
+ const rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:()=>new Promise(resolve=>finish=()=>resolve({ok:true,result:{saved:true}}))});
+ const source=await rt.call({action:'inspect',descriptor});const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!finish;i++)await new Promise(resolve=>setImmediate(resolve));assert.ok(finish);
+ capture=null;const sender={id:'ext',url:'chrome-extension://ext/offscreen.html'},request={action:'youtubeSession',descriptor};
+ assert.equal((await rt.call(request,sender)).body,'bounded-session');
+ assert.equal(await rt.call({...request,descriptor:{...descriptor,tabId:2}},sender),null);
+ assert.equal(await rt.call({...request,descriptor:{...descriptor,platform:{...descriptor.platform,streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=stream-b'}}}},sender),null);
+ await assert.rejects(rt.call(request));finish();
+ for(let i=0;i<100&&rt.jobs().find(j=>j.id===job.id)?.state!=='done';i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(await rt.call(request,sender),null);
+});
+
+test('YouTube SABR repeat download survives popup observation ending without a new player request',async()=>{
+ const descriptor={tabId:1,frameId:0,documentId:'repeat-doc',mediaKey:1,title:'Repeat YouTube title',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=repeat-stream'}}};
+ let capture={tabId:1,frameId:0,documentId:'repeat-doc',streamId:'repeat-stream',body:'bounded-session',createdAt:Date.now()},rt;
+ const usedSessions=[];
+ rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{
+  const current=await rt.call({action:'youtubeSession',descriptor},{id:'ext',url:'chrome-extension://ext/offscreen.html'});usedSessions.push(current);
+  return current?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};
+ }});
+ const close=rt.connect();
+ const firstSource=await rt.call({action:'inspect',descriptor});
+ const first=await rt.call({action:'download',sourceId:firstSource.id,kind:'video'});
+ for(let i=0;i<100&&rt.jobs().find(j=>j.id===first.id)?.state!=='done';i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(usedSessions[0]?.body,'bounded-session');
+ capture=null;
+ const reopenedSource=await rt.call({action:'inspect',descriptor});
+ const second=await rt.call({action:'download',sourceId:reopenedSource.id,kind:'video'});
+ for(let i=0;i<100&&rt.jobs().find(j=>j.id===second.id)?.state!=='done';i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.jobs().find(j=>j.id===second.id)?.state,'done');
+ assert.equal(usedSessions[1]?.body,'bounded-session');
+ close();
+});
+
+test('YouTube downloads cannot use a live observation from a different frame',async()=>{
+ const descriptor={tabId:1,frameId:0,documentId:'frame-doc',mediaKey:1,title:'Frame owned title',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=frame-stream'}}};
+ const capture={tabId:1,frameId:1,documentId:'frame-doc',streamId:'frame-stream',body:'wrong-frame-session',createdAt:Date.now()};
+ let rt,used='not-requested';
+ rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{used=await rt.call({action:'youtubeSession',descriptor},{id:'ext',url:'chrome-extension://ext/offscreen.html'});return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};}});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&rt.jobs().find(j=>j.id===job.id)?.state!=='error';i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(used,null);assert.equal(rt.jobs().find(j=>j.id===job.id)?.errorCode,'SOURCE_UNAVAILABLE');close();
+});
+
+const captionVideo={tabId:1,frameId:0,documentId:'caption-doc',mediaKey:8,title:'Captioned video',referer:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://cdn.googlevideo.com/videoplayback?id=caption-stream'}}};
+const captionSession=(poLength=4)=>({tabId:1,frameId:0,documentId:'caption-doc',streamId:'caption-stream',body:`session-${poLength}`,poLength,createdAt:Date.now()});
+const engineSender={id:'ext',url:'chrome-extension://ext/offscreen.html'};
+async function completedJob(rt,id){for(let i=0;i<200;i++){const job=rt.jobs().find(j=>j.id===id);if(job&&['done','error','cancelled'].includes(job.state))return job;await new Promise(resolve=>setImmediate(resolve));}return rt.jobs().find(j=>j.id===id);}
+
+test('an inspected YouTube source preserves its observed session before the first download',async()=>{
+ let capture=captionSession(),rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{
+  used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);
+  return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo});
+ capture=null; // Closing observation after a caption capture removes live records.
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used?.body,'session-4');close();
+});
+
+test('a session arriving during caption capture is preserved before its observation is released',async()=>{
+ let capture=null,rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>capture,captionRead:async()=>{capture=captionSession();return {cues:[{start:0,end:1,text:'caption'}]};},downloadGate:async()=>{
+  used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);
+  return used?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'SOURCE_UNAVAILABLE'}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo});
+ const value=await rt.call({action:'pageSubtitle',tabId:1,documentId:'caption-doc',sourceId:source.id,language:'en',selector:{pageSource:'youtube-page',videoId:'abcdefghijk',mediaKey:8,frameId:0,documentId:'caption-doc'}});
+ assert.equal(value.cues[0].text,'caption');capture=null;
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used?.body,'session-4');close();
+});
+
+test('a queued YouTube job upgrades its exact-session proof before starting the stream',async()=>{
+ let capture=captionSession(0),rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{
+  capture=captionSession(4);used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);
+  return {ok:true,result:{saved:true}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used.body,'session-4');close();
+});
+
+test('a session lookup failure cannot discard a queued job owned capture',async()=>{
+ let unavailable=false,rt,used;
+ rt=await loadBackground({getYoutubeSession:async()=>{if(unavailable)throw new Error('temporary lookup failure');return captionSession();},downloadGate:async()=>{
+  unavailable=true;used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);return {ok:true,result:{saved:true}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used?.poLength,4);close();
+});
+
+test('clearing a tab cache cannot downgrade a running job to a weaker native capture',async()=>{
+ let capture=captionSession(),rt,used;
+ rt=await loadBackground({offscreenPresent:true,getYoutubeSession:async()=>capture,downloadGate:async()=>{
+  rt.navigate(1,{url:captionVideo.referer+'&t=1'});await new Promise(resolve=>setImmediate(resolve));
+  capture=captionSession(0);used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);return {ok:true,result:{saved:true}};
+ }});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(used?.poLength,4);assert.ok(rt.engineMessages.some(message=>message.action==='dropTabSources'));close();
+});
+
+test('YouTube verification retries once only with stronger proof for the same source and selection',async()=>{
+ for(const range of [undefined,{start:1,end:3}]){
+  let capture=captionSession(0),rt,attempts=0;const requests=[];
+  rt=await loadBackground({inspectionInfo:{duration:8,range:{supported:true}},getYoutubeSession:async()=>capture,downloadGate:async message=>{
+   attempts++;requests.push(message);
+   if(attempts===1){capture=captionSession(4);return {ok:false,failure:{code:'STREAM_VERIFICATION'}};}
+   const used=await rt.call({action:'youtubeSession',descriptor:captionVideo},engineSender);
+   return used?.poLength===4?{ok:true,result:{saved:true}}:{ok:false,failure:{code:'STREAM_VERIFICATION'}};
+  }});
+  const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video',height:1080,...(range?{range}:{})});
+  assert.equal((await completedJob(rt,job.id)).state,'done');assert.equal(attempts,2);
+  for(const request of requests){assert.equal(request.sourceId,source.id);assert.equal(request.height,1080);assert.equal(JSON.stringify(request.range),JSON.stringify(range));}close();
+ }
+});
+
+test('unchanged YouTube verification proof is not retried',async()=>{
+ const capture=captionSession(),rt=await loadBackground({getYoutubeSession:async()=>capture,downloadFailure:{code:'STREAM_VERIFICATION'}});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'error');assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);close();
+});
+
+test('a failed proof lookup preserves the original YouTube verification error',async()=>{
+ let unavailable=false,attempts=0;
+ const rt=await loadBackground({getYoutubeSession:async()=>{if(unavailable)throw new Error('temporary lookup failure');return captionSession();},downloadGate:async()=>{unavailable=true;attempts++;return {ok:false,failure:{code:'STREAM_VERIFICATION'}};}});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ const failed=await completedJob(rt,job.id);assert.equal(failed.state,'error');assert.equal(failed.errorCode,'STREAM_VERIFICATION');assert.equal(attempts,1);close();
+});
+
+test('verification cannot borrow a stronger proof from another stream',async()=>{
+ let capture=captionSession(0),attempts=0;
+ const rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{attempts++;capture={...captionSession(4),streamId:'other-stream'};return {ok:false,failure:{code:'STREAM_VERIFICATION'}};}});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'error');assert.equal(attempts,1);close();
+});
+
+test('repeated YouTube verification failure stops after one upgraded-proof retry',async()=>{
+ let capture=captionSession(0),attempts=0;
+ const rt=await loadBackground({getYoutubeSession:async()=>capture,downloadGate:async()=>{capture=captionSession(++attempts*4);return {ok:false,failure:{code:'STREAM_VERIFICATION'}};}});
+ const close=rt.connect(),source=await rt.call({action:'inspect',descriptor:captionVideo}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ assert.equal((await completedJob(rt,job.id)).state,'error');assert.equal(attempts,2);close();
+});
+
+test('navigation during YouTube session preparation cannot restore the previous document source',async()=>{
+ let entered,release;const preparing=new Promise(resolve=>{entered=resolve;});
+ const rt=await loadBackground({getYoutubeSession:()=>new Promise(resolve=>{release=()=>resolve(captionSession());entered();})});
+ const pending=rt.call({action:'inspect',descriptor:captionVideo});await preparing;
+ assert.equal(rt.metaIds().length,1);rt.navigate(1,{status:'loading'});release();
+ await assert.rejects(pending,{code:'SOURCE_CHANGED'});assert.equal(rt.metaIds().length,0);
+});
 
 test('existing successful background inspections never run the new collector',async()=>{
  const rt=await loadBackground();
@@ -87,6 +368,7 @@ test('ready unknown-page inventory is injected immediately while known platforms
   const inventory=rt.scriptRequests.find(r=>r.func&&r.target?.allFrames&&r.args?.[1]==='summary'),file=rt.scriptRequests.find(r=>r.files);
   assert.equal(inventory.injectImmediately,url.includes('unknown')?true:undefined);assert.equal(file.injectImmediately,inventory.injectImmediately);
   const selected=rt.scriptRequests.find(r=>r.func&&r.target?.documentIds&&r.args?.[1]==='deep');assert.equal(selected.injectImmediately,true);
+  if(url.includes('youtube'))assert.equal(rt.genericCalls.length,0,'known providers do not acquire a new early scan');
  }
 });
 
@@ -94,7 +376,7 @@ test('an empty early inventory falls back to the original document-load scheduli
  const page={url:'https://unknown.test/loading',title:'Loading',discoveryMode:'summary',videos:[]};
  const rt=await loadBackground({tabUrl:page.url,frames:[{frameId:0,documentId:'doc',result:page}]});
  const result=await rt.call({action:'snapshot',tabId:1});assert.equal(result.videos.length,0);
- const scans=rt.scriptRequests.filter(r=>r.func&&r.target?.allFrames);
+ const scans=rt.scriptRequests.filter(r=>r.func&&r.target?.allFrames&&r.args?.[1]==='summary');
  assert.equal(scans.length,2);assert.equal(scans[0].injectImmediately,true);assert.equal(scans[1].injectImmediately,undefined);
 });
 
@@ -106,18 +388,34 @@ test('background unknown-player recovery stays scoped and revalidates before dow
  assert.equal(result.id,'recovered');assert.equal(rt.genericCalls.length,3);
  assert.ok(rt.genericCalls.every(r=>r.target.documentIds[0]==='doc'&&r.target.tabId===1));
  assert.equal(rt.engineMessages.filter(m=>m.action==='inspect').length,2);
+ const checksBeforeDownload=rt.genericCalls.length;
  await assert.rejects(rt.call({action:'prepareDownload',sourceId:result.id,kind:'video'}),{code:'SOURCE_CHANGED'});
- assert.equal(rt.jobs().length,0);assert.equal(rt.engineMessages.some(m=>m.action==='retain'),false);
+ assert.equal(rt.genericCalls.length,checksBeforeDownload+1,'the selected player is revalidated after the source is retained');
+ assert.ok(rt.genericCalls.every(r=>r.target.documentIds[0]==='doc'&&r.target.tabId===1),'revalidation stays bound to the selected document');
+ const retained=rt.engineMessages.find(m=>m.action==='retain'&&m.sourceId===result.id),forgotten=rt.engineMessages.find(m=>m.action==='forget'&&m.sourceId===result.id);
+ assert.ok(retained,'the source is pinned before asynchronous generic-player validation');
+ assert.ok(forgotten,'a failed validation releases the pin');assert.equal(forgotten.discardInspection,undefined);
+ assert.equal(rt.engineMessages.filter(m=>m.action==='download').length,0);assert.equal(rt.jobs().length,0);
 });
 
-test('new generic entry cannot be used to route known platforms around their old failures',async()=>{
+test('known-provider failures keep their error when no selected-player evidence exists',async()=>{
  const rt=await loadBackground({inspectHandler:async()=>({ok:false,error:'old failure',failure:{code:'SOURCE_UNAVAILABLE'}})});
  for(const referer of ['https://www.youtube.com/watch?v=one','https://x.com/a/status/1','https://www.instagram.com/reel/one/']){
   const descriptor={referer,tabId:1,frameId:0,documentId:'doc',mediaKey:1};
   await assert.rejects(rt.call({action:'inspect',descriptor}),{code:'SOURCE_UNAVAILABLE'});
   await assert.rejects(rt.call({action:'genericInspect',descriptor}),{code:'SOURCE_UNAVAILABLE'});
  }
- assert.equal(rt.genericCalls.length,0);
+ assert.equal(rt.genericCalls.length,6);
+ assert.equal(rt.engineMessages.filter(m=>m.action==='inspect').length,6,'no extra media probe without an owned source');
+});
+
+test('known-provider recovery uses the same scoped player validation and preserves the selected title',async()=>{
+ const referer='https://vimeo.com/1084537',descriptor={referer,tabId:1,frameId:0,documentId:'doc',mediaKey:7,title:'Selected movie',platform:{site:'vimeo',id:'1084537'}};
+ const binding={mediaKey:7,source:'blob:one',pageUrl:referer,fingerprint:'selected-runtime'};
+ const rt=await loadBackground({genericSnapshots:[{binding,duration:60,candidates:[{url:'https://cdn.test/current.mp4',kind:'progressive'}]},{valid:true},{valid:true}],inspectHandler:async message=>message.descriptor.platform?.site==='vimeo'?{ok:false,error:'no source',failure:{code:'SOURCE_UNAVAILABLE'}}:undefined});
+ const result=await rt.call({action:'inspect',inspectionId:'provider-recovery',descriptor});
+ assert.equal(result.title,'Selected movie');assert.equal(rt.genericCalls.length,3);
+ const probes=rt.engineMessages.filter(m=>m.action==='inspect');assert.equal(probes.length,2);assert.equal(probes[1].descriptor.platform.site,'network-media');assert.equal(probes[1].descriptor.mediaKey,7);
 });
 
 test('opening an idle popup cleans orphaned media without requiring a video inspection',async()=>{
@@ -136,15 +434,42 @@ test('stage timings are session-only numeric diagnostics and reject arbitrary fi
 });
 
 test('popup recovery preserves a download being prepared and a queued destination',async()=>{
- const rt=await loadBackground(),source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
- rt.blockRetain();const pending=rt.call({action:'prepareDownload',sourceId:source.id,kind:'video'});
+ const handles=new Map([['valid-destination',{}]]),rt=await loadBackground({initialStorage:{runSession:'same-session'},destinationHandles:handles}),source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}}),clears=rt.destinationClearCount;
+ rt.blockRetain();const pending=rt.call({action:'prepareDownload',sourceId:source.id,kind:'video',destinationId:'valid-destination'});
  for(let i=0;i<100&&!rt.retainCount;i++)await new Promise(resolve=>setImmediate(resolve));
  const before=rt.engineMessages.filter(m=>m.action==='recoverMedia').length;
  assert.equal((await rt.call({action:'recoverDownloads'})).active,true);
+ assert.equal(rt.destinationClearCount,clears);assert.ok(handles.has('valid-destination'));
  rt.releaseRetain();const job=await pending;
  assert.equal((await rt.call({action:'recoverDownloads'})).active,true);
  assert.equal(rt.engineMessages.filter(m=>m.action==='recoverMedia').length,before);
+ assert.equal(rt.destinationClearCount,clears);assert.ok(handles.has('valid-destination'));
  await rt.call({action:'cancel',id:job.id});
+});
+
+test('concurrent download preparations reserve the twenty job limit and cancellation frees a slot',async()=>{
+ const rt=await loadBackground(),sources=[];
+ for(let i=0;i<21;i++)sources.push(await rt.call({action:'inspect',descriptor:{url:`https://cdn.test/clip-${i}.mp4`,title:`clip-${i}`}}));
+ rt.blockRetain();const pending=sources.slice(0,19).map(source=>rt.call({action:'prepareDownload',sourceId:source.id,kind:'video'}));
+ for(let i=0;i<100&&rt.retainCount<19;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.retainCount,19);
+ const duplicate=await rt.call({action:'prepareDownload',sourceId:sources[0].id,kind:'video'});assert.equal(duplicate.duplicate,true);
+ const twentieth=rt.call({action:'prepareDownload',sourceId:sources[19].id,kind:'video'});
+ for(let i=0;i<100&&rt.retainCount<20;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.retainCount,20);
+ await assert.rejects(rt.call({action:'prepareDownload',sourceId:sources[20].id,kind:'video'}),/等待中的下載過多/);
+ rt.releaseRetain();const jobs=await Promise.all([...pending,twentieth]);assert.equal(rt.jobs().filter(job=>ACTIVE_STATES.has(job.state)).length,20);
+ await rt.call({action:'cancel',id:jobs[0].id});
+ const replacement=await rt.call({action:'prepareDownload',sourceId:sources[20].id,kind:'video'});assert.ok(replacement.id);
+ for(const job of jobs.slice(1))await rt.call({action:'cancel',id:job.id});await rt.call({action:'cancel',id:replacement.id});
+});
+
+test('same-session worker restart marks interrupted jobs failed and clears orphan destination handles',async()=>{
+ const handles=new Map([['orphan-destination',{name:'remembered handle'}]]);
+ const rt=await loadBackground({initialStorage:{runSession:'same-session',jobs:[{id:'interrupted',state:'queued',destinationId:'orphan-destination'}]},destinationHandles:handles});
+ const recovered=await rt.call({action:'recoverDownloads'});
+ assert.equal(recovered.cleaned,true);assert.equal(rt.jobs()[0].state,'error');assert.equal(handles.size,0);
+ assert.equal(rt.destinationClearCount,1,'the existing session did not trigger a new-session clear');
 });
 
 test('browser save recovery keeps the finished blob alive until Chrome completes without restarting transfer',async()=>{
@@ -447,6 +772,50 @@ test('active download reuses its verified inspect result when popup reopens',asy
   await rt.call({action:'cancel',id:job.id});
 });
 
+test('forced inspection bypasses an active choosing job without replacing or releasing its source',async()=>{
+ const rt=await loadBackground(),descriptor={tabId:7,documentId:'force-doc',frameId:0,mediaKey:32,url:'https://cdn.test/force.mp4',title:'Episode'};
+ const first=await rt.call({action:'inspect',descriptor});
+ const job=await rt.call({action:'prepareDownload',sourceId:first.id,title:'Episode',kind:'video'});
+ assert.equal(rt.jobs().find(item=>item.id===job.id)?.state,'choosing');
+ const before=rt.engineMessages.filter(message=>message.action==='inspect').length;
+ const forced=await rt.call({action:'inspect',descriptor,inspectionId:'force-reinspect',force:true});
+ const inspections=rt.engineMessages.filter(message=>message.action==='inspect');
+ assert.equal(inspections.length,before+1);
+ assert.equal(inspections.at(-1).force,true);
+ assert.notEqual(forced.id,first.id);
+ assert.equal(rt.jobs().find(item=>item.id===job.id)?.state,'choosing','the existing prepared job remains available');
+ assert.equal(rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===first.id),false,'force must not release the source owned by the active job');
+ await rt.call({action:'cancel',id:job.id});
+ assert.ok(rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===first.id&&!message.invalidateInspection));
+});
+
+test('a failed Chrome native download invalidates its inspected source',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'blob:interrupted-media',filename:'clip.mp4',blobId:'interrupted'},browserDownloadState:'interrupted'});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<200&&!rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===source.id);i++)await new Promise(resolve=>setImmediate(resolve));
+ const forget=rt.engineMessages.find(message=>message.action==='forget'&&message.sourceId===source.id);
+ assert.ok(forget,'the failed native save releases its source');
+ assert.equal(forget.invalidateInspection,true,'the browser failure invalidates the inspected result');
+ assert.equal(rt.jobs().some(item=>item.id===job.id&&ACTIVE_STATES.has(item.state)),false,'the interrupted job finishes');
+});
+
+test('cancelling after a native interruption still invalidates its inspected source',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'blob:retrying-media',filename:'clip.mp4',blobId:'retrying'},browserDownloadState:'in_progress'});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.test/clip.mp4',title:'clip'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.browserDownloads.length;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.browserDownloads.length,1);
+ await rt.interruptDownload({canResume:true,error:'NETWORK_FAILED'});
+ await rt.call({action:'cancel',id:job.id});
+ await rt.interruptDownload({canResume:false,error:'USER_CANCELED'});
+ for(let i=0;i<200&&!rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===source.id);i++)await new Promise(resolve=>setImmediate(resolve));
+ const forget=rt.engineMessages.find(message=>message.action==='forget'&&message.sourceId===source.id);
+ assert.ok(forget);
+ assert.equal(forget.invalidateInspection,true,'a previous non-cancel interruption remains invalidating after cancellation');
+ assert.equal(rt.jobs().some(item=>item.id===job.id&&ACTIVE_STATES.has(item.state)),false,'the cancelled job finishes');
+});
+
 test('active reuse requires the Dailymotion ID and document identity to match',async()=>{
   const rt=await loadBackground(),base={tabId:7,documentId:'dm-frame',frameId:2,mediaKey:22,url:'https://geo.dailymotion.com/player/x.html',platform:{site:'dailymotion',id:'x-video'},title:'Episode'};
   const first=await rt.call({action:'inspect',descriptor:base});
@@ -456,6 +825,92 @@ test('active reuse requires the Dailymotion ID and document identity to match',a
   await rt.call({action:'inspect',descriptor:{...base,documentId:'new-frame'}});
   assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,before+2);
   await rt.call({action:'cancel',id:job.id});
+});
+
+test('accepted sources belong to the live popup document and active-job reuse registers that owner',async()=>{
+ let finishDownload;
+ const descriptor={tabId:7,frameId:0,documentId:'owner-doc',mediaKey:22,url:'https://cdn.example/owned.mp4',title:'Episode'};
+ const rt=await loadBackground({offscreenPresent:true,initialStorage:{runSession:'source-owner'},downloadGate:()=>new Promise(resolve=>{finishDownload=()=>resolve({ok:true,result:{saved:true}});})});
+ const firstPopup=rt.connect(),source=await rt.call({action:'inspect',descriptor},popupSender(firstPopup));
+ const firstAccept=rt.engineMessages.find(message=>message.action==='acceptSource'&&message.sourceId===source.id);
+ assert.equal(firstAccept.ownerId,firstPopup.documentId,'inspect acceptance is associated with its live popup port');
+
+ const unowned=await rt.call({action:'inspect',descriptor:{...descriptor,mediaKey:23,url:'https://cdn.example/unowned.mp4'}});
+ const unownedAccept=rt.engineMessages.find(message=>message.action==='acceptSource'&&message.sourceId===unowned.id);
+ assert.equal(unownedAccept.ownerId,'','an unrelated live port cannot own a caller with no matching live port');
+
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>typeof finishDownload==='function');
+ const inspectionsBeforeReuse=rt.engineMessages.filter(message=>message.action==='inspect').length,secondPopup=rt.connect();
+ const reused=await rt.call({action:'inspect',descriptor},popupSender(secondPopup));
+ assert.equal(reused.id,source.id);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,inspectionsBeforeReuse,'active-job cache reuse does not inspect another source');
+ const reuseAccept=rt.engineMessages.filter(message=>message.action==='acceptSource'&&message.sourceId===source.id).at(-1);
+ assert.equal(reuseAccept.ownerId,secondPopup.documentId,'the active-job shortcut also registers the requesting popup owner');
+
+ secondPopup();await waitFor(()=>rt.engineMessages.some(message=>message.action==='releaseSourceOwner'&&message.ownerId===secondPopup.documentId));
+ firstPopup();finishDownload();
+ await waitFor(()=>rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===source.id));
+ assert.equal(rt.jobs().some(item=>item.id===job.id&&ACTIVE_STATES.has(item.state)),false);
+});
+
+test('YouTube source acceptance follows the verified session save',async()=>{
+ const descriptor={tabId:12,frameId:0,documentId:'youtube-owner',mediaKey:41,url:'https://www.youtube.com/watch?v=abcdefghijk',platform:{site:'youtube',id:'abcdefghijk',streamingData:{serverAbrStreamingUrl:'https://youtube.test/sabr?id=stream-41'}}};
+ const capture={tabId:12,frameId:0,documentId:'youtube-owner',streamId:'stream-41',body:'bounded-capture',createdAt:Date.now()};
+ const rt=await loadBackground({offscreenPresent:true,getYoutubeSession:async()=>capture});
+ const popup=rt.connect(),source=await rt.call({action:'inspect',descriptor},popupSender(popup));
+ const saveIndex=rt.engineMessages.findIndex(message=>message.action==='youtubeSourceSession'&&message.sourceId===source.id);
+ const acceptIndex=rt.engineMessages.findIndex(message=>message.action==='acceptSource'&&message.sourceId===source.id);
+ assert.ok(saveIndex>=0,'the live YouTube session is saved on the inspected source');
+ assert.ok(acceptIndex>saveIndex,'the popup owner is registered only after session preservation completes');
+ assert.equal(rt.engineMessages[acceptIndex].ownerId,popup.documentId);
+ popup();
+});
+
+test('closing a popup while source acceptance is pending releases its owner again after the late accept',async()=>{
+ let releaseAccept,enteredAccept;
+ const acceptEntered=new Promise(resolve=>{enteredAccept=resolve;});
+ const rt=await loadBackground({offscreenPresent:true,acceptHandler:message=>{
+  if(!message.ownerId)return;
+  return new Promise(resolve=>{releaseAccept=()=>resolve(null);enteredAccept();});
+ }});
+ const popup=rt.connect(),pending=rt.call({action:'inspect',descriptor:{tabId:9,documentId:'late-owner-doc',mediaKey:5,url:'https://cdn.example/late.mp4'}},popupSender(popup));
+ await acceptEntered;
+ const accepted=rt.engineMessages.findIndex(message=>message.action==='acceptSource'&&message.ownerId===popup.documentId);
+ popup();
+ await waitFor(()=>rt.engineMessages.filter(message=>message.action==='releaseSourceOwner'&&message.ownerId===popup.documentId).length>=1);
+ const disconnectedRelease=rt.engineMessages.findIndex((message,index)=>index>accepted&&message.action==='releaseSourceOwner'&&message.ownerId===popup.documentId);
+ releaseAccept();await pending;
+ await waitFor(()=>rt.engineMessages.filter(message=>message.action==='releaseSourceOwner'&&message.ownerId===popup.documentId).length>=2);
+ const releases=rt.engineMessages.map((message,index)=>({message,index})).filter(({message})=>message.action==='releaseSourceOwner'&&message.ownerId===popup.documentId);
+ assert.ok(accepted<disconnectedRelease,'disconnect releases the owner while acceptSource is still pending');
+ assert.ok(releases[1].index>releases[0].index,'the accept finally path releases again after the late pin completes');
+ assert.equal(rt.jobs().length,0);
+});
+
+test('a candidate rejected by post-inspection metadata validation is never accepted',async()=>{
+ const rt=await loadBackground({offscreenPresent:true,metadataValidations:[true,false]});
+ const popup=rt.connect(),descriptor={tabId:4,frameId:0,documentId:'metadata-owner',mediaKey:8,url:'https://cdn.example/metadata.mp4',platform:{site:'metadata-media',validationToken:'proof',bindingKey:'binding',versions:[{url:'https://cdn.example/metadata.mp4'}]}};
+ await assert.rejects(rt.call({action:'inspect',descriptor},popupSender(popup)),{code:'SOURCE_CHANGED'});
+ const candidateId=rt.engineMessages.find(message=>message.action==='forget'&&message.discardInspection===true)?.sourceId;
+ assert.ok(candidateId,'rejected metadata discards only the unaccepted inspection');
+ assert.equal(rt.engineMessages.some(message=>message.action==='acceptSource'&&message.sourceId===candidateId),false);
+ assert.equal(rt.metaIds().includes(candidateId),false);
+ assert.equal(rt.jobs().length,0);
+ popup();
+});
+
+test('an expired source cannot create a job after its background metadata is removed',async()=>{
+ const rt=await loadBackground({offscreenPresent:true,initialStorage:{runSession:'source-expired-before-job'}}),popup=rt.connect();
+ const source=await rt.call({action:'inspect',descriptor:{tabId:6,documentId:'expired-owner',mediaKey:14,url:'https://cdn.example/expired-before-job.mp4'}},popupSender(popup));
+ popup();
+ await waitFor(()=>rt.engineMessages.some(message=>message.action==='releaseSourceOwner'&&message.ownerId===popup.documentId));
+ await rt.expireSource(source.id);
+ assert.equal(rt.metaIds().includes(source.id),false,'offscreen expiry removes the unused background metadata');
+ await assert.rejects(rt.call({action:'prepareDownload',sourceId:source.id,kind:'video'}),{code:'SOURCE_CHANGED'});
+ assert.equal(rt.jobs().length,0,'a failed retain cannot create a job with the expired source id');
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,0);
+ assert.ok(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId===source.id));
 });
 
 test('a recycled metadata player cannot reuse an active download for its previous blob or JSON',async()=>{
@@ -485,7 +940,7 @@ test('completed download does not provide an inspect cache on a later popup open
 test('background rejects unauthorized download messages and releases claim after retain failure',async()=>{
   const rt=await loadBackground(),inspected=await rt.call({action:'inspect',descriptor:{tabId:1,documentId:'d',mediaKey:3,url:'https://cdn/a',title:'A'}});
   await assert.rejects(rt.call({action:'prepareDownload',sourceId:inspected.id,downloadKey:'k',title:'A',kind:'video'},{id:'ext',url:'https://evil.test/'}),/來源未授權/);
-  rt.retainMode='reject';await assert.rejects(rt.call({action:'prepareDownload',sourceId:inspected.id,downloadKey:'k',title:'A',kind:'video'}));
+  rt.retainMode='reject';for(let i=0;i<20;i++)await assert.rejects(rt.call({action:'prepareDownload',sourceId:inspected.id,downloadKey:'k',title:'A',kind:'video'}));
   rt.retainMode='ok';const retry=await rt.call({action:'prepareDownload',sourceId:inspected.id,downloadKey:'k',title:'A',kind:'video'});assert.ok(retry.id);
   const youtube=await rt.call({action:'inspect',descriptor:{tabId:1,documentId:'d',mediaKey:4,url:'https://cdn/y',platform:{site:'youtube',id:'yt-empty'}}});
   await assert.rejects(rt.call({action:'prepareDownload',sourceId:youtube.id,title:'影片 1',kind:'video'}),/未取得 YouTube 影片標題/);
@@ -516,6 +971,105 @@ test('a failed download keeps its network cause when the popup was closed throug
  for(let i=0;i<20&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
  const failure=await rt.call({action:'lastError'});assert.equal(failure.code,'HTTP_AUTH');assert.equal(failure.stage,'download');assert.equal(failure.httpStatus,403);assert.equal(failure.sourceStage,'stream-segment');assert.ok(!JSON.stringify(failure).includes('private CDN response'));
  const close=rt.connect();assert.equal((await rt.call({action:'lastError'})).id,failure.id);close();
+});
+
+test('stored range-processing failures retain only the allowlisted phase',async()=>{
+ const rt=await loadBackground({downloadFailure:{code:'RANGE_PROCESSING_TIMEOUT',processingStage:'normalizing',message:'private fragment details'}});
+ const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.example/clip.webm',title:'Clip'}});
+ await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<100&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
+ const failure=await rt.call({action:'lastError'});assert.equal(failure.code,'RANGE_PROCESSING_TIMEOUT');assert.equal(failure.processingStage,'normalizing');
+ assert.ok(!JSON.stringify(failure).includes('private fragment details'));
+});
+
+test('an expired signed source is reinspected once for the same selected plan and restarts the transfer',async()=>{
+ const video={mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/video.m3u8?sig=fresh',sourceType:'hls',title:'Episode'};
+ const descriptor={tabId:7,frameId:0,documentId:'doc-12',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/video.m3u8?sig=old',referer:'https://site.example/watch',title:'Episode',duration:90};
+ const validation=[];
+ const freshPage={url:'https://site.example/watch',videos:[video],media:{...video,duration:90},tracks:[],platform:{site:'example'}};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'doc-12',result:{url:'https://site.example/watch',discoveryMode:'summary',videos:[video],media:video,tracks:[]}}],frameSnapshots:[freshPage,freshPage],inspectionInfo:{duration:90,range:{supported:true}},downloadFailure:[{code:'HTTP_AUTH',status:401,sourceStage:'stream-segment'},null],downloadResult:{url:'https://cdn.example/video.mp4',filename:'Episode.mp4'},browserDownloadState:'complete',recoveryValidation:message=>{validation.push(message);return {}}});
+ const source=await rt.call({action:'inspect',descriptor});
+ await rt.call({action:'download',sourceId:source.id,kind:'video',height:1080,audioQuality:'best',range:{start:10,end:20}});
+ for(let i=0;i<200&&rt.jobs().some(job=>ACTIVE_STATES.has(job.state));i++)await new Promise(resolve=>setImmediate(resolve));
+ const downloads=rt.engineMessages.filter(message=>message.action==='download');
+ assert.equal(downloads.length,2);assert.equal(downloads[0].sourceId,source.id);assert.notEqual(downloads[1].sourceId,source.id);
+ assert.equal(downloads[0].downloadKey,downloads[1].downloadKey,'the original download claim key remains active');
+ assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,2);
+ assert.equal(validation.length,1);assert.equal(validation[0].oldSourceId,source.id);assert.equal(validation[0].newSourceId,downloads[1].sourceId);
+ assert.deepEqual(JSON.parse(JSON.stringify(validation[0].selection)),{kind:'video',height:1080,audioQuality:'best',range:{start:10,end:20}});
+ assert.ok(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId===downloads[1].sourceId));
+ assert.ok(rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId===source.id));
+ assert.equal(rt.stored.lastError,undefined);
+ const reusable=await rt.call({action:'prepareDownload',sourceId:source.id,kind:'audio'});
+ assert.ok(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId===source.id),'the original inspected source remains in the bounded cache');
+ await rt.call({action:'cancel',id:reusable.id});
+});
+
+test('signed-source recovery rejects a changed player before inspecting or downloading it',async()=>{
+ const descriptor={tabId:7,frameId:0,documentId:'doc-12',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/video.m3u8?sig=old',referer:'https://site.example/watch',title:'Episode'};
+ const current={mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/video.m3u8?sig=fresh',title:'Episode'};
+ const changed={...current,selectionIdentity:'player-replaced'};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'doc-12',result:{url:'https://site.example/watch',discoveryMode:'summary',videos:[current],tracks:[]}}],frameSnapshots:[{url:'https://site.example/watch',videos:[changed],media:changed,tracks:[]}],downloadFailure:{code:'HTTP_AUTH',httpStatus:403}});
+ const source=await rt.call({action:'inspect',descriptor});await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<200&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,1);
+ assert.equal(rt.engineMessages.some(message=>message.action==='validateRecovery'),false);
+ assert.equal((await rt.call({action:'lastError'})).code,'SOURCE_CHANGED');
+});
+
+test('selected-plan mismatch cleans the refreshed source and does not retry',async()=>{
+ const video={mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/video.m3u8?sig=fresh',title:'Episode'};
+ const descriptor={tabId:7,frameId:0,documentId:'doc-12',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/video.m3u8?sig=old',referer:'https://site.example/watch',title:'Episode'};
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'doc-12',result:{url:'https://site.example/watch',discoveryMode:'summary',videos:[video],tracks:[]}}],frameSnapshots:[{url:'https://site.example/watch',videos:[video],media:{...video,duration:90},tracks:[]}],downloadFailure:{code:'HTTP_AUTH',httpStatus:403},recoveryValidation:()=>({ok:false,error:'plan mismatch',failure:{code:'PLAN_MISMATCH'}})});
+ const source=await rt.call({action:'inspect',descriptor});await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ for(let i=0;i<200&&!rt.stored.lastError;i++)await new Promise(resolve=>setImmediate(resolve));
+ const refreshed=rt.engineMessages.find(message=>message.action==='inspect'&&message.descriptor.url===video.downloadUrl);
+ assert.ok(refreshed);assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+ assert.ok(rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId==='source-2'));
+});
+
+test('a pending pause or cancellation prevents signed-source recovery',async()=>{
+ for(const state of ['pause','cancel']){
+  let release,startedResolve;const started=new Promise(resolve=>{startedResolve=resolve;});
+  const rt=await loadBackground({downloadGate:()=>new Promise(resolve=>{release=()=>resolve({ok:false,error:'private CDN response',failure:{code:'HTTP_AUTH',httpStatus:403}});startedResolve();})});
+  const source=await rt.call({action:'inspect',descriptor:{url:'https://cdn.example/clip.mp4',title:'Clip'}}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+  await started;await rt.call({action:state,id:job.id});release();
+  for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1,state);
+  assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,1,state);
+  if(state==='pause')await rt.call({action:'resume',id:job.id});
+  for(let i=0;i<200&&rt.jobs().some(item=>ACTIVE_STATES.has(item.state));i++)await new Promise(resolve=>setImmediate(resolve));
+ }
+});
+
+test('pausing after reinspection holds the recovery until resume',async()=>{
+ const video={mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/video.m3u8?sig=fresh',title:'Episode'};
+ const descriptor={tabId:7,frameId:0,documentId:'doc-12',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/video.m3u8?sig=old',referer:'https://site.example/watch',title:'Episode'};
+ const freshPage={url:'https://site.example/watch',videos:[video],media:{...video,duration:90},tracks:[]};let releaseValidation,enteredResolve;const entered=new Promise(resolve=>{enteredResolve=resolve;});
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'doc-12',result:{url:'https://site.example/watch',discoveryMode:'summary',videos:[video],tracks:[]}}],frameSnapshots:[freshPage,freshPage],downloadFailure:[{code:'HTTP_AUTH',httpStatus:403},null],downloadResult:{url:'https://cdn.example/video.mp4',filename:'Episode.mp4'},browserDownloadState:'complete',recoveryValidation:()=>new Promise(resolve=>{releaseValidation=()=>resolve({});enteredResolve();})});
+ const source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await entered;await rt.call({action:'pause',id:job.id});releaseValidation();
+ for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+ assert.equal(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId==='source-2'),false);
+ await rt.call({action:'resume',id:job.id});
+ for(let i=0;i<200&&rt.jobs().some(item=>ACTIVE_STATES.has(item.state));i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,2);
+ assert.ok(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId==='source-2'));
+});
+
+test('cancelling after reinspection releases the fresh source without restarting',async()=>{
+ const video={mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/video.m3u8?sig=fresh',title:'Episode'};
+ const descriptor={tabId:7,frameId:0,documentId:'doc-12',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/video.m3u8?sig=old',referer:'https://site.example/watch',title:'Episode'};
+ const freshPage={url:'https://site.example/watch',videos:[video],media:{...video,duration:90},tracks:[]};let releaseValidation,enteredResolve;const entered=new Promise(resolve=>{enteredResolve=resolve;});
+ const rt=await loadBackground({frames:[{frameId:0,documentId:'doc-12',result:{url:'https://site.example/watch',discoveryMode:'summary',videos:[video],tracks:[]}}],frameSnapshots:[freshPage],downloadFailure:{code:'HTTP_AUTH',httpStatus:403},recoveryValidation:()=>new Promise(resolve=>{releaseValidation=()=>resolve({});enteredResolve();})});
+ const source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await entered;await rt.call({action:'cancel',id:job.id});releaseValidation();
+ for(let i=0;i<200&&rt.jobs().some(item=>ACTIVE_STATES.has(item.state));i++)await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,1);
+ assert.ok(rt.engineMessages.some(message=>message.action==='forget'&&message.sourceId==='source-2'));
+ assert.equal(rt.engineMessages.some(message=>message.action==='retain'&&message.sourceId==='source-2'),false);
 });
 
 test('X multi-player expected target uses unique mediaKey when post content identity is shared',async()=>{
@@ -582,4 +1136,208 @@ test('legacy selection migration stays expired when deep model or source changes
  const result=await rt.call({action:'snapshot',tabId:7});
  assert.equal(result.selectionExpired,true);
  assert.equal(rt.stored[selectionStorageKey(7)].selectionToken,undefined);
+});
+
+test('a native in-progress download times out only after 120 seconds without byte progress',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'https://cdn.example/stalled.mp4',filename:'clip.mp4'},browserDownloadState:'in_progress'});
+ const close=rt.connect();
+ const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'stall-doc',url:'https://cdn.example/stalled.mp4',title:'Clip'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>rt.browserDownloads.length===1);
+ await rt.checkBrowserDownloads();
+ rt.advanceTime(119_999);await rt.checkBrowserDownloads();
+ assert.equal(rt.cancelledDownloadIds.length,0,'the transfer remains active just before the timeout');
+ assert.ok(rt.jobs().some(item=>item.id===job.id&&ACTIVE_STATES.has(item.state)));
+ rt.advanceTime(1);await rt.checkBrowserDownloads();
+ await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='error'));
+ const finished=rt.jobs().find(item=>item.id===job.id);
+ assert.equal(finished.errorCode,'NETWORK_TIMEOUT');
+ assert.deepEqual(rt.cancelledDownloadIds,[71]);
+ assert.equal(rt.downloadCount(),0,'the failed native download is removed from the active monitor');
+ close();
+});
+
+test('slow but continuous native byte progress does not time out on total duration',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'https://cdn.example/slow.mp4',filename:'clip.mp4'},browserDownloadItem:{state:'in_progress',bytesReceived:0,totalBytes:100},browserDownloadState:'in_progress'});
+ const close=rt.connect();
+ const startedAt=rt.time;
+ const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'slow-doc',url:'https://cdn.example/slow.mp4',title:'Clip'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>rt.browserDownloads.length===1);
+ await rt.checkBrowserDownloads();
+ for(let bytesReceived=10;bytesReceived<=40;bytesReceived+=10){
+  rt.advanceTime(119_000);await rt.setBrowserItem({bytesReceived});await rt.checkBrowserDownloads();
+  assert.equal(rt.cancelledDownloadIds.length,0);
+ }
+ assert.ok(rt.time-startedAt>120_000,'the test clock has advanced beyond the stall threshold overall');
+ await rt.completeDownload();
+ await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='done'));
+ assert.equal(rt.cancelledDownloadIds.length,0);
+ close();
+});
+
+test('external and job pauses reset native stall time, and destination choosing does not start it',async()=>{
+ const rt=await loadBackground({downloadResult:{url:'https://cdn.example/paused.mp4',filename:'clip.mp4'},browserDownloadState:'in_progress'});
+ const close=rt.connect();
+ const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'pause-doc',url:'https://cdn.example/paused.mp4',title:'Clip'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>rt.browserDownloads.length===1);await rt.checkBrowserDownloads();
+
+ await rt.setBrowserItem({paused:true});rt.advanceTime(180_000);await rt.checkBrowserDownloads();
+ assert.equal(rt.cancelledDownloadIds.length,0,'a Chrome-paused item is excluded');
+ await rt.setBrowserItem({paused:false});await rt.checkBrowserDownloads();
+ rt.advanceTime(90_000);await rt.call({action:'pause',id:job.id});rt.advanceTime(180_000);await rt.checkBrowserDownloads();
+ assert.equal(rt.cancelledDownloadIds.length,0,'a job-paused item is excluded');
+ await rt.call({action:'resume',id:job.id});await rt.checkBrowserDownloads();
+ rt.advanceTime(119_999);await rt.checkBrowserDownloads();assert.equal(rt.cancelledDownloadIds.length,0);
+ rt.advanceTime(1);await rt.checkBrowserDownloads();
+ await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='error'));
+ assert.equal(rt.jobs().find(item=>item.id===job.id).errorCode,'NETWORK_TIMEOUT');
+ close();
+
+ const choosing=await loadBackground({downloadResult:{url:'https://cdn.example/chosen.mp4',filename:'clip.mp4'},browserDownloadState:'in_progress',destinationHandles:new Map()});
+ const closeChoosing=choosing.connect();
+ const chosenSource=await choosing.call({action:'inspect',descriptor:{tabId:8,documentId:'choose-doc',url:'https://cdn.example/chosen.mp4',title:'Clip'}});
+ const pending=await choosing.call({action:'prepareDownload',sourceId:chosenSource.id,kind:'video',destinationId:'pending-choice'});
+ assert.equal(choosing.jobs().find(item=>item.id===pending.id).state,'choosing');
+ choosing.advanceTime(180_000);await choosing.checkBrowserDownloads();
+ assert.equal(choosing.browserDownloads.length,0,'destination selection has not started a Chrome transfer');
+ assert.equal(choosing.jobs().find(item=>item.id===pending.id).state,'choosing');
+ choosing.destinationHandles.set('pending-choice',{});await choosing.checkDestinations();
+ await waitFor(()=>choosing.browserDownloads.length===1);await choosing.checkBrowserDownloads();
+ choosing.advanceTime(119_999);await choosing.checkBrowserDownloads();assert.equal(choosing.cancelledDownloadIds.length,0);
+ await choosing.completeDownload();await waitFor(()=>choosing.jobs().some(item=>item.id===pending.id&&item.state==='done'));
+ closeChoosing();
+});
+
+function expiredAuthFixture(){
+ const descriptor={tabId:7,frameId:0,documentId:'auth-doc',mediaKey:12,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',playerUrl:'blob:player-12',url:'https://cdn.example/old.m3u8',referer:'https://site.example/watch',title:'Episode',platform:{site:'embedded'}};
+ const video={mediaKey:12,documentId:'auth-doc',frameId:0,recoveryIdentity:true,mediaContentId:'episode-12',mediaIdentity:'episode-12',selectionIdentity:'player-12',url:'blob:player-12',downloadUrl:'https://cdn.example/fresh.m3u8',sourceType:'hls',referer:'https://site.example/watch',title:'Episode'};
+ const frames=[{frameId:0,documentId:'auth-doc',result:{url:'https://site.example/watch',videos:[video],media:video,tracks:[]}}];
+ const freshPage={url:'https://site.example/watch',videos:[video],media:video,tracks:[]};
+ return {descriptor,video,frames,frameSnapshots:[freshPage,freshPage]};
+}
+
+test('native forbidden and unauthorized errors re-inspect once and retry the same selection',async()=>{
+ for(const nativeError of ['SERVER_FORBIDDEN','SERVER_UNAUTHORIZED']){
+  const {descriptor,frames,frameSnapshots}=expiredAuthFixture();let transfers=0;
+  const rt=await loadBackground({frames,frameSnapshots,initialStorage:{runSession:'auth-retry'},downloadGate:async()=>({ok:true,result:{url:`https://cdn.example/output-${++transfers}.mp4`,filename:'Episode.mp4',referer:'https://site.example/watch'}}),browserDownloadItems:[{state:'in_progress',bytesReceived:0},{state:'in_progress',bytesReceived:0}]});
+  const close=rt.connect();
+  const source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+  await waitFor(()=>rt.browserDownloads.length===1);
+  await rt.interruptDownload({error:nativeError,canResume:false});
+  await waitFor(()=>rt.browserDownloads.length===2);
+  const inspections=rt.engineMessages.filter(message=>message.action==='inspect');
+  const downloads=rt.engineMessages.filter(message=>message.action==='download');
+  assert.equal(inspections.length,2,`${nativeError} should cause exactly one re-inspection`);
+  assert.equal(downloads.length,2,`${nativeError} should cause exactly one new transfer`);
+  assert.notEqual(downloads[0].sourceId,downloads[1].sourceId);
+  assert.equal(downloads[0].downloadKey,downloads[1].downloadKey);
+  await rt.completeDownload();await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='done'));
+  assert.equal(rt.stored.lastError,undefined);
+  close();
+ }
+});
+
+test('a native authorization error after one refresh preserves HTTP_AUTH without a second refresh',async()=>{
+ const {descriptor,frames,frameSnapshots}=expiredAuthFixture();let transfers=0;
+ const rt=await loadBackground({frames,frameSnapshots,initialStorage:{runSession:'auth-retry-fail'},downloadGate:async()=>({ok:true,result:{url:`https://cdn.example/output-${++transfers}.mp4`,filename:'Episode.mp4',referer:'https://site.example/watch'}}),browserDownloadItems:[{state:'in_progress',bytesReceived:0},{state:'in_progress',bytesReceived:0}]});
+ const close=rt.connect();
+ const source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>rt.browserDownloads.length===1);
+ await rt.interruptDownload({error:'SERVER_UNAUTHORIZED',canResume:false});
+ await waitFor(()=>rt.browserDownloads.length===2);
+ await rt.interruptDownload({error:'SERVER_FORBIDDEN',canResume:false});
+ await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='error'));
+ const finished=rt.jobs().find(item=>item.id===job.id),failure=await rt.call({action:'lastError'});
+ assert.equal(finished.errorCode,'HTTP_AUTH');assert.equal(failure.code,'HTTP_AUTH');assert.equal(failure.httpStatus,403);
+ assert.equal(rt.engineMessages.filter(message=>message.action==='inspect').length,2,'the retry guard prevents a second source refresh');
+ assert.equal(rt.engineMessages.filter(message=>message.action==='download').length,2);
+ close();
+});
+
+test('cancelling during refreshed-source download prevents a saved result from finishing as done',async()=>{
+ const {descriptor,frames,frameSnapshots}=expiredAuthFixture();let downloadCalls=0,releaseRecovery,enteredRecovery;
+ const recoveryStarted=new Promise(resolve=>{enteredRecovery=resolve;});
+ const rt=await loadBackground({frames,frameSnapshots,initialStorage:{runSession:'cancel-refreshed-save'},downloadGate:message=>{
+  if(message.action!=='download')return null;
+  if(++downloadCalls===1)return {ok:true,result:{url:'https://cdn.example/first.mp4',filename:'Episode.mp4',referer:'https://site.example/watch'}};
+  return new Promise(resolve=>{releaseRecovery=()=>resolve({ok:true,result:{saved:true}});enteredRecovery();});
+ },browserDownloadItems:[{state:'in_progress',bytesReceived:0}]});
+ const close=rt.connect();
+ const source=await rt.call({action:'inspect',descriptor}),job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>rt.browserDownloads.length===1);
+ await rt.interruptDownload({error:'SERVER_FORBIDDEN',canResume:false});
+ await recoveryStarted;
+ assert.equal(downloadCalls,2,'the native authorization failure refreshed and retried the same job');
+ await rt.call({action:'cancel',id:job.id});
+ releaseRecovery();
+ await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&!ACTIVE_STATES.has(item.state)));
+ assert.equal(rt.jobs().find(item=>item.id===job.id).state,'cancelled');
+ close();
+});
+
+test('sourcesExpired accepts only offscreen senders and preserves active job metadata',async()=>{
+ let finishTransfer;
+ const rt=await loadBackground({initialStorage:{runSession:'source-expiry'},offscreenPresent:true,downloadGate:()=>new Promise(resolve=>{finishTransfer=()=>resolve({ok:true,result:{saved:true}});})});
+ const close=rt.connect();
+ const expired=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'expired-doc',url:'https://cdn.example/expired.mp4',title:'Expired'}});
+ const active=await rt.call({action:'inspect',descriptor:{tabId:8,documentId:'active-doc',url:'https://cdn.example/active.mp4',title:'Active'}});
+ const job=await rt.call({action:'download',sourceId:active.id,kind:'video'});
+ await waitFor(()=>typeof finishTransfer==='function');
+ await assert.rejects(rt.call({action:'sourcesExpired',sourceIds:[expired.id,active.id]}),/來源未授權/);
+ assert.ok(rt.metaIds().includes(expired.id));
+ await rt.call({action:'sourcesExpired',sourceIds:[expired.id,active.id]},{id:'ext',url:'chrome-extension://ext/offscreen.html'});
+ assert.equal(rt.metaIds().includes(expired.id),false,'the expired, unowned metadata is removed');
+ assert.equal(rt.metaIds().includes(active.id),true,'an active job keeps its source metadata');
+ finishTransfer();await waitFor(()=>rt.jobs().some(item=>item.id===job.id&&item.state==='done'));
+ close();
+});
+
+test('popup observation release leaves the job tab lease until completion or cancellation',async()=>{
+ let finishTransfer;
+ const rt=await loadBackground({initialStorage:{runSession:'popup-job-lease',mediaObservationBuild:BUILD_ID},offscreenPresent:true,downloadGate:()=>new Promise(resolve=>{finishTransfer=()=>resolve({ok:true,result:{saved:true}});})});
+ const close=rt.connect();close.send({action:'observeMedia',tabId:7});
+ await waitFor(()=>activitySnapshots(rt).some(tabs=>tabs.includes(7)));
+ const source=await rt.call({action:'inspect',descriptor:{tabId:7,documentId:'lease-doc',url:'https://cdn.example/lease.mp4',title:'Lease'}});
+ const job=await rt.call({action:'download',sourceId:source.id,kind:'video'});
+ await waitFor(()=>typeof finishTransfer==='function');close();
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.activeSourceTabs())),[7]);
+ assert.deepEqual(activitySnapshots(rt).at(-1),[7],'closing the popup does not release the active job observation');
+ finishTransfer();await waitFor(()=>activitySnapshots(rt).at(-1)?.length===0);
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.activeSourceTabs())),[]);
+
+ const cancelling=await loadBackground({initialStorage:{runSession:'popup-job-cancel',mediaObservationBuild:BUILD_ID},offscreenPresent:true});
+ const closeCancel=cancelling.connect();closeCancel.send({action:'observeMedia',tabId:9});
+ await waitFor(()=>activitySnapshots(cancelling).some(tabs=>tabs.includes(9)));
+ const cancelSource=await cancelling.call({action:'inspect',descriptor:{tabId:9,documentId:'cancel-lease-doc',url:'https://cdn.example/cancel.mp4',title:'Cancel'}});
+ const pending=await cancelling.call({action:'prepareDownload',sourceId:cancelSource.id,kind:'video',destinationId:'not-picked'});
+ closeCancel();assert.deepEqual(JSON.parse(JSON.stringify(cancelling.activeSourceTabs())),[9]);
+ await cancelling.call({action:'cancel',id:pending.id});
+ await waitFor(()=>activitySnapshots(cancelling).at(-1)?.length===0);
+ assert.deepEqual(JSON.parse(JSON.stringify(cancelling.activeSourceTabs())),[],'cancelling the choosing job releases its observation lease');
+});
+
+test('closing the last browser window clears observation and source state with queued and choosing jobs',async()=>{
+ let finishTransfer;
+ const rt=await loadBackground({initialStorage:{runSession:'last-window-cleanup',mediaObservationBuild:BUILD_ID},offscreenPresent:true,downloadGate:()=>new Promise(resolve=>{finishTransfer=()=>resolve({ok:true,result:{saved:true}});})});
+ const close=rt.connect();close.send({action:'observeMedia',tabId:17});
+ await waitFor(()=>activitySnapshots(rt).some(tabs=>tabs.includes(17)));
+ const inspect=async(mediaKey,title)=>rt.call({action:'inspect',descriptor:{tabId:17,documentId:`window-doc-${mediaKey}`,mediaKey,url:`https://cdn.example/window-${mediaKey}.mp4`,title}});
+ const runningSource=await inspect(1,'Running'),queuedSource=await inspect(2,'Queued'),choosingSource=await inspect(3,'Choosing');
+ const running=await rt.call({action:'download',sourceId:runningSource.id,kind:'video'});
+ await waitFor(()=>typeof finishTransfer==='function');
+ const queued=await rt.call({action:'download',sourceId:queuedSource.id,kind:'video'});
+ const choosing=await rt.call({action:'prepareDownload',sourceId:choosingSource.id,kind:'video',destinationId:'last-window-choice'});
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.jobs().filter(job=>[running.id,queued.id,choosing.id].includes(job.id)).map(job=>job.state).sort())),['choosing','queued','running']);
+ assert.equal(rt.metaIds().length,3);
+
+ close();
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.activeSourceTabs())),[17],'job leases remain after popup observation disconnects');
+ rt.closeLastWindow();
+ await waitFor(()=>rt.activeSourceTabs().length===0&&rt.metaIds().length===0&&activitySnapshots(rt).at(-1)?.length===0);
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.activeSourceTabs())),[]);
+ assert.deepEqual(JSON.parse(JSON.stringify(rt.metaIds())),[],'the last-window path removes all source metadata despite active jobs');
+ assert.deepEqual(activitySnapshots(rt).at(-1),[],'offscreen observers receive the empty active-tab set');
+ finishTransfer();
 });

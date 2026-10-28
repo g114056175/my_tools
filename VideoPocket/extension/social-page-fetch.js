@@ -1,4 +1,4 @@
-const SAFE_HEADERS = ["content-type", "content-length", "content-range", "accept-ranges"];
+const SAFE_HEADERS = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "retry-after"];
 
 function serviceForPage(raw) {
   try {
@@ -33,7 +33,7 @@ export async function socialPageFetch(action, options = {}) {
   const root = globalThis;
   const safeHeaders = (headers) => {
     const result = {};
-    for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+    for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified", "retry-after"]) {
       const value = headers?.get?.(name);
       if (value != null) result[name] = String(value).slice(0, 4096);
     }
@@ -100,7 +100,9 @@ export async function socialPageFetch(action, options = {}) {
     if (method !== "GET" && method !== "HEAD") throw error("method is not allowed");
     const range = input.range == null ? "" : String(input.range);
     if (range && !/^bytes=\d+-\d*$/.test(range)) throw error("range is not allowed");
-    return { page, media, method, range };
+    const ifRange=input.ifRange == null ? '' : String(input.ifRange);
+    if(ifRange&&(!range||ifRange.length>4096||!/^"[\x21\x23-\x7e\x80-\xff]*"$/.test(ifRange)))throw error('invalid range validator');
+    return { page, media, method, range, ifRange };
   };
   cleanIdle();
   if (action === "open") {
@@ -110,6 +112,7 @@ export async function socialPageFetch(action, options = {}) {
     const controller = new AbortController();
     const headers = {};
     if (checked.range) headers.Range = checked.range;
+    if (checked.ifRange) headers['If-Range'] = checked.ifRange;
     let timer;
     let response;
     try {
@@ -175,7 +178,8 @@ export async function socialPageResponse(rpc, { url, referer, context, options =
   const signal = options.signal;
   if (signal?.aborted) throw signal.reason;
   const range = options.range || options.headers?.Range || options.headers?.range;
-  const requestOptions = { method, url: media.href, referer: page.href, ...(range ? { range } : {}) };
+  const ifRange=options.headers?.['If-Range'] || options.headers?.['if-range'];
+  const requestOptions = { method, url: media.href, referer: page.href, ...(range ? { range } : {}), ...(ifRange?{ifRange}:{}) };
   let abortDuringOpen;
   let abortListener;
   const openPromise = rpc({ action: "open", options: requestOptions });
@@ -208,7 +212,7 @@ export async function socialPageResponse(rpc, { url, referer, context, options =
         if(closed)return;
         if (item.data?.length) controller.enqueue(new Uint8Array(item.data));
         if (item.done) { finish(); controller.close(); }
-      } catch { if(!closed){await cancel();try{controller.error(safeError("social read failed"));}catch{}} }
+      } catch (error) { if(!closed){await cancel();try{controller.error(error?.code==='PAGE_MEDIA_GONE'?error:safeError("social read failed"));}catch{}} }
     },
     async cancel() { await cancel(); },
   });

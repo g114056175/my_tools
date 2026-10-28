@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIndexedRoutes } from '../extension/indexed-routes.js';
+import {createMediaRangeVersions} from '../extension/media-range-versions.js';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -82,4 +83,65 @@ test('shares the hedge concurrency limit across runs', async () => {
   });
   await Promise.all([routes.run(operation), routes.run(operation)]);
   assert.equal(maxHedgeActive, 1);
+});
+
+test('waits for an explicit route cooldown across runs and lets cancellation stop a queued route', async () => {
+  let releaseCooldown;
+  const cooldown = new Promise(resolve => { releaseCooldown = resolve; });
+  const controller = new AbortController(), calls = [];
+  let waitingResolve;
+  const waiting = new Promise(resolve => { waitingResolve = resolve; });
+  const routes = createIndexedRoutes(['limited-alias', 'backup-alias'], {
+    maxHedges: 0,
+    retryOrigin: error => [429, 503].includes(error.httpStatus) && error.retryAfterMs !== undefined ? error.requestOrigin : null,
+    waitForRetryOrigin: (origin, signal) => new Promise((resolve, reject) => {
+      assert.equal(origin, 'https://limited.test');
+      waitingResolve();
+      if (signal?.aborted) { reject(signal.reason); return; }
+      const onAbort = () => reject(signal.reason);
+      signal?.addEventListener('abort', onAbort, {once: true});
+      cooldown.then(() => { signal?.removeEventListener('abort', onAbort); resolve(); });
+    })
+  });
+  const pending = routes.run(async url => {
+    calls.push(url);
+    if (url === 'limited-alias') throw Object.assign(new Error('limited'), {httpStatus: 429, retryAfterMs: 2000, requestOrigin: 'https://limited.test'});
+    return 'unexpected';
+  }, controller.signal);
+  await waiting;
+  const reason = new Error('cancelled during cooldown');
+  controller.abort(reason);
+  await assert.rejects(pending, error => error === reason);
+  assert.deepEqual(calls, ['limited-alias']);
+  releaseCooldown();
+});
+
+test('401/403 backup switching remains immediate and keeps the backup byte version pinned', async () => {
+  const versions = createMediaRangeVersions(), calls = [], waits = [];
+  const routes = createIndexedRoutes(['https://primary.test/file', 'https://backup.test/file'], {
+    maxHedges: 0,
+    retryOrigin: error => [429, 503].includes(error.httpStatus) && error.retryAfterMs !== undefined ? error.requestOrigin : null,
+    waitForRetryOrigin: async origin => { waits.push(origin); }
+  });
+  const fetchRange = async (url, range, etag = '"v1"') => {
+    const headers = versions.headers('indexed-file');
+    calls.push({url, headers});
+    if (url.includes('primary')) throw Object.assign(new Error('forbidden'), {httpStatus: 403});
+    const [start, end] = range;
+    const response = new Response(new Uint8Array(end - start + 1), {status: 206, headers: {ETag: etag, 'Content-Range': `bytes ${start}-${end}/100`}});
+    versions.verify('indexed-file', url, response);
+    return response;
+  };
+  const first = await routes.run(url => fetchRange(url, [10, 19]));
+  assert.equal(first.url, 'https://backup.test/file');
+  const second = await routes.run(url => fetchRange(url, [20, 29]));
+  assert.equal(second.url, 'https://backup.test/file');
+  assert.deepEqual(calls.map(call => call.url), ['https://primary.test/file', 'https://backup.test/file', 'https://backup.test/file']);
+  assert.deepEqual(calls[2].headers, {'If-Range': '"v1"'});
+  assert.deepEqual(waits, []);
+  await assert.rejects(routes.run(url => fetchRange(url, [30, 39], '"v2"')), error => {
+    const errors = error.errors || [error];
+    assert.ok(errors.some(item => item.code === 'SOURCE_VERSION_CHANGED'));
+    return true;
+  });
 });

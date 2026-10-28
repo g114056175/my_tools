@@ -81,8 +81,8 @@ test("Twitch collection page title is not substituted for an unnamed featured vi
   context[Symbol.for("video-pocket.mediaObserver")] = {...observer(), twitchPlayerFor:()=>({kind:"vod",id:"12345"})};
   for(const mode of ['summary','deep']){
     const page = await vm.runInNewContext(`(${pageSnapshot.toString()})(0,${JSON.stringify(mode)})`, context);
-    assert.equal(page.videos[0].title, "影片 1");
-    if(mode==='deep')assert.equal(page.platform.title,"影片 1");
+    assert.equal(page.videos[0].title, "Video 1");
+    if(mode==='deep')assert.equal(page.platform.title,"Video 1");
   }
 });
 
@@ -107,8 +107,8 @@ test("social post headings are not used as media names and do not borrow a sibli
   const context = makeContext({ url: "https://social.example/feed", videos: [firstVideo, secondVideo], documentNodes: [firstPost, secondPost] });
   context[Symbol.for("video-pocket.mediaObserver")] = observer();
   const page = await vm.runInNewContext(`(${pageSnapshot.toString()})(0)`, context);
-  assert.equal(page.videos[0].title, "影片 1");
-  assert.equal(page.videos[1].title, "影片 2");
+  assert.equal(page.videos[0].title, "Video 1");
+  assert.equal(page.videos[1].title, "Video 2");
 });
 
 test("Bilibili initial state title survives the Chinese generic video label", async () => {
@@ -128,8 +128,8 @@ test("unnamed generic players use their numbered fallback and never cross-name",
   const context = makeContext({ url: "https://player.example/watch", videos: [first, second], documentTitle: "Video player" });
   context[Symbol.for("video-pocket.mediaObserver")] = observer();
   const page = await vm.runInNewContext(`(${pageSnapshot.toString()})(1)`, context);
-  assert.equal(page.videos[0].title, "影片 1");
-  assert.equal(page.videos[1].title, "影片 2");
+  assert.equal(page.videos[0].title, "Video 1");
+  assert.equal(page.videos[1].title, "Video 2");
 });
 
 test("social document title is not treated as a video name", async () => {
@@ -137,5 +137,5 @@ test("social document title is not treated as a video name", async () => {
   const context = makeContext({ url: "https://x.com/OpenAIDevs/status/2112242739198959913", videos: [video], documentTitle: "Here’s what we’re cooking with Codex: 以下是..." });
   context[Symbol.for("video-pocket.mediaObserver")] = observer();
   const page = await vm.runInNewContext(`(${pageSnapshot.toString()})()`, context);
-  assert.equal(page.videos[0].title, "影片 1");
+  assert.equal(page.videos[0].title, "Video 1");
 });

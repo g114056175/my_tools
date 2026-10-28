@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseSubtitles,toSrt,toText} from '../extension/subtitles.js';
-import {makeZip} from '../extension/zip.js';
+import {makeZip} from '../research/archive/zip.js';
 import {validateRequest,downloadArgs,summarize,isInside,friendlyError,subtitleChunks} from '../native/core.mjs';
 test('JSON3 automatic captions retain timestamp and Unicode',()=>{
   const cues=parseSubtitles(JSON.stringify({events:[{tStartMs:1500,dDurationMs:2000,segs:[{utf8:'測試 &amp; '},{utf8:'字幕'}]},{tStartMs:0}]}));

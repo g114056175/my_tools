@@ -2,6 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mediaRequestHeaders} from '../extension/media-request-headers.js';
 import {mediaCredentials} from '../extension/media-credentials.js';
+
+test('cross-origin media receives no page path, private query, credentials or fragment',()=>{
+ const headers=mediaRequestHeaders('https://cdn.example/media.mp4?signature=media-token','https://user:password@page.example/private/watch?session=page-secret#private-fragment');
+ assert.deepEqual(headers,[{header:'Referer',operation:'set',value:'https://page.example/'}]);
+});
+
+test('same-origin media keeps the page route and query but strips credentials and fragment',()=>{
+ const headers=mediaRequestHeaders('https://page.example/media.mp4','https://user:password@page.example/watch?id=123#private-fragment');
+ assert.deepEqual(headers,[{header:'Referer',operation:'set',value:'https://page.example/watch?id=123'}]);
+});
+
+test('HTTPS to HTTP media removes Referer rather than disclosing a secure page',()=>{
+ const headers=mediaRequestHeaders('http://cdn.example/media.mp4','https://page.example/watch?session=secret');
+ assert.deepEqual(headers,[{header:'Referer',operation:'remove'}]);
+});
+
+test('a different port is a different origin for Referer disclosure',()=>{
+ const headers=mediaRequestHeaders('http://page.example:8001/media.mp4','http://page.example:8000/watch?session=secret#fragment');
+ assert.deepEqual(headers,[{header:'Referer',operation:'set',value:'http://page.example:8000/'}]);
+});
 test('Bahamut media receives its normal player origin',()=>{
  const headers=mediaRequestHeaders('https://bahamut.akamaized.net/video/main.m3u8','https://ani.gamer.com.tw/animeVideo.php?sn=1');
  assert.equal(headers.find(h=>h.header==='Origin')?.value,'https://ani.gamer.com.tw');

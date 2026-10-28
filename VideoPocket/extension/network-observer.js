@@ -30,13 +30,15 @@ function responseLength(details) {
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
-export function createNetworkMediaObserver(chrome, { now = () => Date.now(), socialOnly = false } = {}) {
+export function createNetworkMediaObserver(chrome, { now = () => Date.now(), socialOnly = false, demandOnly = false } = {}) {
   if (!chrome?.webRequest || !chrome?.tabs) throw new TypeError("Chrome webRequest and tabs APIs are required");
   const candidatesByTab = new Map();
   const pending = new Map();
   const pageUrls = new Map();
   const nonSocialTabs = new Set();
+  const activeTabs = new Set();
   let disposed = false;
+  let webRequestAttached = false;
 
   const prune = () => {
     const cutoff = now() - TTL;
@@ -73,10 +75,10 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
     }
     return result;
   };
-  const addCandidate = (details, service, request) => {
+  const addCandidate = (details, service, request, time = now()) => {
     prune();
     const item = {
-      time: now(), service, tabId: details.tabId, requestId: String(details.requestId || ""),
+      time, service, tabId: details.tabId, requestId: String(details.requestId || ""),
       frameId: Number.isInteger(details.frameId) ? details.frameId : undefined,
       documentId: details.documentId == null ? undefined : String(details.documentId),
       url: details.url, mime: responseMime(details), kind:networkMediaKind({url:details.url,mime:responseMime(details)}), contentLength: responseLength(details),
@@ -103,6 +105,7 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
   };
   const onSendHeaders = (details) => {
     if (disposed) return;
+    if (demandOnly && !activeTabs.has(details?.tabId)) return;
     prune();
     const service = requestContext(details);
     if (!service) return;
@@ -110,6 +113,7 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
     while (pending.size > GLOBAL_CAP) pending.delete(pending.keys().next().value);
   };
   const onResponseStarted = (details) => {
+    if (demandOnly && !activeTabs.has(details?.tabId)) { pending.delete(String(details?.requestId)); return; }
     prune();
     const request = pending.get(String(details?.requestId));
     pending.delete(String(details?.requestId));
@@ -122,6 +126,7 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
   const onErrorOccurred = (details) => pending.delete(String(details?.requestId));
   const onUpdated = (tabId, changeInfo) => {
     if (disposed || !Number.isInteger(tabId) || tabId < 0) return;
+    if (demandOnly && !activeTabs.has(tabId)) return;
     if (changeInfo?.url) {
       if (networkHttpUrl(changeInfo.url)){pageUrls.set(tabId,new URL(changeInfo.url).origin);if(serviceForPage(changeInfo.url))nonSocialTabs.delete(tabId);else nonSocialTabs.add(tabId);}
       else{pageUrls.delete(tabId);nonSocialTabs.add(tabId);}
@@ -130,23 +135,41 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
     }
     if (changeInfo?.status === "loading") clearTab(tabId);
   };
-  const onRemoved = (tabId) => { pageUrls.delete(tabId);nonSocialTabs.delete(tabId); clearTab(tabId); };
+  const onRemoved = (tabId) => {
+    activeTabs.delete(tabId);
+    pageUrls.delete(tabId);nonSocialTabs.delete(tabId); clearTab(tabId);
+    if (demandOnly && !activeTabs.size) detachWebRequest();
+  };
 
   const sendHeadersSpec = ["requestHeaders", "extraHeaders"];
   const requestFilter={urls:socialOnly?allowedUrlPatterns():["http://*/*","https://*/*"],...(!socialOnly?{types:['media','xmlhttprequest','other']}:{})};
-  try {
-    chrome.webRequest.onSendHeaders.addListener(onSendHeaders, requestFilter, sendHeadersSpec);
-  } catch {
-    chrome.webRequest.onSendHeaders.addListener(onSendHeaders, requestFilter, ["requestHeaders"]);
+  const attachWebRequest = () => {
+    if (disposed || webRequestAttached) return;
+    try {
+      chrome.webRequest.onSendHeaders.addListener(onSendHeaders, requestFilter, sendHeadersSpec);
+    } catch {
+      chrome.webRequest.onSendHeaders.addListener(onSendHeaders, requestFilter, ["requestHeaders"]);
+    }
+    chrome.webRequest.onResponseStarted.addListener(onResponseStarted, requestFilter, ["responseHeaders"]);
+    chrome.webRequest.onErrorOccurred.addListener(onErrorOccurred, requestFilter);
+    webRequestAttached = true;
+  };
+  function detachWebRequest() {
+    if (!webRequestAttached) return;
+    chrome.webRequest.onSendHeaders.removeListener(onSendHeaders);
+    chrome.webRequest.onResponseStarted.removeListener(onResponseStarted);
+    chrome.webRequest.onErrorOccurred.removeListener(onErrorOccurred);
+    webRequestAttached = false;
+    pending.clear();
   }
-  chrome.webRequest.onResponseStarted.addListener(onResponseStarted, requestFilter, ["responseHeaders"]);
-  chrome.webRequest.onErrorOccurred.addListener(onErrorOccurred, requestFilter);
+  if (!demandOnly) attachWebRequest();
   chrome.tabs.onUpdated.addListener(onUpdated);
   chrome.tabs.onRemoved.addListener(onRemoved);
 
   const candidates = ({ tabId, documentId, frameId, pageUrl } = {}) => {
     prune();
     if (!Number.isInteger(tabId) || tabId < 0) return [];
+    if (demandOnly && !activeTabs.has(tabId)) return [];
     if(socialOnly&&nonSocialTabs.has(tabId))return [];
     const currentService = serviceForPage(pageUrls.get(tabId));
     if(socialOnly&&pageUrls.has(tabId)&&!currentService)return [];
@@ -159,15 +182,52 @@ export function createNetworkMediaObserver(chrome, { now = () => Date.now(), soc
       (frameId == null || Number(item.frameId) === Number(frameId))
     ).map((item) => ({ ...item }));
   };
+  const enableTab = tabId => {
+    if (disposed || !Number.isInteger(tabId) || tabId < 0) return false;
+    const wasActive = activeTabs.has(tabId);
+    activeTabs.add(tabId);
+    if (demandOnly && !wasActive) attachWebRequest();
+    return true;
+  };
+  const disableTab = tabId => {
+    if (!Number.isInteger(tabId) || tabId < 0) return false;
+    const wasActive = activeTabs.delete(tabId);
+    clearTab(tabId); pageUrls.delete(tabId); nonSocialTabs.delete(tabId);
+    if (demandOnly && !activeTabs.size) detachWebRequest();
+    return wasActive;
+  };
+  const seed = (tabId, items) => {
+    if (disposed || !Number.isInteger(tabId) || tabId < 0 || (demandOnly && !activeTabs.has(tabId)) || !Array.isArray(items)) return 0;
+    const at = now(), cutoff = at - TTL, seeds = [];
+    for (const entry of items.slice(-GLOBAL_CAP)) {
+      const url = networkHttpUrl(entry?.url), pageUrl = networkHttpUrl(entry?.pageUrl);
+      const time = entry?.timeStamp, frameId = entry?.frameId, documentId = entry?.documentId;
+      if (!url || !pageUrl || !Number.isFinite(time) || time <= cutoff || time > at ||
+          !Number.isInteger(frameId) || frameId < 0 || typeof documentId !== 'string' || !documentId || documentId.length > 256) continue;
+      const details = {tabId, url, initiator: pageUrl, documentUrl: pageUrl, frameId, documentId, responseHeaders: []};
+      const service = requestContext(details);
+      if (!service || !networkMediaKind({url})) continue;
+      seeds.push({details, service, time});
+    }
+    seeds.sort((a, b) => a.time - b.time);
+    let count = 0;
+    for (const {details, service, time} of seeds) {
+      if (details.frameId === 0) {
+        const pageUrl = details.documentUrl;
+        pageUrls.set(tabId, new URL(pageUrl).origin);
+        if (serviceForPage(pageUrl)) nonSocialTabs.delete(tabId); else nonSocialTabs.add(tabId);
+      }
+      addCandidate(details, service, undefined, time); count++;
+    }
+    return count;
+  };
   const dispose = () => {
     if (disposed) return;
     disposed = true;
-    chrome.webRequest.onSendHeaders.removeListener(onSendHeaders);
-    chrome.webRequest.onResponseStarted.removeListener(onResponseStarted);
-    chrome.webRequest.onErrorOccurred.removeListener(onErrorOccurred);
+    detachWebRequest();
     chrome.tabs.onUpdated.removeListener(onUpdated);
     chrome.tabs.onRemoved.removeListener(onRemoved);
-    candidatesByTab.clear(); pending.clear(); pageUrls.clear();nonSocialTabs.clear();
+    candidatesByTab.clear(); pending.clear(); pageUrls.clear();nonSocialTabs.clear();activeTabs.clear();
   };
-  return { candidates, dispose, debug: () => ({ pendingCount: pending.size, tabCount: candidatesByTab.size }) };
+  return { candidates, enableTab, disableTab, seed, dispose, debug: () => ({ pendingCount: pending.size, tabCount: candidatesByTab.size, activeTabCount: activeTabs.size, webRequestAttached }) };
 }

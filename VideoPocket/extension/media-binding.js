@@ -1,6 +1,7 @@
 // Read only metadata already owned by a rendered player. Never inspect the
 // application root, sibling fibers, network credentials or private stores.
 import {ownedXPlayerMetadata} from './x-media.js';
+import {facebookPlayerPayload} from './facebook-player.js';
 // Scheduling hints only. Avoid a second whole-document evidence scan just to
 // decide which queued metadata to parse first. Exact ownership is checked later.
 export function selectedMediaHint(video,{pageUrl=''}={}){
@@ -24,6 +25,8 @@ export function ownedPlayerMetadata(video,{pageUrl=''}={}){
       if(!node||typeof node!=='object'||depth>9||seen.has(node)||--remaining<0)return;
       seen.add(node);
       let fields;try{fields=Object.getOwnPropertyDescriptors(node);}catch{return;}
+      const facebook=fields.coreVideoPlayerMetaData?.value?facebookPlayerPayload(node,{pageUrl}):null;
+      if(facebook){payloads.push(facebook);ids.add(facebook.id);}
       const nested=fields.video?.value;
       if(nested&&typeof nested==='object')try{
         const child=Object.getOwnPropertyDescriptors(nested),id=fields.id?.value;

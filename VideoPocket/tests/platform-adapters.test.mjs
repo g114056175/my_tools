@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { instagramMediaSnapshot } from '../extension/instagram-adapter.js';
+import { instagramMediaSnapshot } from '../research/platforms/instagram-adapter.js';
 import { twitchVodId, twitchVodManifest } from '../extension/twitch-adapter.js';
 import { pageSnapshot } from '../extension/page.js';
 
@@ -83,5 +83,5 @@ test('blank frame titles fall back to a source filename instead of blank options
  globalThis.location={href:'https://example.test/frame',hostname:'example.test',pathname:'/frame'};globalThis.window={};globalThis.performance={getEntriesByType:()=>[]};
  globalThis.document={title:'  ',documentElement:{lang:'en'},scripts:[],querySelectorAll:s=>s==='video'?[video]:[],querySelector:()=>null};
  const snapshot=await pageSnapshot();assert.equal(snapshot.videos[0].title,'flower');
- video.currentSrc='';const noName=await pageSnapshot();assert.equal(noName.videos[0].title,'影片 1');
+ video.currentSrc='';const noName=await pageSnapshot();assert.equal(noName.videos[0].title,'Video 1');
 });

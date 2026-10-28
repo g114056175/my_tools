@@ -15,6 +15,12 @@ test('range output gate rejects preroll-expanded, late, silent and unsynchronize
  for(const file of [{video:track(0,35),audio:track(0,35)},{video:track(3,25),audio:track(0,25)},{video:track(0,25)},{video:track(0,25),audio:track(.12,25)}])await assert.rejects(rt.api.validate(file,25,{video:true,audio:true}),{code:'RANGE_PROCESSING_FAILED'});
  const result=await rt.api.validate({video:track(0,25),audio:track(.011,24.992)},25,{video:true,audio:true});assert.equal(result.duration,25);assert.equal(rt.disposed,5);
 });
+test('validation reports only advancing activity from decoded samples',async()=>{
+ const rt=await runtime(),activity=[],video=track(0,1);
+ await rt.api.validate({video},1,{video:true,audio:false},(stage,progress)=>activity.push([stage,progress]));
+ assert.equal(activity[0][0],'validating');assert.equal(activity[0][1],0);
+ assert.ok(activity.length>2);assert.ok(activity.slice(1).every(([stage,progress],index)=>stage==='validating'&&progress===index+1));
+});
 test('invalid range or missing source clock fails before allocating an output file',async()=>{
  const rt=await runtime();await assert.rejects(rt.api.cutRange({range:{start:60,end:60},inputs:[]}),{code:'RANGE_INVALID'});
  await assert.rejects(rt.api.cutRange({range:{start:60,end:85},inputs:[]}),{code:'RANGE_PROCESSING_FAILED'});

@@ -1,0 +1,2 @@
+# Keep the generated bundle identical to esbuild output on Windows checkouts.
+extension/media-observer.js text eol=lf

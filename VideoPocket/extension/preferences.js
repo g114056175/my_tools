@@ -24,8 +24,8 @@ export function videoQualityOptions(preferred,heights=[]){
  const values=[...new Set(heights.map(Number).filter(n=>Number.isFinite(n)&&n>0))].sort((a,b)=>b-a).map(String),wanted=String(preferred),effective=availableVideoQuality(wanted,values);
  const automatic=Number(wanted)>0&&!values.includes(wanted)&&values.length>0;
  if(values.length===1&&!automatic)return {options:[{value:values[0],label:`${values[0]}p`}],selected:values[0]};
- const options=[{value:'0',label:values.length?`最佳（${values[0]}p）`:'最佳'}];
- if(automatic)options.push({value:PRESERVED_QUALITY,label:`${effective}p（自動）`,title:`偏好 ${wanted}p；此影片使用 ${effective}p`});
+ const options=[{value:'0',label:values.length?`Best (${values[0]}p)`:'Best'}];
+ if(automatic)options.push({value:PRESERVED_QUALITY,label:`${effective}p (Auto)`,title:`Preferred ${wanted}p; using ${effective}p for this video`});
  options.push(...values.map(value=>({value,label:`${value}p`})));
  return {options,selected:automatic?PRESERVED_QUALITY:effective};
 }

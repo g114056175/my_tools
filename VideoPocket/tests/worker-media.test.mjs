@@ -15,6 +15,15 @@ function environment(){
  return {Worker:WorkerMock};
 }
 
+function controlledTimers(){
+ let nextId=0;const jobs=new Map();
+ return {
+  jobs,
+  setTimeout(callback,delay){const id=++nextId;jobs.set(id,{callback,delay});return id;},
+  clearTimeout(id){jobs.delete(id);},
+ };
+}
+
 test('worker observation preserves construction, subclasses, arguments and native failures',()=>{
  const target=environment(),Native=target.Worker,post=Native.prototype.postMessage,values=[];
  const dispose=observeWorkerMetadata(target,value=>values.push(value));
@@ -136,7 +145,8 @@ test('metadata-only worker copying keeps X broadcast binding identities',()=>{
 test('the shipped document-start bundle observes FB worker metadata and binds the selected ID',async()=>{
  const target=environment();target.location={href:'https://www.facebook.com/feed',hostname:'www.facebook.com'};
  const original=target.Worker;
- const context=vm.createContext({...target,URL:class extends URL{},TextDecoder,TextEncoder,WeakRef});
+ const timers=controlledTimers();
+ const context=vm.createContext({...target,...timers,URL:class extends URL{},TextDecoder,TextEncoder,WeakRef});
  const bundle=await fs.readFile(new URL('../extension/media-observer.js',import.meta.url),'utf8');
  vm.runInContext(bundle,context);
  assert.notEqual(context.Worker,original,'the production bundle must install the FB worker observer');
@@ -151,4 +161,5 @@ test('the shipped document-start bundle observes FB worker metadata and binds th
  `,context);
  assert.equal(outcome,'https://video.fbcdn.net/selected.mp4');
  assert.equal(context.Worker,original);
+ assert.equal(timers.jobs.size,0,'dispose clears the observer lease timer');
 });

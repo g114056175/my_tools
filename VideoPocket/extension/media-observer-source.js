@@ -4,6 +4,7 @@ import {
   mediaElementSource,
 } from "./media-evidence.js";
 import { createMediaModelStore, extractMediaModels } from "./media-models.js";
+import {createVimeoConfigurationReader} from './vimeo-source.js';
 import { selectedMediaHint } from "./media-binding.js";
 import { observeWorkerMetadata } from "./worker-media.js";
 import { observeJsonMetadata, copyMediaMetadata } from "./json-media-observer.js";
@@ -12,8 +13,10 @@ import { dailymotionContext } from "./dailymotion.js";
 import {titleFor,isGenericMediaTitle} from './media-titles.js';
 import {extractTwitchPlayerMetadata} from './twitch-clips.js';
 import {BUILD_ID} from './build-info.js';
+import {isMediaPresent} from './media-presence.js';
 
 const OBSERVER_SYMBOL = Symbol.for("video-pocket.mediaObserver");
+const normalizeLeaseMs=value=>{if(value===undefined||value===null)return null;const delay=Number(value);return Number.isFinite(delay)&&delay>0?Math.min(0x7fffffff,Math.floor(delay)):null;};
 const MAX_GRAPH = 512,
   MAX_OBJECT_URLS = 256,
   MAX_TEXT = 512 * 1024,
@@ -92,7 +95,7 @@ export function mediaModelsFromText(text,baseUrl='',parseJson=JSON.parse){
 
 export function installMediaObserver(target = globalThis, options = {}) {
   const previous = target[OBSERVER_SYMBOL];
-  if (previous?.sourcesFor && previous.build === BUILD_ID) return previous;
+  if (previous?.sourcesFor && previous.build === BUILD_ID) { previous.renew?.(options.leaseMs); return previous; }
   // Extension reloads do not remove hooks from existing MAIN-world pages.
   // Restore the old hooks before installing this build, avoiding stacked
   // JSON/fetch wrappers and the silent reuse of obsolete parsing rules.
@@ -106,6 +109,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       diagnosticsFor: () => ({ excluded: true }),
       pageContext: () => null,
       scanDocument: () => [],
+      renew: () => true,
       dispose: () => {},
     };
     try { target[OBSERVER_SYMBOL] = api; } catch {}
@@ -123,15 +127,25 @@ export function installMediaObserver(target = globalThis, options = {}) {
     mediaSources = new WeakMap(),
     sourceBuffers = new WeakMap(),
     wrappers = [];
+  let disposed=false,leaseTimer=null,walkTimer=null,pagehideListener=null,defaultLeaseMs=normalizeLeaseMs(options.leaseMs);
+  const timers=new Set();
+  const setTimer=(callback,delay)=>{
+    let id;
+    const run=()=>{timers.delete(id);callback();};
+    try{id=typeof target.setTimeout==='function'?target.setTimeout(run,delay):globalThis.setTimeout(run,delay);}catch{id=globalThis.setTimeout(run,delay);}
+    if(id!=null)timers.add(id);return id;
+  };
+  const clearTimer=id=>{if(id==null)return;timers.delete(id);try{if(typeof target.clearTimeout==='function')target.clearTimeout(id);else globalThis.clearTimeout(id);}catch{try{globalThis.clearTimeout(id);}catch{}}};
   const parseJson=target.JSON?.parse || JSON.parse;
   const modelStore = createMediaModelStore({parseJson,target});
+  const vimeoConfiguration=createVimeoConfigurationReader({target,parseJson,fetch:typeof target.fetch==='function'?target.fetch.bind(target):undefined,isActive:()=>!disposed});
   const videoRegistry=new Set();let videoRegistryObserver,shadowRestore;
   const shadowRoots=new Set(),walkQueue=[];let walkScheduled=false,walkNodes=0;
-  const registerVideo=node=>{try{if(node?.tagName==='VIDEO')videoRegistry.add(node);while(videoRegistry.size>512)videoRegistry.delete(videoRegistry.values().next().value);}catch{}};
-  const enqueueShadowRoot=root=>{if(!root||shadowRoots.has(root))return;shadowRoots.add(root);try{videoRegistryObserver?.observe?.(root,{childList:true,subtree:true});}catch{}walkQueue.push({root,node:root});scheduleWalk();};
-  const visitNode=node=>{if(!node)return;registerVideo(node);try{if(node.shadowRoot)enqueueShadowRoot(node.shadowRoot);}catch{}};
+  const registerVideo=node=>{if(disposed)return;try{if(node?.tagName==='VIDEO')videoRegistry.add(node);while(videoRegistry.size>512)videoRegistry.delete(videoRegistry.values().next().value);}catch{}};
+  const enqueueShadowRoot=root=>{if(disposed||!root||shadowRoots.has(root))return;shadowRoots.add(root);try{videoRegistryObserver?.observe?.(root,{childList:true,subtree:true});}catch{}walkQueue.push({root,node:root});scheduleWalk();};
+  const visitNode=node=>{if(disposed||!node)return;registerVideo(node);try{if(node.shadowRoot)enqueueShadowRoot(node.shadowRoot);}catch{}};
   const clock=()=>typeof target.performance?.now==='function'?target.performance.now():Date.now();
-  const walkBatch=()=>{walkScheduled=false;const deadline=clock()+8;let n=0;
+  const walkBatch=()=>{walkTimer=null;walkScheduled=false;if(disposed)return;const deadline=clock()+8;let n=0;
     while(walkQueue.length&&n++<256&&clock()<deadline){const item=walkQueue[0];
       if(!item.started){item.started=true;visitNode(item.node);try{item.walker=target.document.createTreeWalker?.(item.node,1);}catch{}item.count=1;}
       const node=item.walker?.nextNode();
@@ -141,14 +155,14 @@ export function installMediaObserver(target = globalThis, options = {}) {
         if(!item.walker)for(const child of Array.from(item.node?.children||[]).slice(0,64))if(walkQueue.length<64)walkQueue.push({node:child});
       }
     }if(walkQueue.length)scheduleWalk();};
-  const scheduleWalk=()=>{if(walkScheduled)return;walkScheduled=true;(target.setTimeout||globalThis.setTimeout)?.(walkBatch,0);};
+  const scheduleWalk=()=>{if(disposed||walkScheduled)return;walkScheduled=true;walkTimer=setTimer(walkBatch,0);};
   try{
     const attach=target.Element?.prototype?.attachShadow;
-    if(typeof attach==='function'){const wrapped=function(...args){const root=attach.apply(this,args);enqueueShadowRoot(root);return root;};target.Element.prototype.attachShadow=wrapped;shadowRestore=()=>{if(target.Element.prototype.attachShadow===wrapped)target.Element.prototype.attachShadow=attach;};}
+    if(typeof attach==='function'){const wrapped=function(...args){const root=attach.apply(this,args);if(!disposed)enqueueShadowRoot(root);return root;};target.Element.prototype.attachShadow=wrapped;shadowRestore=()=>{if(target.Element.prototype.attachShadow===wrapped)target.Element.prototype.attachShadow=attach;};}
     const root=target.document.documentElement||target.document;shadowRoots.add(root);walkQueue.push({root,node:root});scheduleWalk();
-    if(target.MutationObserver){videoRegistryObserver=new target.MutationObserver(records=>{let count=0;for(const record of records){for(const node of record.addedNodes||[]){visitNode(node);if(walkQueue.length<64)walkQueue.push({node});if(++count>=256)break;}if(count>=256)break;}scheduleWalk();});videoRegistryObserver.observe(root,{childList:true,subtree:true});for(const shadowRoot of shadowRoots)if(shadowRoot!==root)try{videoRegistryObserver.observe(shadowRoot,{childList:true,subtree:true});}catch{}}
+    if(target.MutationObserver){videoRegistryObserver=new target.MutationObserver(records=>{if(disposed)return;let count=0;for(const record of records){for(const node of record.addedNodes||[]){visitNode(node);if(walkQueue.length<64)walkQueue.push({node});if(++count>=256)break;}if(count>=256)break;}scheduleWalk();});videoRegistryObserver.observe(root,{childList:true,subtree:true});for(const shadowRoot of shadowRoots)if(shadowRoot!==root)try{videoRegistryObserver.observe(shadowRoot,{childList:true,subtree:true});}catch{}}
   }catch{}
-  let pendingMetadata=0,pendingManifest=0,disposed=false,manifestBytes=0;
+  let pendingMetadata=0,pendingManifest=0,manifestBytes=0;
   const deferredMetadata=[];const MAX_DEFERRED_METADATA=32,MAX_DEFERRED_BYTES=2*1024*1024,DEFERRED_TTL=10*60*1000;
   let deferredBytes=0,deferredGeneration=0,lastDrainGeneration=0;
   const metadataReaders=new Set();
@@ -186,6 +200,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       if (!manifests.has(url)) manifestAliases.delete(alias);
   };
   const rememberManifest = (rawUrl, text, type = "", aliases = []) => {
+    if(disposed)return;
     const url = http(rawUrl);
     if (!url || typeof text !== "string" || text.length > MAX_TEXT) return;
     // Keep Dailymotion's historical narrow retrieval policy. Other pages can
@@ -230,7 +245,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     return value ? {url: value.url, text: value.text, type: value.type} : null;
   };
   const touch = (url, type = "", active = false) => {
-    if (!url) return;
+    if (disposed||!url) return;
     const old = known.get(url);
     if (old) known.delete(url);
     known.set(url, {
@@ -243,6 +258,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     prune();
   };
   const addEdge = (child, parent, type = "") => {
+    if(disposed)return;
     child=String(child).replace(/&amp;/g,'&').replace(/&quot;/g,'"');
     child = http(child, parent);
     parent = http(parent);
@@ -260,6 +276,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     }
   };
   const rememberBody = (body, url, type = "") => {
+    if(disposed)return;
     try {
       if (body && (typeof body === "object" || typeof body === "function")) {
         bodyUrl.set(body, url);
@@ -281,6 +298,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     }
   };
   const parseText = (text, url, type = "") => {
+    if(disposed)return;
     try {
       if (typeof text !== "string" || text.length > MAX_TEXT) return;
       const hls = isM3u8(url, type) || /^\s*#EXTM3U\b/m.test(text);
@@ -343,10 +361,12 @@ export function installMediaObserver(target = globalThis, options = {}) {
     } catch { return false; }
   };
   const recordJson = (value, url) => {
+    if(disposed)return;
     try { modelStore.merge(extractMediaModels(value, { baseUrl: url })); } catch {}
   };
-  const recordText=(value,url)=>{try{modelStore.merge(mediaModelsFromText(value,url,parseJson));}catch{}};
+  const recordText=(value,url)=>{if(disposed)return;try{modelStore.merge(mediaModelsFromText(value,url,parseJson));}catch{}};
   const deferMetadata=(value,url,kind='json')=>{
+    if(disposed)return;
     // Deferred parsing must not let unrelated API/analytics traffic evict
     // the one playback response needed by a later user selection.
     if(kind==='text'){
@@ -412,6 +432,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
   // on ordinary pages too; modelFor still requires an exact player identity,
   // so worker timing alone can never bind a source to a video.
   try{wrappers.push(observeWorkerMetadata(target,value=>{
+    if(disposed)return;
     if(typeof value==='string')deferMetadata(value,target.location.href,'text');
     else deferMetadata(value,target.location.href,'json');
   },{metadataOnly:true,maxDepth:8,maxNodes:512,maxCharacters:128*1024,maxMessages:120}));}catch{}
@@ -430,9 +451,9 @@ export function installMediaObserver(target = globalThis, options = {}) {
       pendingMetadata++;metadataReaders.add(reader);
       let bytes=0,buffer='',whole='',stopped=false;
       const decoder=new TextDecoder();
-      timer=setTimeout(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
+      timer=setTimer(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
       while(!disposed&&!stopped){
-        const item=await reader.read();if(item.done)break;
+        const item=await reader.read();if(disposed||stopped||item.done)break;
         const available=MAX_TEXT-bytes;
         const chunk=item.value.subarray(0,available);
         bytes+=chunk.byteLength;
@@ -444,7 +465,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       }
       if(!disposed&&!stopped&&bytes<=MAX_TEXT)deferMetadata(whole+decoder.decode(),url,'text');
     }catch{}finally{
-      if(timer)clearTimeout(timer);
+      if(timer!=null)clearTimer(timer);
       if(reader){metadataReaders.delete(reader);pendingMetadata--;reader.cancel().catch(()=>{});}
     }
   };
@@ -465,9 +486,9 @@ export function installMediaObserver(target = globalThis, options = {}) {
       reader=response.clone().body?.getReader?.(); if(!reader)return;
       pendingManifest++;manifestReaders.add(reader);
       let bytes=0,whole="",stopped=false; const decoder=new TextDecoder();
-      timer=setTimeout(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
+      timer=setTimer(()=>{stopped=true;reader.cancel().catch(()=>{});},5000);
       while(!disposed&&!stopped){
-        const item=await reader.read(); if(item.done)break;
+        const item=await reader.read(); if(disposed||stopped||item.done)break;
         bytes+=item.value.byteLength; if(bytes>MAX_TEXT){reader.cancel().catch(()=>{});break;}
         whole+=decoder.decode(item.value,{stream:true});
       }
@@ -477,7 +498,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
         rememberManifest(url,value,type,aliases);
       }
     }catch{}finally{
-      if(timer)clearTimeout(timer); if(reader){manifestReaders.delete(reader);pendingManifest--;reader.cancel().catch(()=>{});}
+      if(timer!=null)clearTimer(timer); if(reader){manifestReaders.delete(reader);pendingManifest--;reader.cancel().catch(()=>{});}
     }
   };
   if(typeof target.fetch==='function'){
@@ -485,6 +506,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const wrapped=function(...args){
       const result=original.apply(this,args);
       return result.then(response=>{
+        if(disposed)return response;
         try{const url=http(response?.url),alias=http(typeof args[0]==='string'?args[0]:args[0]?.url,target.location?.href);if(url&&responseSucceeded(response))rememberBody(response.body,url,responseType(response));void observeManifest(response,alias?[alias]:[]);}catch{}
         void observeMetadata(response);return response;
       });
@@ -497,7 +519,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
   const streamProto=target.ReadableStream?.prototype;
   if(typeof streamProto?.getReader==='function'){
     const original=streamProto.getReader;
-    const wrapped=function(...args){const reader=original.apply(this,args),url=bodyUrl.get(this);if(url)readerUrls.set(reader,url);return reader;};
+    const wrapped=function(...args){const reader=original.apply(this,args),url=disposed?'':bodyUrl.get(this);if(url)readerUrls.set(reader,url);return reader;};
     streamProto.getReader=wrapped;
     wrappers.push(()=>{if(streamProto.getReader===wrapped)streamProto.getReader=original;});
   }
@@ -507,7 +529,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const wrapped=function(...args){
       const result=original.apply(this,args),url=readerUrls.get(this);
       if(!url)return result;
-      return result.then(item=>{if(item?.value){rememberBody(item.value,url);if(item.value.buffer)bufferUrl.set(item.value.buffer,url);}return item;});
+      return result.then(item=>{if(!disposed&&item?.value){rememberBody(item.value,url);if(item.value.buffer)bufferUrl.set(item.value.buffer,url);}return item;});
     };
     proto.read=wrapped;
     wrappers.push(()=>{if(proto.read===wrapped)proto.read=original;});
@@ -535,6 +557,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
       if (typeof then !== "function") return result;
       return then.call(result, (value) => {
         try {
+          if(disposed)return value;
           if (!responseSucceeded(this)) return value;
           rememberBody(value, url, type);
           if (name === "text") {
@@ -560,6 +583,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
   wrapResponse("blob");
   wrapResponse("text");
   wrapResponse("json");
+  const xhrCallbacks=new Set();
   const xhrProto = target.XMLHttpRequest?.prototype;
   if (xhrProto?.open && xhrProto?.send) {
     const open = xhrProto.open,
@@ -573,10 +597,12 @@ export function installMediaObserver(target = globalThis, options = {}) {
     };
     const wrappedSend = function (...args) {
       const xhr = this;
+      let record;
       try {
-        xhr.addEventListener?.(
-          "load",
-          () => {
+        const listener=()=>{
+            if(record)xhrCallbacks.delete(record);
+            try{xhr.removeEventListener?.('load',listener);}catch{}
+            if(disposed)return;
             try {
               const url = http(xhr.responseURL || xhrUrls.get(xhr));
               if (!url || (typeof xhr.status === "number" && xhr.status >= 400)) return;
@@ -598,11 +624,11 @@ export function installMediaObserver(target = globalThis, options = {}) {
               }
               touch(url, type, isManifest(url, type));
             } catch {}
-          },
-          { once: true },
-        );
+          };
+        record={xhr,listener};xhrCallbacks.add(record);
+        xhr.addEventListener?.("load",listener,{once:true});
       } catch {}
-      return send.apply(this, args);
+      try{return send.apply(this, args);}catch(error){if(record){xhrCallbacks.delete(record);try{xhr.removeEventListener?.('load',record.listener);}catch{}}throw error;}
     };
     xhrProto.open = wrappedOpen;
     xhrProto.send = wrappedSend;
@@ -616,6 +642,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const create = urlApi.createObjectURL;
     const wrappedCreate = function (value) {
       const result = create.call(this, value);
+      if(disposed)return result;
       try {
         const source = sourceOf(value);
         objectUrls.set(result, {
@@ -638,13 +665,13 @@ export function installMediaObserver(target = globalThis, options = {}) {
     if (urlApi.revokeObjectURL) {
       const revoke = urlApi.revokeObjectURL;
       const wrappedRevoke = function (url) {
-        try {
+        try {if(!disposed){
           const record = objectUrls.get(url);
           if (record) {
             record.revoked = true;
             record.at = now();
           }
-        } catch {}
+        }} catch {}
         return revoke.call(this, url);
       };
       urlApi.revokeObjectURL = wrappedRevoke;
@@ -659,6 +686,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const add = msProto.addSourceBuffer;
     const wrappedAdd = function (...args) {
       const buffer = add.apply(this, args);
+      if(disposed)return buffer;
       try {
         const record = mediaSources.get(this) || {
           buffers: new Set(),
@@ -680,9 +708,9 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const remove = msProto.removeSourceBuffer;
     const wrappedRemove = function (buffer) {
       const result = remove.apply(this, arguments);
-      try {
+      try {if(!disposed){
         mediaSources.get(this)?.buffers.delete(buffer);
-      } catch {}
+      }} catch {}
       return result;
     };
     msProto.removeSourceBuffer = wrappedRemove;
@@ -696,7 +724,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
     const append = sbProto.appendBuffer;
     const wrappedAppend = function (value) {
       const result = append.apply(this, arguments);
-      try {
+      try {if(!disposed){
         const source = sourceOf(value),
           ms = sourceBuffers.get(this),
           record = mediaSources.get(ms);
@@ -708,7 +736,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
             touch(source, "", true);
           }
         }
-      } catch {}
+      }} catch {}
       return result;
     };
     sbProto.appendBuffer = wrappedAppend;
@@ -830,8 +858,22 @@ export function installMediaObserver(target = globalThis, options = {}) {
             : "no-associated-source",
     };
   };
+  const renew = leaseMs => {
+    if(disposed)return false;
+    if(leaseMs!==undefined)defaultLeaseMs=normalizeLeaseMs(leaseMs);
+    if(leaseTimer!==null){clearTimer(leaseTimer);leaseTimer=null;}
+    if(defaultLeaseMs!==null)leaseTimer=setTimer(()=>{leaseTimer=null;dispose();},defaultLeaseMs);
+    return true;
+  };
   const dispose = () => {
+    if(disposed)return;
     disposed=true;
+    vimeoConfiguration.dispose();
+    if(leaseTimer!==null)clearTimer(leaseTimer);leaseTimer=null;
+    if(walkTimer!==null)clearTimer(walkTimer);walkTimer=null;walkScheduled=false;
+    for(const timer of timers)clearTimer(timer);timers.clear();
+    if(pagehideListener)try{target.removeEventListener?.('pagehide',pagehideListener);}catch{}pagehideListener=null;
+    for(const {xhr,listener} of xhrCallbacks)try{xhr.removeEventListener?.('load',listener);}catch{}xhrCallbacks.clear();
     for(const reader of metadataReaders)reader.cancel().catch(()=>{});
     for(const reader of manifestReaders)reader.cancel().catch(()=>{});
     for (const restore of wrappers.splice(0))
@@ -839,10 +881,11 @@ export function installMediaObserver(target = globalThis, options = {}) {
         restore();
       } catch {}
     objectUrls.clear();
-    try{videoRegistryObserver?.disconnect?.();}catch{} try{shadowRestore?.();}catch{} videoRegistry.clear();shadowRoots.clear();walkQueue.length=0;deferredMetadata.length=0;deferredBytes=0;
+    try{videoRegistryObserver?.disconnect?.();}catch{} try{shadowRestore?.();}catch{} videoRegistryObserver=null;shadowRestore=null;videoRegistry.clear();shadowRoots.clear();walkQueue.length=0;walkNodes=0;deferredMetadata.length=0;deferredBytes=0;
     graph.clear();
     known.clear();
     manifests.clear(); manifestAliases.clear(); manifestBytes=0;
+    try{const key=Symbol.for('video-pocket.selection'),registry=target[key];registry?.videos?.splice?.(0);registry?.tracks?.clear?.();delete target[key];}catch{try{target[Symbol.for('video-pocket.selection')]=undefined;}catch{}}
     if (target[OBSERVER_SYMBOL]?.dispose === dispose)
       try {
         delete target[OBSERVER_SYMBOL];
@@ -852,6 +895,7 @@ export function installMediaObserver(target = globalThis, options = {}) {
   };
   const api = {
     build: BUILD_ID,
+    renew,
     sourcesFor,
     titleFor: (video,options) => titleFor(video,options),
     isGenericTitle: isGenericMediaTitle,
@@ -863,28 +907,30 @@ export function installMediaObserver(target = globalThis, options = {}) {
     },
     manifestFor,
     modelFor: (video,options={}) => (options.drain===false?null:drainMetadata(16,options.budget,video), modelStore.modelFor(video, target.location?.href)),
+    resolvePlayerModelFor: async video => {
+      const payload=await vimeoConfiguration.get(video);
+      if(disposed||!payload)return null;
+      return extractMediaModels(payload,{baseUrl:target.location?.href}).find(model=>model.id===String(payload.video?.id))||null;
+    },
     canonicalVideo: (video) => modelStore.canonicalVideo(video),
     metadataCandidatesFor: (video,videos) => modelStore.metadataCandidatesFor(video,target.location?.href,videos),
     validateMetadataPlan: (token,video,videos) => modelStore.validateMetadataPlan(token,video,target.location?.href,videos),
     diagnosticsFor: (video) => (prune(),{observerBuild:BUILD_ID,json:jsonMetadata.stats(),metadataQueue:deferredMetadata.length,metadataQueueBytes:deferredBytes,metadataGeneration:lastDrainGeneration,manifests:manifests.size,...modelStore.diagnosticsFor(video,target.location?.href)}),
-    videosSnapshot: (limit=256) => [...videoRegistry].filter(video=>video?.isConnected!==false).slice(0,Math.max(1,Math.min(256,Number(limit)||256))),
+    isPresent: video=>isMediaPresent(video,target),
+    videosSnapshot: (limit=256) => {
+      for(const video of videoRegistry)if(video.isConnected===false||video.ownerDocument&&target.document&&video.ownerDocument!==target.document)videoRegistry.delete(video);
+      return [...videoRegistry].filter(video=>isMediaPresent(video,target)).slice(0,Math.max(1,Math.min(256,Number(limit)||256)));
+    },
     drainMetadata,
     pageContext: () => dailymotionContext(target.document,target.location?.href),
     scanDocument: (videos,budget,selectedVideo) =>
       (budget?null:drainMetadata(16,undefined,selectedVideo), modelStore.scanDocument(target.document, target.location?.href,videos,budget,selectedVideo)),
     dispose,
   };
-  try {
-    target.addEventListener?.(
-      "pagehide",
-      (event) => {
-        if (!event?.persisted) dispose();
-      },
-      { once: true },
-    );
-  } catch {}
+  try {pagehideListener=()=>dispose();target.addEventListener?.("pagehide",pagehideListener,{once:true});} catch {}
   target[OBSERVER_SYMBOL] = api;
   exposeSourceEvidence(target);
+  renew();
   return api;
 }
 

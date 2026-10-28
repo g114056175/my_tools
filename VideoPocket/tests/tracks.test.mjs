@@ -49,7 +49,13 @@ test('ASR format/client/HLS duplicates merge, translations do not enter menu',()
 test('YouTube page inventory excludes phantom native ASR on manual languages',()=>{
   const page={captionInventory:true,tracks:[caption('zh-TW','中文（台灣）',{url:'https://example.com/?lang=zh-TW'}),caption('ko','韓文（自動產生）',{automatic:true,url:'https://example.com/?lang=ko&kind=asr'})]};
   const native=summarize({subtitles:{'zh-TW':[{url:'https://example.com/?lang=zh-TW'}]},automatic_captions:{'zh-TW':[{url:'https://example.com/?lang=zh-TW&kind=asr'}],en:[{url:'https://example.com/?lang=en&kind=asr'}],ko:[{url:'https://example.com/?lang=ko&kind=asr'}]}}).tracks;
-  const tracks=mergeTracks(page,native);assert.equal(tracks.length,2);assert.equal(tracks[0].name,'中文（台灣）');assert.equal(tracks[1].nativeLanguage,'ko');assert.equal(trackLabel(tracks[1]),'韓文 · 語音辨識');
+  const tracks=mergeTracks(page,native);assert.equal(tracks.length,2);assert.equal(tracks[0].name,'中文（台灣）');assert.equal(tracks[1].nativeLanguage,'ko');assert.equal(trackLabel(tracks[1]),'Korean · Speech recognition');
+});
+test('track labels use English language names without changing source metadata or identity',()=>{
+  const manual=caption('zh-TW','中文（台灣）',{pageTrackId:'provider-track-7'}),automatic=caption('ko','韓文（自動產生）',{automatic:true,pageTrackId:'provider-asr-8'});
+  assert.equal(trackLabel(manual),'Chinese (Taiwan)');assert.equal(trackLabel(automatic),'Korean · Speech recognition');
+  assert.equal(manual.pageTrackId,'provider-track-7');assert.equal(automatic.pageTrackId,'provider-asr-8');
+  assert.equal(trackLabel(caption('en','English - Director commentary')),'English - Director commentary','custom provider labels remain intact');
 });
 test('Genuine manual and ASR choices in page inventory remain distinct',()=>{
   const tracks=mergeTracks({captionInventory:true,tracks:[caption('en','English',{url:'https://example.com/?lang=en'}),caption('en','English (auto-generated)',{automatic:true,url:'https://example.com/?lang=en&kind=asr'})]});assert.equal(tracks.length,2);

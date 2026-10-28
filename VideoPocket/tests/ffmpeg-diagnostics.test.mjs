@@ -12,7 +12,7 @@ test('FFmpeg processing categories distinguish corrupt input, missing tracks and
 test('FFmpeg diagnostic categories do not retain raw log paths, URLs or unknown text',()=>{
  const diagnostics=create();diagnostics.observe('https://private.example/file?token=SECRET');diagnostics.observe('/private/path: partial file');
  const value=diagnostics.failure(1);assert.equal(value.processingReason,'invalid-input');assert.ok(!JSON.stringify(value).includes('SECRET'));assert.ok(!JSON.stringify(value).includes('/private'));
- const safe=classifyFailure({code:'MERGE_FAILED',...value});assert.equal(classifyFailure(safe).processingReason,'invalid-input');assert.match(briefFailure(safe).message,/輸入影音異常/);
+ const safe=classifyFailure({code:'MERGE_FAILED',...value});assert.equal(classifyFailure(safe).processingReason,'invalid-input');assert.match(briefFailure(safe).message,/Invalid media input/);
  assert.equal(classifyFailure({code:'MERGE_FAILED',processingReason:'private token',ffmpegExitCode:9999}).processingReason,undefined);
  assert.equal(classifyFailure({code:'MERGE_FAILED',ffmpegExitCode:9999}).ffmpegExitCode,undefined);
 });

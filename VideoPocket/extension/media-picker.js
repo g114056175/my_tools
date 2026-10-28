@@ -48,6 +48,7 @@ export function startMediaPicker(options = {}) {
     const addCurrent = node => {
       if (!node || String(node.tagName).toLowerCase() !== 'video' || next.includes(node)) return;
       if ('isConnected' in node && !node.isConnected) return;
+      try{if(globalThis[Symbol.for('video-pocket.mediaObserver')]?.isPresent?.(node)===false)return;}catch{}
       next.push(node);
     };
     const walkCurrent = scope => {
@@ -82,7 +83,7 @@ export function startMediaPicker(options = {}) {
       }
     }catch{}
     let socialPage=false;try{const page=new URL(location.href);socialPage=/(^|\.)\b(?:x|twitter|reddit|tiktok|instagram|facebook|threads)\.(?:com|net)$/i.test(page.hostname)||/(^|\.)twitch\.tv$/i.test(page.hostname)&&/\/clips\/?$/i.test(page.pathname);}catch{}
-    let title=[platformTitle,twitchOwned?.title,modelTitle,entry?.title,ownedTitle,video.title,video.getAttribute?.('data-video-title'),!socialPage&&videos.length===1?document.title:'',video.getAttribute?.('aria-label')].map(named).find(Boolean) || `影片 ${index+1}`;
+    let title=[platformTitle,twitchOwned?.title,modelTitle,entry?.title,ownedTitle,video.title,video.getAttribute?.('data-video-title'),!socialPage&&videos.length===1?document.title:'',video.getAttribute?.('aria-label')].map(named).find(Boolean) || `Video ${index+1}`;
     try{const page=new URL(location.href),id=page.pathname.match(/^\/videos\/(\d+)/)?.[1];if(/(^|\.)twitch\.tv$/i.test(page.hostname)&&id&&(video.closest?.('[data-a-target="video-player"]')||videos.length===1))mediaIdentity='twitch-vod:'+id;}catch{}
     if(twitchOwned)mediaIdentity=`twitch-${twitchOwned.kind}:${twitchOwned.kind==='clip'?twitchOwned.slug:twitchOwned.id}`;
     try{const page=new URL(location.href),id=page.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || page.searchParams.get('bvid');if(/(^|\.)bilibili\.com$/i.test(page.hostname)&&id&&((()=>{let node=video;for(let depth=0;node&&depth<16;depth++){if(node.closest?.('#bilibili-player,#bilibiliPlayer,.bpx-player-container,.bilibili-player-video,bwp-video'))return true;const host=node.getRootNode?.()?.host;if(!host||host===node)break;node=host;}return false;})()||videos.length===1))mediaIdentity=`bilibili:${id}:${Math.max(1,Number(page.searchParams.get('p'))||1)}`;}catch{}
@@ -101,10 +102,10 @@ export function startMediaPicker(options = {}) {
   Object.assign(overlay.style, {position: 'fixed', zIndex: '2147483646', pointerEvents: 'none', border: '3px solid #2b85bf', background: 'rgba(26,115,232,.12)', boxSizing: 'border-box', display: 'none', borderRadius: '2px'});
   const label = document.createElement('div');
   Object.assign(label.style, {position: 'fixed', zIndex: '2147483647', pointerEvents: 'none', background: '#2b85bf', color: '#fff', font: '12px/1.4 sans-serif', padding: '3px 6px', borderRadius: '3px', display: 'none', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'});
-  label.textContent = '選取影片';
+  label.textContent = 'Select video';
   const guide=document.createElement('div');
   Object.assign(guide.style,{position:'fixed',top:'12px',left:'50%',transform:'translateX(-50%)',zIndex:'2147483647',pointerEvents:'none',background:'#216b9f',color:'#fff',font:'13px/1.5 sans-serif',padding:'8px 14px',borderRadius:'7px',boxShadow:'0 2px 10px #0003',whiteSpace:'nowrap',display:frameId===0?'block':'none'});
-  guide.textContent='點選影片後重開 VideoPocket · Esc 取消';
+  guide.textContent='Click a video, then reopen VideoPocket · Esc cancels';
   (document.body || root).append(overlay, label, guide);
 
   let observer;
@@ -171,7 +172,7 @@ export function startMediaPicker(options = {}) {
     if (!r) { overlay.style.display = 'none'; label.style.display = 'none'; return; }
     Object.assign(overlay.style, {display: 'block', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`});
     Object.assign(label.style, {display: 'block', left: `${Math.max(0, r.left)}px`, top: `${Math.max(0, r.top - 24)}px`});
-    label.textContent = `選取：${candidateFor(video).title}`;
+    label.textContent = `Selected: ${candidateFor(video).title}`;
   };
   const onPointerMove = event => paint(chooseFromEvent(event));
   const onPointerDown = event => {

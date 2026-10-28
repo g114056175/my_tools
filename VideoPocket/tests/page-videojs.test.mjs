@@ -51,6 +51,24 @@ test('focused discovery retains the media inventory and skips broad model scans 
  assert.equal(p.videos[0].title,'Current playlist title');assert.notEqual(p.videos[1].title,'Current playlist title');
 });
 
+test('late Vimeo recovery runs after established discovery and retains the exact media title and ID',async()=>{
+ const v=video({title:'',src:'blob:current'}),calls=[];
+ const observer={scanDocument(){calls.push('document');},modelFor:()=>null,sourcesFor:()=>({candidates:[]}),metadataCandidatesFor(){calls.push('metadata');return null;},async resolvePlayerModelFor(selected){assert.equal(selected,v);calls.push('vimeo');return {id:'1084537',title:'Big Buck Bunny',duration:12,manifestUrl:'https://cdn.test/master.m3u8',manifestType:'hls',versions:[]};}};
+ const page=await snapshot({videos:[v],observer,pageUrl:'https://vimeo.com/1084537'});
+ assert.deepEqual(calls,['document','metadata','vimeo']);assert.equal(page.platform.id,'1084537');assert.equal(page.platform.site,'embedded');
+ assert.equal(page.videos[0].title,'Big Buck Bunny');assert.equal(page.videos[0].mediaContentId,'1084537');assert.equal(page.videos[0].recoveryIdentity,true);
+});
+
+test('Vimeo late recovery cannot replace an existing source or run during inventory and other sites',async()=>{
+ const v=video({src:'blob:current'}),fail=()=>assert.fail('established source and inventory paths must remain unchanged');
+ const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[{url:'https://cdn.test/current.m3u8',kind:'hls',downloadable:true}]}),resolvePlayerModelFor:fail};
+ const page=await snapshot({videos:[v],observer,pageUrl:'https://vimeo.com/1084537'});
+ assert.equal(page.videos[0].downloadUrl,'https://cdn.test/current.m3u8');
+ await snapshot({videos:[v],observer,mode:'summary',pageUrl:'https://vimeo.com/1084537'});
+ observer.sourcesFor=()=>({candidates:[]});
+ await snapshot({videos:[v],observer,pageUrl:'https://new.example/watch'});
+});
+
 test('a missing feed source carries only its exact same-origin player permalink',{concurrency:false},async()=>{
  const a=video({src:''}),b=video({src:''}),observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]})};
  const options={videos:[a,b],observer,pageUrl:'https://www.facebook.com/public',evidence:{collectMediaEvidence:({video:v})=>({identity:{id:v===a?'123':'456',key:v===a?'fb:123':'fb:456',anchor:v===a?'https://www.facebook.com/reel/123/':'https://other.example/reel/456/'}})}};
@@ -220,7 +238,7 @@ test('generic Reddit player labels are replaced by the owning post title or a nu
  const named=video({title:'影片播放器'}),unnamed=video({title:'影片播放器'});
  const observer={scanDocument(){},modelFor:()=>null,sourcesFor:()=>({candidates:[]}),titleFor:v=>v===named?'Actual Reddit post':'',isGenericTitle:t=>t==='影片播放器'};
  const result=await snapshot({videos:[named,unnamed],observer,pageUrl:'https://www.reddit.com/r/example/'});
- assert.equal(result.videos[0].title,'Actual Reddit post');assert.equal(result.videos[1].title,'影片 2');
+ assert.equal(result.videos[0].title,'Actual Reddit post');assert.equal(result.videos[1].title,'Video 2');
 });
 
 test('Twitch channel trailer and Clips use only their selected player metadata',async()=>{

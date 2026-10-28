@@ -18,7 +18,7 @@ export function mediaTitleLabel(title,maxWidth=Infinity,measure) {
 }
 
 export function orderedMediaOptions(videos=[]){
- return videos.map((video,index)=>({index,title:String(video.title || '').trim() || `影片 ${index+1}`}))
+ return videos.map((video,index)=>({index,title:String(video.title || '').trim() || `Video ${index+1}`}))
    .sort((a,b)=>Number(isGenericMediaTitle(a.title))-Number(isGenericMediaTitle(b.title)));
 }
 
@@ -54,16 +54,15 @@ export function sourceVisibility({info, tracks = [], kind}) {
 }
 
 export function sourceHeader({hasVideo,info,tracks=[],phase='idle',error='',detail=''}) {
-  if(error)return {label:error,detail,error:true};
-  if(phase==='detecting')return {label:'讀取影片中…',detail:'正在檢查此分頁的影片',error:false};
-  if(hasVideo&&phase==='inspecting')return {label:'解析影片中…',detail:'正在驗證下載來源',error:false};
-  if(hasVideo&&!popupAvailability(info,tracks).any)return {label:'找到影片，但無下載來源',detail:detail || '未取得可下載的影音格式或字幕',error:true};
-  return {label:'影片：',detail:'',error:false};
+  if(error&&!hasVideo)return {label:error,detail,error:true};
+  if(phase==='detecting')return {label:'Scanning videos…',detail:'Checking this tab for videos',error:false};
+  if(hasVideo&&phase==='inspecting')return {label:'Checking video source…',detail:'Verifying download sources',error:false};
+  return {label:'Video:',detail:'',error:false};
 }
 
 export async function sourceDeadline(operation,timeoutMs=30000) {
   let timer;
-  try{return await Promise.race([Promise.resolve().then(operation),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('來源驗證逾時'),{code:'NETWORK_TIMEOUT'})),timeoutMs);})]);}
+  try{return await Promise.race([Promise.resolve().then(operation),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Source verification timed out'),{code:'NETWORK_TIMEOUT'})),timeoutMs);})]);}
   finally{clearTimeout(timer);}
 }
 

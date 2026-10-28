@@ -3,6 +3,7 @@
 export function downloadIdentity(descriptor = {}) {
   const platform = descriptor.platform || {};
   const site = String(platform.site || '').toLowerCase();
+  const ownedContent=descriptor.recoveryIdentity===true?String(descriptor.mediaContentId || descriptor.linkedMedia?.id || ''):'';
   const identity = site === 'youtube' && platform.id
     ? ['youtube', platform.id]
     : site === 'twitch-clip' && platform.slug
@@ -15,6 +16,8 @@ export function downloadIdentity(descriptor = {}) {
       ? ['bilibili', platform.bvid || '', Number(platform.cid) || 0, Number(platform.page) || 1]
     : site === 'metadata-media' && platform.bindingKey
       ? ['metadata-media', platform.bindingKey, descriptor.mediaKey ?? '', descriptor.frameId ?? '']
+    : site === 'network-media' && platform.binding === 'player-owned' && ownedContent && descriptor.selectionIdentity
+      ? ['player-owned-content',ownedContent,descriptor.selectionIdentity,descriptor.mediaKey ?? '',descriptor.frameId ?? '']
     : site === 'network-media' && platform.binding === 'player-owned'
       ? ['player-owned', platform.bindingSource || '', stableHash(platform.versions || []), descriptor.mediaKey ?? '', descriptor.frameId ?? '']
     : descriptor.linkedMedia?.id

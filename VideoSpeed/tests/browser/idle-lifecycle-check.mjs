@@ -292,6 +292,11 @@ async function captureRateCheck(popupPage, page, tabId, value, label) {
   catch (error) { return { passed: false, label, tabId, requested: value, error: error?.message || String(error) }; }
 }
 
+async function focusForControl(worker,page,tabId){
+  await page.bringToFront();
+  await waitFor(async()=>(await activitySnapshot(worker))?.focusedTabId===tabId,'focus before manual control');
+}
+
 async function openBackgroundTabFrom(page, label) {
   await page.locator('#qa076-open-new').click({ button: 'middle', noWaitAfter: true });
   const created = await waitFor(() => context.pages().find(item => item.url().endsWith('/video-new')) || null, `background child tab for ${label}`, 12000, 100);
@@ -511,6 +516,7 @@ try {
     await popupPage.waitForFunction(() => document.readyState === 'complete');
     await foregroundPage.bringToFront();
     const activeControl = await captureRateCheck(popupPage, foregroundPage, activeVideoTabId, 1.5, 'active-video');
+    await focusForControl(updatedWorker,recentVideoPage,recentVideoTabId);
     const recentControl = await captureRateCheck(popupPage, recentVideoPage, recentVideoTabId, 1.25, 'recent-video');
     await popupPage.close();
 
@@ -556,6 +562,7 @@ try {
       await attachPage(popupPage, 'checkpoint-reload-control-popup');
       await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'domcontentloaded' });
       await popupPage.waitForFunction(() => document.readyState === 'complete');
+      await focusForControl(effectiveWorker,recentVideoPage,recentVideoTabId);
       recentAfterCheckpointReload = await captureRateCheck(popupPage, recentVideoPage, recentVideoTabId, 1.4, 'recent-after-checkpoint-reload');
       await popupPage.close();
     } catch (error) {
@@ -581,6 +588,7 @@ try {
     let newTabControl = { passed: false, label: 'new-background-video', error: 'new tab was not opened' };
     let newTabInfo = null, activityFromOpener = null;
     try {
+      await focusForControl(effectiveWorker,foregroundPage,activeVideoTabId);
       const newPage = await openBackgroundTabFrom(foregroundPage, 'new-background-video');
       const newTabId = await pageTabId(effectiveWorker, newPage);
       newTabInfo = await effectiveWorker.evaluate(id => chrome.tabs.get(id).then(({ id: tabId, url, active, openerTabId }) => ({ tabId, url, active, openerTabId })), newTabId);
@@ -593,6 +601,7 @@ try {
       await attachPage(popupPage, 'new-tab-control-popup');
       await popupPage.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'domcontentloaded' });
       await popupPage.waitForFunction(() => document.readyState === 'complete');
+      await focusForControl(effectiveWorker,newPage,newTabId);
       newTabControl = await captureRateCheck(popupPage, newPage, newTabId, 1.75, 'new-background-video');
       postUpdateNewTab = { ...newTabInfo, openerLeaseUntil: activityFromOpener.until,
         openerLeaseMsAtObservation: activityFromOpener.until - Date.now(), openerMatchesActiveVideo: newTabInfo.openerTabId === activeVideoTabId };

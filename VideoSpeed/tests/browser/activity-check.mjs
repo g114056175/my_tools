@@ -561,20 +561,21 @@ async function runChecks() {
     return 'Chrome tabs.query confirmed real tab A/B activation changes. Both tab-switch grace periods discovered new videos in the top frame and iframe; OS-level blur is unverified.';
   });
 
-  await check('超過 10 秒停止探索；保留控制與手改速，返回後補查', async () => {
+  await check('超過 10 秒停止探索與背景控制；返回後補查並保留當片速度', async () => {
     const { tabA, tabB, pageA, pageB, childB, tabBDeactivatedAt } = qa;
-    const probeBeforeExpiry = await settleDomProbe(tabB.id);
     const remaining = Math.max(0, 10500 - (performance.now() - tabBDeactivatedAt));
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
     const elapsedMs = performance.now() - tabBDeactivatedAt;
     assert.ok(elapsedMs >= 10400, 'real grace wait was shorter than 10.4 seconds: ' + Math.round(elapsedMs) + 'ms');
 
+    const probeBeforeExpiry = await settleDomProbe(tabB.id);
     const oldVideo = await videoState(pageB.mainFrame(), '#qa-video-unvisited');
-    assert.ok(oldVideo?.marker, 'expired page removed the existing video marker');
-    const control = await sendControl(tabB.id, 0, oldVideo.marker, 'set', 3);
-    assert.equal(control?.ok, true, 'existing video control stopped responding after expiry');
+    assert.equal(oldVideo?.marker,null, 'initialized background video still has a controller');
+    const control = await sendControl(tabB.id, 0, 'expired-target', 'set', 3);
+    assert.equal(control?.ok, false, 'background control was still accepted');
+    await pageB.mainFrame().evaluate(()=>{document.querySelector('#qa-video-unvisited').playbackRate=3;});
     await waitVideo(pageB.mainFrame(), '#qa-video-unvisited', state => Math.abs(state.rate - 3) < 0.011,
-      'expired video did not retain manual speed control');
+      'background page speed was overwritten');
 
     const beforeQuality = await Promise.all([pageB.mainFrame(), childB].map(qualityState));
     const newB = await appendVideo(pageB.mainFrame(), 'expired-tab', false);
@@ -596,7 +597,7 @@ async function runChecks() {
     await pageB.mainFrame().evaluate(id => document.getElementById(id).play(), newB);
     await waitVideo(pageB.mainFrame(), '#' + newB, state => Math.abs(state.rate - 8) < 0.011,
       'the new clip did not receive its preset after playback resumed');
-    return 'One real ' + Math.round(elapsedMs) + 'ms wait expired the activity window. A control command set the old video to 3×; top/iframe new clips had no markers, scans, or setters until return; catch-up kept the old clip at 3×.';
+    return 'One real ' + Math.round(elapsedMs) + 'ms wait expired discovery. Background control was rejected; top/iframe new clips had no markers, scans, or setters until return; catch-up kept the already initialized clip at the page-selected 3×.';
   });
 
   await check('三個 frame 的 storage pair 同步不增加 settings 訊息', async () => {

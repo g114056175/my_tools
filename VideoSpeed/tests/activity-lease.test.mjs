@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {ActivityLease} from '../src/activity-lease.js';
 
 test('pending playback survives exploration expiry but cannot be renewed by stale replies',()=>{
- const lease=new ActivityLease();lease.accept({revision:1,focused:false,until:10_000,loadingUntil:60_000});
+ const lease=new ActivityLease();lease.accept({revision:1,focused:false,until:10_000,loadingUntil:30_000});
  assert.equal(lease.isRecent(15_000),false);assert.equal(lease.isLoading(15_000),true);
- assert.equal(lease.accept({revision:1,focused:false,until:10_000,loadingUntil:70_000}),false);
- assert.equal(lease.isLoading(60_000),false);
+ assert.equal(lease.accept({revision:1,focused:false,until:10_000,loadingUntil:40_000}),false);
+ assert.equal(lease.isLoading(30_000),false,'loading expires at its fixed 30 second deadline');
  lease.accept({revision:2,focused:false,until:0});assert.equal(lease.isLoading(20_000),false);
  assert.equal(lease.accept({revision:3,focused:false,until:0,loadingUntil:Infinity}),false);
 });

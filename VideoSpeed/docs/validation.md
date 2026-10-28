@@ -1,3 +1,37 @@
+# VideoSpeed 0.6.17 驗證
+
+2026-10-28。修正 Bilibili 影片頁右側推薦預覽誤入控制目標。VideoPocket 未修改。
+
+## 原因與修正
+
+Bilibili 首頁卡片與影片頁右側推薦使用不同容器。0.6.16 的明確預覽規則只有 `bili-video-card,.bili-video-card`，漏掉 `.video-page-card-small` 與 `.v-recommend-inline-player`。側欄內的播放器因此先命中 `.bpx-player-container`，被當作正式影片登記，後續自動倍速與目標選取便會接手它。
+
+這種預覽也會取得主影片路由身份；首次提示以身份去重，所以可能沒有新的自動提示，實際速度卻已被修改。手動快捷鍵依被選中的影片執行，仍會在預覽上顯示提示。
+
+本輪把這兩個官方容器加入登記前的預覽排除，優先於一般播放器容器。初始化、品質橋接、指標選取及目標清理共用此判定。判斷只限 Bilibili 網域，不依靜音、尺寸或動態新增來排除影片；FB 等社群動態內容繼續使用原流程。探索頻率、載入期限、UI 與權限沿用 0.6.16。
+
+來源核對：Bilibili [官方影片頁程式](https://s1.hdslb.com/bfs/static/jinkela/video/video.10e8c86797efac5e5b578ffb54ae963b5a928508.js) 的推薦卡元件與 `inline-player` 指令，以及[官方樣式](https://s1.hdslb.com/bfs/static/jinkela/video/css/video.0.10e8c86797efac5e5b578ffb54ae963b5a928508.css)。指令在滑鼠進入時建立／啟動預覽，離開時關閉；預覽有明確容器可識別。這是原始碼核對，未把它當作使用者實站 DOM 的直接擷取。
+
+## 驗證
+
+- 舊版 0.6.16 在相同推薦結構 fixture 重現：預覽取得第二個 registry 身份，playbackRate 與 defaultPlaybackRate 被套為 1.75；測試以 `1.75 !== 1` 失敗。新增單元案例也在修正前失敗。
+- 新版 304 項單元／整合通過；包含側欄、獨立 inline 容器、預覽內含主播放器 class、shadow boundary，以及一般正式播放器和社群內容對照。
+- Chromium、Brave 各 25 項瀏覽器檢查通過。側欄與 inline 預覽在無來源時、載入後皆不取得身份；原速度與 defaultPlaybackRate 維持 1，沒有新增自動提示或跟隨記憶寫入。
+- 滑鼠移至預覽並實際點擊後，`< >` 修改主影片，提示仍在主片。主影片暫停、預覽繼續播放時亦通過。移開、卸載預覽後，主影片立即可控；只有預覽的頁面不攔快捷鍵。
+- YouTube 主片提示／換片／重載、既有首頁預覽及 FB／Instagram／TikTok 動態換片、快捷鍵回歸通過。這些項目包含在各瀏覽器的 25 項內。
+- 本次兩個瀏覽器皆未新增頁面錯誤；專用 profile 已清理。未操作個人瀏覽器。
+
+成品 SHA-256（大小寫敏感相對路徑排序，各檔 path + NUL + bytes + NUL）：`11f926264736b2e52a73b0a53e22c54defbdf4b943416fe653ce02bbef6bee39`。
+
+本機證據：`work/qa-079-preview/`、`work/qa-075-main-baseline-0616-sidebar/results.json`、`work/qa-075-main-release-0617-chromium/results.json`、`work/qa-075-main-release-0617-brave/results.json`。輸出摘要為 `VideoSpeed-validation.json`。
+
+## 驗證界線
+
+瀏覽器操作使用真實本機影片與對應容器 fixture；官方 JS／CSS 另行唯讀核對。尚未完成使用者當前 Bilibili 實站頁面的操作驗收，也未重新執行 0.6.16 的全部長時間／生命週期測試。先前 context invalidation、長播卡死與 worker-fetch 的原始觸發條件仍未全數定位，不能以本輪預覽修正宣稱全部解決。
+
+<details>
+<summary>0.6.16 歷史驗證</summary>
+
 # VideoSpeed 0.6.16 驗證
 
 2026-10-28。依新活動規則分開「補查元素」「等待首次設定」「一般背景播放」。VideoPocket 未修改。
@@ -221,6 +255,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

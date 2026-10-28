@@ -9,7 +9,9 @@ function sourceObjectKey(video){
 }
 const YT_PREVIEW='ytd-video-preview,#video-preview,#inline-preview-player,ytd-moving-thumbnail-renderer,ytd-thumbnail,yt-thumbnail-view-model';
 const YT_CARD='yt-lockup-view-model,ytd-video-renderer,ytd-rich-item-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer,ytd-playlist-video-renderer,ytd-reel-item-renderer';
-const BILI_PREVIEW='bili-video-card,.bili-video-card';
+// Recommendation previews mount their own player inside these explicit shells;
+// match them before the primary-player guard, even with nested bpx containers.
+const BILI_PREVIEW='bili-video-card,.bili-video-card,.video-page-card-small,.v-recommend-inline-player';
 const BILI_CARD='.video-card,.video-card-common';
 const MAX_MUTATION_BATCHES=64,MAX_MUTATION_RECORDS=4096,MAX_MUTATION_NODES=4096;
 // Thumbnail previews are excluded before a source, card ID or title is available.

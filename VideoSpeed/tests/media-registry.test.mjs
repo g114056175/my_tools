@@ -172,6 +172,19 @@ test('a registered element moved into a preview loses control and can later beco
  preview=false;registry.add(item);assert.equal(added.length,2);assert.notEqual(registry.ids.get(item),first);registry.dispose();
 });
 
+test('Bilibili sidebar previews never become registry or pointer targets',t=>{
+ const {document,registry,added}=fixture(t);document.location.href='https://www.bilibili.com/video/BV1main';document.defaultView.location=document.location;
+ const main=document.createElement('video'),preview=document.createElement('video');
+ main.closest=selector=>selector.split(',').includes('.bpx-player-container')?{}:null;
+ preview.closest=selector=>selector.split(',').some(value=>['.video-page-card-small','.v-recommend-inline-player','.bpx-player-container'].includes(value))?{}:null;
+ document.append(main,preview);registry.scan(document,true);
+ for(const type of ['loadstart','loadedmetadata','play'])document.dispatch(type,{type,composedPath:()=>[preview]});
+ assert.deepEqual(added.map(item=>item.video),[main]);
+ assert.equal(preview.getAttribute('data-video-control-id'),null);assert.equal(preview.getAttribute('data-video-control-last-played'),null);
+ assert.equal(registry.fromEvent({composedPath:()=>[preview]}),null);
+ assert.equal(registry.fromEvent({composedPath:()=>[main]}),main);registry.dispose();
+});
+
 test('mutation backlog is capped and an overflow fallback still finds media',t=>{
  const {document,registry,notify,added}=fixture(t);drain(registry);
  const nodes=Array.from({length:4097},()=>document.createElement('article')),video=document.createElement('video');nodes.at(-1).append(video);document.append(...nodes);

@@ -1,3 +1,23 @@
+# VideoSpeed 0.6.20 驗證
+
+2026-10-28。新安裝外觀改為固定淺色，語言仍預設英文；速度預設與畫質皆關閉、偏好速度 2×。已儲存的外觀、語言與播放設定繼續保留。README 底部加入精簡已知問題，並明示縮圖預覽不支援調速。VideoPocket 未修改。
+
+## 驗證
+
+- 329 項單元／整合通過。
+- 隔離 Chromium 設為中文語系、深色系統；全新安裝的 420px 擴充頁面仍為淺色英文，Default／Quality 均為 Off，Preferred 為 2。
+- 本機影片原本 1.5×，開啟介面與預設設定後仍為 1.5×，未被偏好 2× 覆蓋。
+- 使用者選擇深色及中文後，重開介面仍保留；移除這兩筆偏好後回到淺色英文。三項瀏覽器檢查通過，無頁面錯誤，測試 profile 已清理。
+
+本輪範圍為預設值、外觀與語系保存及既有單元／整合。原生工具列 popup 與播放生命週期的驗證見 0.6.19 紀錄。
+
+成品 SHA-256（相對路徑大小寫敏感排序，各檔 path + NUL + bytes + NUL）：`0599caea9f29236a9ec9ce52f600b118a8a3447f7c541a6774c45204fee0906c`。
+
+本機證據：`work/qa-083-defaults/results.json`、`factory-light.png`、`unit.txt`；輸出摘要為 `VideoSpeed-validation.json`。
+
+<details>
+<summary>0.6.19 歷史驗證</summary>
+
 # VideoSpeed 0.6.19 驗證
 
 2026-10-28。修正原生工具列 popup 導致影片狀態被清空，以及初次狀態讀取被快取更新蓋掉的競態。VideoPocket 未修改。
@@ -333,6 +353,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

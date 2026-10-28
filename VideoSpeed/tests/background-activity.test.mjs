@@ -511,3 +511,18 @@ test('committed child frames in an idle empty page cannot trigger selection or h
  fixture.state.messages=[];disconnect.listeners[0]();await new Promise(resolve=>setTimeout(resolve,30));
  assert.equal(fixture.state.messages.filter(item=>item.tabId===30).length,0,'closed popup scheduled an idle-page clear highlight');
 });
+
+test('pending loading permits one update recovery but ordinary notifications still require a video',async()=>{
+ const deadline=Date.now()+40_000,fixture=createChromeFixture({tabs:[20,30].map(id=>({id,windowId:1,active:false,url:`https://example.test/${id}`,status:'complete'})),receivers:[10,20,30],sessionSnapshot:{focusedWindowId:1,focusedTabId:10,revision:5,untilByTab:{},loadingUntilByTab:{20:deadline},activeByWindow:{1:10}}});
+ await fixture.importBackground();await waitForInitialSnapshot(fixture);
+ assert.ok(fixture.state.messages.every(item=>item.tabId!==20),'empty pending tab received routine traffic');
+ fixture.events.runtimeInstalled.listeners[0]({reason:'update'});await waitFor(()=>fixture.state.executeCalls.length>=2,'focused and pending update probes');
+ assert.deepEqual([...new Set(fixture.state.executeCalls.map(call=>call.target.tabId))].sort((a,b)=>a-b),[10,20]);
+ const response=await fixture.sendRuntime({action:'settings'},contentSender(20));assert.equal(response.activity.until,0);assert.equal(response.activity.loadingUntil,deadline);
+ await fixture.sendRuntime({action:'report',videos:[{id:'pending',connected:true,playing:false,visible:true,rate:1}]},contentSender(20));
+ await waitFor(()=>fixture.state.messages.some(item=>item.tabId===20&&item.message.id==='pending'),'late selected media');
+ await fixture.sendRuntime({action:'initialized',id:'unrelated'},contentSender(20));assert.equal(fixture.state.sessionData.tabActivity.loadingUntilByTab[20],deadline);
+ await fixture.sendRuntime({action:'initialized',id:'pending'},contentSender(20));assert.equal(fixture.state.sessionData.tabActivity.loadingUntilByTab[20],undefined);
+ fixture.updateStatus(30,'loading');const old=await fixture.sendRuntime({action:'settings'},contentSender(30));assert.equal(old.activity.loadingUntil,undefined);
+ assert.ok(fixture.state.executeCalls.every(call=>call.target.tabId!==30));
+});

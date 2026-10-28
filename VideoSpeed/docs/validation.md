@@ -1,3 +1,41 @@
+# VideoSpeed 0.6.15 驗證
+
+2026-10-28。修正剛開影片後立即切走、影片超過十秒才開始播放時漏套預設速度／畫質的問題。VideoPocket 未修改。
+
+## 原因與修正
+
+0.6.14 的十秒期限同時控制頁面探索及初始化存活。到期時只保留已初始化且仍播放的影片；待載入影片、尚未建立的元素或仍在廣告階段的播放器會失去控制器與 bridge 事件。隔離 Chromium 重現：延後十五秒播放的四種主影片案例均維持 1×，畫質 setter 為零。
+
+- DOM 探索仍只限目前聚焦及離開後十秒。近期新開或開始導航的頁面另獲最多六十秒首次播放等待；背景網址變動不能無限續期。
+- 十秒後斷開探索的 MutationObserver、清空遍歷佇列；只保留媒體事件。延後出現的影片由事件來源直接登記，新 open shadow root 只加事件監聽。若 content 很晚才啟動，對直接 video 做一次有數量上限的補查，不排整頁／shadow 遍歷。
+- 目標影片成功初始化後撤銷載入期限，保留已知正在播放的同片。到期、關閉、Full 除外均停止待載入控制；預覽排除及使用者手動調速規則不變。
+- 更新時，尚有有效載入期限的頁面可以單次恢復失效腳本，沿用原期限；一般設定／選取通知仍要求近期資格、已知媒體或 popup。未使用過、等待已過期的頁面不因此獲得探索資格。
+- 被動啟動或更新後，已初始化且播放中的同一影片也能保留，不依賴曾開啟 DOM 探索。
+
+## 驗證結果
+
+- 293 項單元／整合、17 項主影片／預覽提示、4 項活動範圍通過。
+- 不開 popup 的四次新文件、兩次 SPA、本地快捷鍵、三種同時啟動故障及 worker 冷啟動通過。
+- Chromium 真實分頁切換：已知影片延遲播放、延遲插入影片、從活躍頁中鍵開背景頁、廣告解除，均於十五秒後套成 8×；每案畫質只設定一次，十秒後的整頁 video 查詢與 DOM walker 增量均為零。另驗證 open shadow media 事件接手。
+- 六十秒後已處理影片仍為 8×、畫質不重套，載入期限已撤銷；未知新影片不再加入。未授權背景頁、總關閉、YouTube Full 除外均不套用速度或畫質。
+- 真實 HTTP 延遲十六秒：媒體請求仍未回傳（readyState=0 且已發出 play），或連 HTML 文件都尚未回傳時，切到另一個隔離瀏覽器視窗；兩案均在原視窗仍未聚焦、未開 popup 時套成 4×，1080p 畫質各設定一次。
+- Chromium 與 Brave 更新／BFCache 回歸均通過：既有閒置空頁探查為零、近期期限不延長，真正 BFCache 返回後仍可調速；錯誤收集器確認沒有新增 runtime error／warning。
+
+成品 SHA-256（排序後每檔 filename + NUL + bytes + NUL）：`51997aa62143e778cd79531edb9757dd13d0e818ae3339ba52c9a36d132747ac`。所有瀏覽器驗證使用專用 profile 並清理，沒有操作個人瀏覽器或真實 YouTube 帳戶。這是實際瀏覽器、媒體及 HTTP 生命週期測試，播放器介面採本地 fixture；不作實站全面相容性保證。
+
+## 仍有的界線
+
+- Brave 本輪的仿 YouTube 網頁測試未成功進入 fixture（初始導航／TLS 測試環境問題），不列為該瀏覽器的慢載入通過證據。
+- 六十秒是未開始播放的等待上限，不是背景播放時間上限。超過上限才載入且從未開始的影片，要回到分頁才重新探索。
+- 背景既有播放保留同一媒體；播放清單跨曲／換播放器、網站原生休眠恢復與超長廣告仍值得追加實站長測。
+- 畫質取決於網站播放器能力；已提交而未回覆的請求不盲目重送，以免反覆覆寫使用者選擇。
+- 先前持續 Extension context invalidated、長播卡死及 worker script-fetch 的完整原始條件仍未全數定位。本輪不以通過測試宣稱這些問題均已解決。
+
+本機證據位於 work/qa-077-slow-load、work/qa-077-network、work/qa-076-lifecycle，發布成品摘要見 VideoSpeed-validation.json。
+
+<details>
+<summary>0.6.14 驗證紀錄</summary>
+
 # VideoSpeed 0.6.14 驗證
 
 2026-10-28。本輪限制更新／背景訊息的分頁範圍，修正 Port 斷線錯誤與 BFCache 返回；VideoPocket 未修改。
@@ -131,6 +169,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

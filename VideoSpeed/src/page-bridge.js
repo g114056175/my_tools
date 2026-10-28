@@ -3,10 +3,10 @@ import {syncPlayerRate} from './player-rate.js';
 import {isMediaPreview} from './media-registry.js';
 import {RateBridge} from './rate-bridge.js';
 const marker=Symbol.for('video-control.page-bridge-v3');
-const version='0.6.14',previous=globalThis[marker];
+const version='0.6.15',previous=globalThis[marker];
 if(previous?.version!==version){
  try{if(previous?.dispose)previous.dispose();else previous?.stop?.();}catch{}
- let active=false,exploring=true,qualityEnabled=false,abort,restore=[],generation=0,rateBridge=null,bridgeOwner=null,refreshBindings=()=>{},bindTimer=null;
+ let active=false,exploring=true,waiting=false,qualityEnabled=false,abort,restore=[],generation=0,rateBridge=null,bridgeOwner=null,refreshBindings=()=>{},bindTimer=null;
  const youtubePlayers=new Map(),retryTimers=new Map(),retryCounts=new WeakMap();
  const setAttributeIfChanged=(element,name,value)=>{value=String(value);if(element.getAttribute(name)===value)return false;element.setAttribute(name,value);return true;};
  const removeAttributeIfPresent=(element,name)=>{if(element.getAttribute(name)===null)return false;element.removeAttribute(name);return true;};
@@ -28,7 +28,7 @@ if(previous?.version!==version){
         }
         else youtubePlayers.get(player).video=video;
         clearTimeout(retryTimers.get(video));retryTimers.delete(video);
-        if(exploring&&!ready&&!ad){const attempt=retryCounts.get(video)||0;if(attempt<6){retryCounts.set(video,attempt+1);const token=generation;retryTimers.set(video,setTimeout(()=>{retryTimers.delete(video);if(active&&generation===token&&video.isConnected)bindYouTubeTitle(video);},[80,160,320,640,1000,1500][attempt]));}}
+        if((exploring||waiting)&&!ready&&!ad){const attempt=retryCounts.get(video)||0;if(attempt<6){retryCounts.set(video,attempt+1);const token=generation;retryTimers.set(video,setTimeout(()=>{retryTimers.delete(video);if(active&&generation===token&&video.isConnected)bindYouTubeTitle(video);},[80,160,320,640,1000,1500][attempt]));}}
         else retryCounts.delete(video);
         if(changed)video.dispatchEvent(new Event('video-control:media-ready-v1',{bubbles:true,composed:true}));
       }
@@ -64,6 +64,7 @@ if(previous?.version!==version){
   refreshBindings=bindAll;
   const scheduleBind=()=>{if(bindTimer!==null)return;const token=generation;bindTimer=setTimeout(()=>{bindTimer=null;if(active&&generation===token)bindAll();},0);};
   for(const name of ['loadedmetadata','playing','durationchange'])listen(document,name,event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(video){retryCounts.delete(video);bindYouTubeTitle(video);}});
+  listen(document,'video-control:media-bind-v1',event=>{const video=event.composedPath().find(node=>node?.tagName==='VIDEO');if(video?.getAttribute('data-video-control-id'))bindYouTubeTitle(video);});
   listen(window,'video-control:route',scheduleBind);listen(window,'yt-navigate-finish',scheduleBind);
   listen(document,'video-control:quality-request-v3',async event=>{
    let data;try{data=JSON.parse(event.detail);}catch{return;}
@@ -91,7 +92,7 @@ if(previous?.version!==version){
   }
   const original=Element.prototype.attachShadow,wrapped=function(...args){
    const root=Reflect.apply(original,this,args);
-   if(active&&exploring&&args[0]?.mode==='open')queueMicrotask(()=>{if(active&&exploring)this.dispatchEvent(new Event('video-control:shadow',{bubbles:true,composed:true}));});return root;
+   if(active&&(exploring||waiting)&&args[0]?.mode==='open')queueMicrotask(()=>{if(active&&(exploring||waiting))this.dispatchEvent(new Event('video-control:shadow',{bubbles:true,composed:true}));});return root;
   };
   Element.prototype.attachShadow=wrapped;restore.push(()=>{if(Element.prototype.attachShadow===wrapped)Element.prototype.attachShadow=original;});
   bindAll();
@@ -104,7 +105,8 @@ if(previous?.version!==version){
   if(!owner&&bridgeOwner)return;
   if(owner&&owner!==bridgeOwner){stop();bridgeOwner=owner;}
   const changed=exploring!==(state?.exploring!==false);exploring=state?.exploring!==false;
-  if(!exploring){for(const timer of retryTimers.values())clearTimeout(timer);retryTimers.clear();}
+  waiting=state?.waiting===true;
+  if(!exploring&&!waiting){for(const timer of retryTimers.values())clearTimeout(timer);retryTimers.clear();}
   qualityEnabled=state?.qualityEnabled===true;if(state?.enabled===true){if(active&&changed)refreshBindings();else start();}else stop();
   document.dispatchEvent(new CustomEvent('video-control:bridge-ready-v1',{detail:JSON.stringify({owner:bridgeOwner,version,enabled:active})}));
  };

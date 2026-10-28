@@ -1,4 +1,5 @@
 export const TAB_ACTIVITY_GRACE_MS=10_000;
+export const TAB_LOADING_GRACE_MS=60_000;
 
 const validId=value=>Number.isInteger(value)&&value>=0;
 
@@ -9,6 +10,7 @@ export function replayTabActivityEvents(activity,events,{windowIdNone=-1}={}){
   let changed=[];
   if(event.type==='activated')changed=activity.setActiveTab(event.windowId,event.tabId,event.at);
   else if(event.type==='created')changed=activity.openFrom(event.openerTabId,event.tabId,event.at);
+  else if(event.type==='loading')changed=activity.startLoading(event.tabId,event.at)?[event.tabId]:[];
   else if(event.type==='focus')changed=activity.setFocusedWindow(event.windowId===windowIdNone?null:event.windowId,event.at);
   for(const tabId of changed)affected.add(tabId);
  }
@@ -16,8 +18,8 @@ export function replayTabActivityEvents(activity,events,{windowIdNone=-1}={}){
 }
 
 export class TabActivity{
- constructor({now=()=>Date.now(),graceMs=TAB_ACTIVITY_GRACE_MS}={}){
-  this.now=now;this.graceMs=graceMs;this.focusedWindowId=null;this.focusedTabId=null;this.revision=0;this.untilByTab=new Map();this.activeByWindow=new Map();
+ constructor({now=()=>Date.now(),graceMs=TAB_ACTIVITY_GRACE_MS,loadingMs=TAB_LOADING_GRACE_MS}={}){
+  this.now=now;this.graceMs=graceMs;this.loadingMs=loadingMs;this.focusedWindowId=null;this.focusedTabId=null;this.revision=0;this.untilByTab=new Map();this.loadingUntilByTab=new Map();this.activeByWindow=new Map();
  }
  restore(snapshot){
   this.focusedWindowId=validId(snapshot?.focusedWindowId)?snapshot.focusedWindowId:null;
@@ -26,6 +28,8 @@ export class TabActivity{
   this.untilByTab=new Map();
   const entries=Object.entries(snapshot?.untilByTab||{});
   for(const [key,value]of entries){const tabId=Number(key);if(validId(tabId)&&Number.isFinite(value)&&value>0)this.untilByTab.set(tabId,value);}
+  this.loadingUntilByTab=new Map();
+  for(const [key,value]of Object.entries(snapshot?.loadingUntilByTab||{}).slice(0,256)){const tabId=Number(key);if(validId(tabId)&&Number.isSafeInteger(value)&&value>this.now()&&value<=this.now()+this.loadingMs)this.loadingUntilByTab.set(tabId,value);}
   this.activeByWindow=new Map();
   const activeEntries=Object.entries(snapshot?.activeByWindow||{});
   for(const [key,value]of activeEntries){const windowId=Number(key),tabId=Number(value);if(validId(windowId)&&validId(tabId))this.activeByWindow.set(windowId,tabId);}
@@ -35,13 +39,14 @@ export class TabActivity{
  }
  snapshot(now=this.now()){
   this.prune(now);
-  return {version:1,focusedWindowId:this.focusedWindowId,focusedTabId:this.focusedTabId,revision:this.revision,untilByTab:Object.fromEntries(this.untilByTab),activeByWindow:Object.fromEntries(this.activeByWindow)};
+  return {version:1,focusedWindowId:this.focusedWindowId,focusedTabId:this.focusedTabId,revision:this.revision,untilByTab:Object.fromEntries(this.untilByTab),loadingUntilByTab:Object.fromEntries(this.loadingUntilByTab),activeByWindow:Object.fromEntries(this.activeByWindow)};
  }
  activity(tabId,now=this.now()){
   if(!validId(tabId))return {focused:false,until:0,revision:this.revision};
   const focused=this.focusedTabId===tabId;
   const until=focused?0:this.untilByTab.get(tabId)||0;
-  return {focused,until:until>now?until:0,revision:this.revision};
+  const loadingUntil=this.loadingUntilByTab.get(tabId)||0;
+  return {focused,until:until>now?until:0,revision:this.revision,...(loadingUntil>now?{loadingUntil}:{})};
  }
  setFocusedWindow(windowId,now=this.now()){
   const nextWindowId=validId(windowId)?windowId:null;
@@ -74,8 +79,16 @@ export class TabActivity{
   if(!validId(openerTabId)||!validId(tabId)||tabId===openerTabId||tabId===this.focusedTabId)return [];
   const opener=this.activity(openerTabId,now);if(!opener.focused&&opener.until<=now)return [];
   const until=now+this.graceMs;if((this.untilByTab.get(tabId)||0)>=until)return [];
-  this.untilByTab.set(tabId,until);this.revision++;return [tabId];
+  this.untilByTab.set(tabId,until);this.loadingUntilByTab.set(tabId,now+this.loadingMs);this.revision++;return [tabId];
  }
+ startLoading(tabId,now=this.now()){
+  const activity=this.activity(tabId,now);
+  if(!validId(tabId)||!activity.focused&&activity.until<=now)return false;
+  // Background redirects/status changes must not renew the original deadline.
+  if(!activity.focused&&(this.loadingUntilByTab.get(tabId)||0)>now)return false;
+  this.loadingUntilByTab.set(tabId,now+this.loadingMs);this.revision++;return true;
+ }
+ finishLoading(tabId){if(!this.loadingUntilByTab.delete(tabId))return false;this.revision++;return true;}
  restoreRecent(tabId,until,now=this.now()){
   if(!validId(tabId)||tabId===this.focusedTabId||!Number.isSafeInteger(until)||until<=now||until>now+this.graceMs||(this.untilByTab.get(tabId)||0)>=until)return false;
   this.untilByTab.set(tabId,until);this.revision++;return true;
@@ -91,6 +104,7 @@ export class TabActivity{
  forget(tabId){
   if(!validId(tabId))return false;
   let had=this.untilByTab.delete(tabId);
+  had=this.loadingUntilByTab.delete(tabId)||had;
   for(const [windowId,cachedTabId]of this.activeByWindow)if(cachedTabId===tabId){this.activeByWindow.delete(windowId);had=true;}
   if(this.focusedTabId===tabId){this.focusedTabId=null;this.revision++;return true;}
   return had;
@@ -102,6 +116,7 @@ export class TabActivity{
  }
  prune(now=this.now()){
   for(const [tabId,until]of this.untilByTab)if(until<=now||tabId===this.focusedTabId)this.untilByTab.delete(tabId);
+  for(const [tabId,until]of this.loadingUntilByTab)if(until<=now)this.loadingUntilByTab.delete(tabId);
   for(const [windowId,tabId]of this.activeByWindow)if(!validId(windowId)||!validId(tabId))this.activeByWindow.delete(windowId);
   if(this.focusedWindowId!==null&&this.focusedTabId!==null)this.activeByWindow.set(this.focusedWindowId,this.focusedTabId);
  }

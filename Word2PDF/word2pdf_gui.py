@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import queue
+import tempfile
 import threading
 from pathlib import Path
 from tkinter import (
@@ -66,43 +67,103 @@ def collect_word_files(paths):
     return found
 
 
-def unique_pdf_path(pdf_path: Path, overwrite: bool) -> Path:
-    if overwrite or not pdf_path.exists():
+def path_key(path: Path) -> str:
+    return str(path.resolve()).casefold()
+
+
+def unique_pdf_path(pdf_path: Path, overwrite: bool, reserved_paths=None) -> Path:
+    reserved_paths = reserved_paths if reserved_paths is not None else set()
+    if path_key(pdf_path) not in reserved_paths and (overwrite or not pdf_path.exists()):
         return pdf_path
 
     index = 1
     while True:
         candidate = pdf_path.with_name(f"{pdf_path.stem}_{index}{pdf_path.suffix}")
-        if not candidate.exists():
+        if path_key(candidate) not in reserved_paths and not candidate.exists():
             return candidate
         index += 1
 
 
-def get_output_pdf_path(word_path: Path, output_folder: Path | None, overwrite: bool) -> Path:
+def get_output_pdf_path(
+    word_path: Path, output_folder: Path | None, overwrite: bool, reserved_paths=None
+) -> Path:
     if output_folder is None:
         base_pdf = word_path.with_suffix(".pdf")
     else:
         output_folder.mkdir(parents=True, exist_ok=True)
         base_pdf = output_folder / f"{word_path.stem}.pdf"
-    return unique_pdf_path(base_pdf, overwrite)
+    result = unique_pdf_path(base_pdf, overwrite, reserved_paths)
+    if reserved_paths is not None:
+        reserved_paths.add(path_key(result))
+    return result
 
 
-def convert_files_to_pdf(files, output_folder, overwrite, log_callback, progress_callback):
+def export_pdf(doc, pdf_path: Path, overwrite: bool):
+    # 在目標資料夾匯出暫存檔，完成後才替換目標。
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=".word2pdf-", suffix=".pdf", dir=pdf_path.parent
+    )
+    os.close(handle)
+    temporary = Path(temporary_name)
+    try:
+        doc.ExportAsFixedFormat(
+            OutputFileName=str(temporary),
+            ExportFormat=WD_EXPORT_FORMAT_PDF,
+            OpenAfterExport=False,
+            OptimizeFor=WD_EXPORT_OPTIMIZE_FOR_PRINT,
+            Range=0,
+            From=1,
+            To=1,
+            Item=0,
+            IncludeDocProps=True,
+            KeepIRM=True,
+            CreateBookmarks=1,
+            DocStructureTags=True,
+            BitmapMissingFonts=True,
+            UseISO19005_1=False,
+        )
+        if temporary.stat().st_size == 0:
+            raise RuntimeError("Word 未產生 PDF 內容。")
+        if overwrite:
+            os.replace(temporary, pdf_path)
+        else:
+            # Windows rename 會拒絕覆蓋匯出期間新增的同名檔案。
+            os.rename(temporary, pdf_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def convert_files_to_pdf(
+    files, output_folder, overwrite, log_callback, progress_callback, cancel_event=None
+):
+    if cancel_event is not None and cancel_event.is_set():
+        return True
     if pythoncom is None or win32com is None:
         raise RuntimeError("缺少 pywin32，請先執行 pip install -r requirements.txt")
 
     pythoncom.CoInitialize()
     word = None
+    reserved_paths = set()
+    stopped = False
     try:
-        word = win32com.client.DispatchEx("Word.Application")
+        try:
+            word = win32com.client.DispatchEx("Word.Application")
+        except Exception as exc:
+            raise RuntimeError(
+                "無法啟動桌面版 Microsoft Word。請確認已安裝，並能正常開啟 Word。"
+            ) from exc
         word.Visible = False
         word.DisplayAlerts = 0
 
         total = len(files)
         for index, word_path in enumerate(files, start=1):
-            pdf_path = get_output_pdf_path(word_path, output_folder, overwrite)
+            if cancel_event is not None and cancel_event.is_set():
+                stopped = True
+                break
             doc = None
+            succeeded = False
             try:
+                pdf_path = get_output_pdf_path(word_path, output_folder, overwrite, reserved_paths)
                 log_callback(f"[{index}/{total}] 轉換中：{word_path}")
                 doc = word.Documents.Open(
                     str(word_path),
@@ -113,33 +174,36 @@ def convert_files_to_pdf(files, output_folder, overwrite, log_callback, progress
                     OpenAndRepair=False,
                     NoEncodingDialog=True,
                 )
-                doc.ExportAsFixedFormat(
-                    OutputFileName=str(pdf_path),
-                    ExportFormat=WD_EXPORT_FORMAT_PDF,
-                    OpenAfterExport=False,
-                    OptimizeFor=WD_EXPORT_OPTIMIZE_FOR_PRINT,
-                    Range=0,
-                    From=1,
-                    To=1,
-                    Item=0,
-                    IncludeDocProps=True,
-                    KeepIRM=True,
-                    CreateBookmarks=1,
-                    DocStructureTags=True,
-                    BitmapMissingFonts=True,
-                    UseISO19005_1=False,
+                # 自動編號的輸出不可覆蓋其他檔案。
+                can_overwrite = (
+                    overwrite
+                    and pdf_path.name.casefold() == word_path.with_suffix(".pdf").name.casefold()
                 )
+                export_pdf(doc, pdf_path, can_overwrite)
+                succeeded = True
                 log_callback(f"完成：{pdf_path}")
             except Exception as exc:
                 log_callback(f"失敗：{word_path} -> {exc}")
             finally:
                 if doc is not None:
-                    doc.Close(False)
-                progress_callback(index, total, word_path)
+                    try:
+                        doc.Close(False)
+                    except Exception as exc:
+                        log_callback(f"關閉文件失敗：{word_path} -> {exc}")
+                    finally:
+                        doc = None
+                progress_callback(index, total, word_path, succeeded)
     finally:
-        if word is not None:
-            word.Quit()
-        pythoncom.CoUninitialize()
+        try:
+            if word is not None:
+                try:
+                    word.Quit()
+                except Exception as exc:
+                    log_callback(f"關閉 Word 失敗：{exc}")
+        finally:
+            word = None
+            pythoncom.CoUninitialize()
+    return stopped
 
 
 class WordToPdfApp:
@@ -151,6 +215,10 @@ class WordToPdfApp:
 
         self.files = []
         self.worker = None
+        self.cancel_event = threading.Event()
+        self.close_requested = False
+        self.batch_finished = False
+        self.batch_error = None
         self.events = queue.Queue()
         self.overwrite_existing = BooleanVar(value=False)
         self.output_mode = StringVar(value="same")
@@ -159,6 +227,7 @@ class WordToPdfApp:
         self.setup_styles()
         self.build_ui()
         self.setup_drop_target()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(100, self.process_events)
 
     def setup_styles(self):
@@ -201,14 +270,16 @@ class WordToPdfApp:
         )
         self.select_file_button.grid(row=0, column=0, sticky="w")
         self.select_file_button.bind("<Shift-Button-1>", self.add_folder_from_button)
-        ttk.Button(controls, text="清空全部", command=self.clear_files).grid(
+        self.clear_button = ttk.Button(controls, text="清空全部", command=self.clear_files)
+        self.clear_button.grid(
             row=0, column=1, sticky="w", padx=(8, 0)
         )
-        ttk.Checkbutton(
+        self.overwrite_button = ttk.Checkbutton(
             controls,
             text="覆蓋同名 PDF",
             variable=self.overwrite_existing,
-        ).grid(row=0, column=2, sticky="w", padx=(18, 0))
+        )
+        self.overwrite_button.grid(row=0, column=2, sticky="w", padx=(18, 0))
         ttk.Label(
             controls,
             text="選資料夾：Shift + 點選檔案",
@@ -220,20 +291,22 @@ class WordToPdfApp:
         output_frame = ttk.LabelFrame(main, text="輸出位置")
         output_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         output_frame.columnconfigure(2, weight=1)
-        ttk.Radiobutton(
+        self.same_output_button = ttk.Radiobutton(
             output_frame,
             text="輸出到每個 Word 檔同一個資料夾",
             value="same",
             variable=self.output_mode,
             command=self.refresh_output_controls,
-        ).grid(row=0, column=0, sticky="w", padx=(8, 12), pady=8)
-        ttk.Radiobutton(
+        )
+        self.same_output_button.grid(row=0, column=0, sticky="w", padx=(8, 12), pady=8)
+        self.custom_output_button = ttk.Radiobutton(
             output_frame,
             text="輸出到指定資料夾",
             value="custom",
             variable=self.output_mode,
             command=self.refresh_output_controls,
-        ).grid(row=0, column=1, sticky="w", padx=(0, 8), pady=8)
+        )
+        self.custom_output_button.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=8)
         self.output_entry = ttk.Entry(output_frame, textvariable=self.custom_output_dir)
         self.output_entry.grid(row=0, column=2, sticky="ew", padx=(0, 8), pady=8)
         self.output_button = ttk.Button(output_frame, text="選擇", command=self.choose_output_folder)
@@ -288,7 +361,7 @@ class WordToPdfApp:
         self.file_list.dnd_bind("<<Drop>>", self.handle_drop)
 
     def add_files(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             return
         paths = filedialog.askopenfilenames(
             title="選擇 Word 檔案",
@@ -305,13 +378,15 @@ class WordToPdfApp:
         return "break"
 
     def add_folder(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             return
         folder = filedialog.askdirectory(title="選擇包含 Word 檔案的資料夾")
         if folder:
             self.add_selected_paths([Path(folder).resolve()])
 
     def choose_output_folder(self):
+        if self.worker is not None:
+            return
         folder = filedialog.askdirectory(title="選擇 PDF 輸出資料夾")
         if folder:
             self.custom_output_dir.set(folder)
@@ -319,9 +394,10 @@ class WordToPdfApp:
             self.refresh_output_controls()
 
     def refresh_output_controls(self):
-        state = NORMAL if self.output_mode.get() == "custom" else DISABLED
+        idle = self.worker is None
+        state = NORMAL if idle and self.output_mode.get() == "custom" else DISABLED
         self.output_entry.configure(state=state)
-        self.output_button.configure(state=NORMAL)
+        self.output_button.configure(state=NORMAL if idle else DISABLED)
 
     def handle_drop(self, event):
         self.add_selected_paths([Path(path).resolve() for path in self.root.tk.splitlist(event.data)])
@@ -335,6 +411,8 @@ class WordToPdfApp:
                 self.remove_file_item(row)
 
     def add_selected_paths(self, paths):
+        if self.worker is not None:
+            return
         folders = [path for path in paths if path.is_dir()]
         files = [path for path in paths if path.is_file()]
         if folders and files:
@@ -352,6 +430,8 @@ class WordToPdfApp:
         self.add_paths(files)
 
     def add_paths(self, paths):
+        if self.worker is not None:
+            return
         new_files = collect_word_files(paths)
         existing = {str(path).lower() for path in self.files}
         added = 0
@@ -374,7 +454,7 @@ class WordToPdfApp:
         self.update_status()
 
     def clear_files(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             return
         self.files.clear()
         for item in self.file_list.get_children():
@@ -383,13 +463,13 @@ class WordToPdfApp:
         self.log("已清空全部。")
 
     def remove_selected_files(self):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             return
         for item in self.file_list.selection():
             self.remove_file_item(item)
 
     def remove_file_item(self, item):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             return
         try:
             removed = Path(item)
@@ -416,18 +496,20 @@ class WordToPdfApp:
         return Path(folder).expanduser().resolve()
 
     def start_conversion(self):
+        if self.worker is not None:
+            self.cancel_conversion()
+            return
         if not self.files:
             messagebox.showinfo("沒有檔案", "請先加入 Word 檔案或資料夾。")
             return
-        if self.worker and self.worker.is_alive():
-            return
-
         output_folder = self.get_selected_output_folder()
         if output_folder is False:
             return
 
         files = list(self.files)
-        self.set_controls_enabled(False)
+        self.cancel_event.clear()
+        self.batch_finished = False
+        self.batch_error = None
         overwrite = self.overwrite_existing.get()
         target_text = "原檔同資料夾" if output_folder is None else str(output_folder)
         self.log(f"開始轉換 {len(files)} 個檔案。輸出位置：{target_text}")
@@ -435,24 +517,51 @@ class WordToPdfApp:
         self.worker = threading.Thread(
             target=self.run_conversion,
             args=(files, output_folder, overwrite),
-            daemon=True,
+            daemon=False,
         )
-        self.worker.start()
+        self.set_controls_enabled(False)
+        try:
+            self.worker.start()
+        except Exception as exc:
+            self.worker = None
+            self.set_controls_enabled(True)
+            self.log(f"無法開始轉換：{exc}")
+            messagebox.showerror("轉換失敗", f"無法開始轉換：{exc}", parent=self.root)
+
+    def cancel_conversion(self):
+        if self.worker is None or self.cancel_event.is_set():
+            return
+        self.cancel_event.set()
+        self.start_button.configure(text="停止中", state=DISABLED)
+        self.log("完成目前文件後停止；未處理的文件會保留在清單。")
+
+    def on_close(self):
+        if self.worker is None:
+            self.root.destroy()
+            return
+        if self.close_requested:
+            return
+        if messagebox.askyesno("結束轉換", "完成目前文件後，停止後續轉換並關閉？", parent=self.root):
+            self.close_requested = True
+            self.cancel_conversion()
 
     def run_conversion(self, files, output_folder, overwrite):
+        stopped = False
         try:
-            convert_files_to_pdf(
+            stopped = convert_files_to_pdf(
                 files,
                 output_folder,
                 overwrite,
                 lambda message: self.events.put(("log", message)),
-                lambda current, total, word_path: self.events.put(
-                    ("progress", current, total, word_path)
+                lambda current, total, word_path, succeeded: self.events.put(
+                    ("progress", current, total, word_path, succeeded)
                 ),
+                self.cancel_event,
             )
-            self.events.put(("done", None))
         except Exception as exc:
             self.events.put(("error", str(exc)))
+        finally:
+            self.events.put(("done", stopped))
 
     def process_events(self):
         try:
@@ -462,17 +571,28 @@ class WordToPdfApp:
                 if kind == "log":
                     self.log(event[1])
                 elif kind == "progress":
-                    self.remove_finished_file(event[3])
+                    if event[4]:
+                        self.remove_finished_file(event[3])
                     self.update_status()
                 elif kind == "done":
-                    self.log("全部轉換流程已結束。")
-                    self.set_controls_enabled(True)
+                    self.batch_finished = True
+                    if self.batch_error is None:
+                        self.log("已停止轉換。" if event[1] else "全部轉換流程已結束。")
                 elif kind == "error":
                     self.log(f"轉換流程中斷：{event[1]}")
-                    self.set_controls_enabled(True)
-                    messagebox.showerror("轉換失敗", event[1])
+                    self.batch_error = event[1]
         except queue.Empty:
             pass
+        if self.batch_finished and self.worker is not None and not self.worker.is_alive():
+            self.worker.join()
+            self.worker = None
+            self.batch_finished = False
+            if self.close_requested:
+                self.root.destroy()
+                return
+            self.set_controls_enabled(True)
+            if self.batch_error is not None:
+                messagebox.showerror("轉換失敗", self.batch_error, parent=self.root)
         self.root.after(100, self.process_events)
 
     def update_status(self):
@@ -481,7 +601,12 @@ class WordToPdfApp:
     def set_controls_enabled(self, enabled):
         state = NORMAL if enabled else DISABLED
         self.select_file_button.configure(state=state)
-        self.start_button.configure(state=state)
+        self.clear_button.configure(state=state)
+        self.overwrite_button.configure(state=state)
+        self.same_output_button.configure(state=state)
+        self.custom_output_button.configure(state=state)
+        self.refresh_output_controls()
+        self.start_button.configure(text="開始轉換" if enabled else "停止", state=NORMAL)
 
     def log(self, message):
         self.log_text.configure(state=NORMAL)

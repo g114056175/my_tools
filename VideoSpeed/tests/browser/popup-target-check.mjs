@@ -928,9 +928,11 @@ async function createTrial(label, { child = false } = {}) {
     ? 'https://www.youtube.com/watch?v=QA082&fixture=local&trial=' + encodeURIComponent(label) + (child ? '&child=1' : '')
     : 'https://www.bilibili.com/video/BV1QA082?fixture=local&trial=' + encodeURIComponent(label) + (child ? '&child=1' : '');
   const newPage = context.waitForEvent('page', { timeout: 8000 });
-  const tab = await workerCall(value => chrome.tabs.create({ url: value, active: true }), url);
+  // Attach Playwright's request routing before loading the local fixture.
+  const tab = await workerCall(() => chrome.tabs.create({ url: 'about:blank', active: true }));
   const page = await newPage;
-  await page.waitForLoadState('domcontentloaded', { timeout: 8000 });
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 8000 });
+  await page.waitForSelector('#qa-main', { state: 'attached', timeout: 8000 });
   await page.setViewportSize({ width: 1100, height: 900 });
   await page.bringToFront();
   const activeStart = new Date().toISOString();

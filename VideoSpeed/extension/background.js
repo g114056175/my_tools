@@ -716,6 +716,20 @@
       throw error;
     }
   }
+  function setActionIcon(action, runtime, details) {
+    return new Promise((resolve, reject) => {
+      const result = action.setIcon(details, () => {
+        try {
+          const error = consumeRuntimeError(runtime);
+          if (error) reject(new Error(error));
+          else resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      result?.catch?.(reject);
+    });
+  }
 
   // src/background.js
   var SCOPE = "video-control";
@@ -760,15 +774,15 @@
       });
     });
   }
-  function popupRefresh(task) {
+  function popupRefresh(task, timeoutMs = 1e3) {
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, 1e3);
+      const timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
       Promise.resolve(task).then(() => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       }, () => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       });
     });
   }
@@ -1056,17 +1070,17 @@
     return job.task;
   }
   async function pausedTarget(tabId) {
-    await powerQueue;
     const data = await chrome.storage.session.get("pausedTargets");
     return data.pausedTargets?.[tabId] || null;
   }
   function syncPower(settings) {
     powerQueue = powerQueue.catch(() => {
     }).then(async () => {
-      const enabled = settings.enabled, signature = JSON.stringify([enabled, settings.disabledSites, settings.siteModes]);
+      if (settings !== settingsCache) return;
+      const enabled = settings.enabled, signature = JSON.stringify(settings);
       if (powerSignature === signature) return;
-      powerSignature = signature;
       const cached = await chrome.storage.session.get("pausedTargets"), frozen = { ...cached.pausedTargets };
+      if (settings !== settingsCache) return;
       const tabs = new Set([...frames.keys(), ...[...contentPorts].map((port) => port.sender?.tab?.id), ...[...ports.values()].map((item) => item.tabId)].filter(Number.isInteger)), pendingTabs = new Set([...tabs].filter(hasPendingMedia));
       if (!enabled) {
         for (const tabId of selectionDeliveries.keys()) clearSelectionDelivery(tabId);
@@ -1081,9 +1095,12 @@
         currentTargets.clear();
       }
       const rate = await optionalRateState();
+      if (settings !== settingsCache) return;
       await Promise.allSettled([...tabs].map((tabId) => applyPagePolicy(tabId, void 0, settings, rate, pendingTabs.has(tabId))));
-      await chrome.action.setIcon({ path: Object.fromEntries([16, 32, 48, 128].map((size) => [size, "icons/" + (enabled ? "" : "off-") + size + ".png"])) });
+      if (settings !== settingsCache) return;
+      await setActionIcon(chrome.action, chrome.runtime, { path: Object.fromEntries([16, 32, 48, 128].map((size) => [size, "icons/" + (enabled ? "" : "off-") + size + ".png"])) });
       await chrome.action.setTitle({ title: titleFor(settings) });
+      powerSignature = signature;
       for (const [port, item] of ports) try {
         port.postMessage({ action: "updated", tabId: item.tabId });
       } catch {
@@ -1104,11 +1121,12 @@
       currentTargets.delete(tabId);
     }
     if (rate === void 0) rate = await optionalRateState();
+    if (settings !== settingsCache) return;
     const message = { scope: SCOPE, action: "power", settings, pageUrl, language, activity: await activityFor(tabId) };
     if (rate) Object.assign(message, { lastRate: rate.lastRate, rateRevision: rate.rateRevision });
-    if (contact) await chrome.tabs.sendMessage(tabId, message).catch(() => {
-    });
-    await chrome.action.setIcon({ tabId, path: Object.fromEntries([16, 32, 48, 128].map((size) => [size, "icons/" + (enabled ? "" : "off-") + size + ".png"])) });
+    if (contact) await sendSelection(tabId, message);
+    if (settings !== settingsCache) return;
+    await setActionIcon(chrome.action, chrome.runtime, { tabId, path: Object.fromEntries([16, 32, 48, 128].map((size) => [size, "icons/" + (enabled ? "" : "off-") + size + ".png"])) });
     await chrome.action.setTitle({ tabId, title: titleFor(settings, blocked) });
     for (const [port, item] of ports) if (item.tabId === tabId) try {
       port.postMessage({ action: "updated", tabId });
@@ -1135,13 +1153,12 @@
         return;
       }
       const target = clear || !(await stored2()).enabled ? null : targetFor(tabId);
-      if (!target || markedTargets.get(tabId)?.key !== target.key) await chrome.tabs.sendMessage(tabId, { scope: SCOPE, action: "highlight", options: { clear: true } }).catch(() => {
-      });
+      if (!target || markedTargets.get(tabId)?.key !== target.key) await sendSelection(tabId, { scope: SCOPE, action: "highlight", options: { clear: true } });
       if (!target) {
         markedTargets.delete(tabId);
         return;
       }
-      const response = await chrome.tabs.sendMessage(tabId, { scope: SCOPE, action: "highlight", options: { mediaKey: target.id, title: target.title, scrollIntoView: scroll } }, optionsOf(target)).catch(() => null);
+      const response = await sendSelection(tabId, { scope: SCOPE, action: "highlight", options: { mediaKey: target.id, title: target.title, scrollIntoView: scroll } }, optionsOf(target));
       if (response?.highlighted) markedTargets.set(tabId, { key: target.key, title: target.title });
       else markedTargets.delete(tabId);
     });
@@ -1391,9 +1408,10 @@
     settingsWrites = settingsWrites.catch(() => {
     }).then(async () => {
       const settings = validateSettings({ ...await stored2(), ...patch });
-      settingsCache = settings;
       await chrome.storage.local.set({ settings });
-      await syncPower(settings);
+      settingsCache = settings;
+      syncPower(settings).catch(() => {
+      });
       return settings;
     });
     return settingsWrites;
@@ -1452,8 +1470,8 @@
       if (message.action === "getState" && settings2.enabled && !siteDisabled) {
         await Promise.allSettled([...ports.values()].filter((item) => item.requestedTabId === tabId).map((item) => item.binding));
         await ensureStartupActivity(tabId);
-        await notifyActivity(tabId);
-        await popupRefresh(refresh(tabId, message.refresh === true));
+        const deadline = Date.now() + 1e3;
+        if (await popupRefresh(notifyActivity(tabId))) await popupRefresh(refresh(tabId, message.refresh === true), deadline - Date.now());
       }
       const target = siteDisabled ? null : settings2.enabled ? targetFor(tabId) : await pausedTarget(tabId), rate = await rateState();
       return { tabId, pageUrl, siteDisabled, settings: settings2, loading: tab.status === "loading", lastRate: rate.lastRate, rateRevision: rate.rateRevision, videos: target ? [target] : [], target };
@@ -1528,9 +1546,10 @@
           if (changed.length) {
             saveActivity().catch(() => {
             });
-            await Promise.allSettled(changed.map(notifyActivity));
+            for (const tabId of changed) notifyActivity(tabId);
           }
-          if (settingsCache?.enabled) await highlight(tab.id);
+          if (settingsCache?.enabled) highlight(tab.id).catch(() => {
+          });
         })().catch(() => {
         });
       }

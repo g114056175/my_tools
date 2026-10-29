@@ -9,6 +9,18 @@ export function consumeRuntimeError(runtime){
  catch(error){if(isContextInvalidatedError(error))return 'Extension context invalidated.';throw error;}
 }
 
+// Chromium's setIcon binding can resolve its returned promise before the
+// native callback reports a closed tab. Consume that callback-scoped error.
+export function setActionIcon(action,runtime,details){
+ return new Promise((resolve,reject)=>{
+  const result=action.setIcon(details,()=>{
+   try{const error=consumeRuntimeError(runtime);if(error)reject(new Error(error));else resolve();}
+   catch(error){reject(error);}
+  });
+  result?.catch?.(reject);
+ });
+}
+
 export function createRuntimeMessenger(runtime,onInvalid=()=>{}){
  let invalid=false;
  const invalidate=()=>{

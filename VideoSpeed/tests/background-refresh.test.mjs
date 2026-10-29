@@ -15,8 +15,8 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-const within = (promise, label) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 5000);
+const within = (promise, label, timeoutMs = 5000) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
   Promise.resolve(promise).then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
 });
 
@@ -90,7 +90,7 @@ function createChromeFixture() {
         ];
       },
     },
-    action: { async setTitle() {}, async setIcon() {}, async openPopup() {} },
+    action: { async setTitle() {}, setIcon(_details,callback) { callback?.(); }, async openPopup() {} },
     scripting: {
       async executeScript() {
         while (scriptPlans[0]?.phase === 'done') scriptPlans.shift();
@@ -266,6 +266,135 @@ test('an unresponsive page refresh does not keep the popup waiting or start dupl
  plan.final.resolve([{frameId:0,documentId:'doc-slow',result:[video('recovered')]}]);
  await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal((await send({action:'cachedState',tabId:1})).target?.id,'recovered');
+});
+
+test('getState returns cached target within one second when popup watch highlight never responds', { timeout: 5000 }, async () => {
+  const fixture = createChromeFixture();
+  await import('../extension/background.js?test=popup-highlight-deadline');
+  const popupSender = createPopupMessageSender();
+  const send = (message, sender = popupSender) => new Promise(resolve => {
+    fixture.events.runtimeMessage.listeners[0]({ scope: 'video-control', ...message }, sender, resolve);
+  });
+
+  await send({ action: 'report', videos: [video('cached-target')] }, createContentSender('doc-active'));
+  assert.equal((await send({ action: 'cachedState', tabId: 1 })).target?.id, 'cached-target');
+
+  const highlightStarted = deferred();
+  chrome.tabs.sendMessage = async (_tab, message) => {
+    if (message.action === 'highlight') {
+      highlightStarted.resolve();
+      return new Promise(() => {});
+    }
+    return { ok: true, version, activeId: message?.id };
+  };
+
+  const onDisconnect = makeEvent(), onMessage = makeEvent();
+  fixture.events.runtimeConnect.listeners[0]({
+    name: 'video-control-popup',
+    sender: popupSender,
+    onDisconnect,
+    onMessage,
+    postMessage() {},
+  });
+  onMessage.listeners[0]({ action: 'watch', tabId: 1 });
+  await within(highlightStarted.promise, 'popup watch highlight request');
+
+  const started = Date.now();
+  const result = await within(send({ action: 'getState', tabId: 1 }), 'getState within popup refresh deadline', 1000);
+  assert.equal(result.ok, true);
+  assert.equal(result.target?.id, 'cached-target');
+  assert.ok(Date.now() - started <= 1000, 'cached popup state should not wait for the page highlight response');
+});
+
+test('getState returns cached state when activity delivery stalls without starting a page probe',async()=>{
+ const fixture=createChromeFixture();await import('../extension/background.js?test=popup-activity-deadline');
+ const sender=createPopupMessageSender(),send=(message,from=sender)=>new Promise(resolve=>fixture.events.runtimeMessage.listeners[0]({scope:'video-control',...message},from,resolve));
+ await send({action:'report',videos:[video('cached-target')]},createContentSender('active'));
+ const activityStarted=deferred(),activityReply=deferred();let probes=0;
+ chrome.tabs.sendMessage=async(_tab,message)=>{
+  if(message.action==='activity'){activityStarted.resolve();return activityReply.promise;}
+  if(message.action==='refreshTarget')probes++;
+  return {ok:true,version,activeId:message.id};
+ };
+ try{
+  const start=Date.now(),state=send({action:'getState',tabId:1});
+  await within(activityStarted.promise,'activity delivery');
+  const result=await within(state,'cached popup state while page is unresponsive',1500);
+  assert.equal(result.ok,true);assert.equal(result.target?.id,'cached-target');
+  assert.ok(Date.now()-start<1500);assert.equal(probes,0,'do not queue another page probe behind the blocked activity message');
+ }finally{activityReply.resolve({ok:true,version});await new Promise(resolve=>setTimeout(resolve,0));}
+});
+
+test('settings writes are acknowledged and durable while page power delivery is stalled', { timeout: 5000 }, async () => {
+  const fixture = createChromeFixture();
+  await import('../extension/background.js?test=settings-power-stall');
+  const sender = createPopupMessageSender();
+  const send = message => new Promise(resolve => fixture.events.runtimeMessage.listeners[0]({ scope: 'video-control', ...message }, sender, resolve));
+
+  await send({ action: 'report', videos: [video('cached-target')] }, createContentSender('active'));
+  assert.equal((await send({ action: 'cachedState', tabId: 1 })).target?.id, 'cached-target');
+
+  const powerStarted = deferred(), powerReply = deferred();
+  chrome.tabs.sendMessage = async (_tab, message) => {
+    if (message.action === 'power') {
+      powerStarted.resolve();
+      return powerReply.promise;
+    }
+    return { ok: true, version, activeId: message?.id };
+  };
+
+  let firstWrite, secondWrite, completedWithinDeadline = false, durableAtDeadline;
+  try {
+    firstWrite = send({ action: 'updateSettings', patch: { enabled: false } });
+    await within(powerStarted.promise, 'stalled page power message');
+    secondWrite = send({ action: 'updateSettings', patch: { preferredRate: 3 } });
+    const outcome = await Promise.race([
+      Promise.allSettled([firstWrite, secondWrite]).then(results => ({ results })),
+      new Promise(resolve => setTimeout(() => resolve({ timedOut: true }), 500)),
+    ]);
+    completedWithinDeadline = !outcome.timedOut && outcome.results[0]?.status === 'fulfilled' && outcome.results[0].value.ok && outcome.results[0].value.settings?.enabled === false && outcome.results[1]?.status === 'fulfilled' && outcome.results[1].value.ok && outcome.results[1].value.settings?.preferredRate === 3;
+    durableAtDeadline = (await chrome.storage.local.get(['settings'])).settings;
+  } finally {
+    powerReply.resolve({ ok: true, version });
+    await Promise.allSettled([firstWrite, secondWrite].filter(Boolean));
+  }
+
+  const durable = (await chrome.storage.local.get(['settings'])).settings;
+  const cached = await send({ action: 'cachedState', tabId: 1 });
+  assert.equal(completedWithinDeadline, true, `both settings writes should be acknowledged within 500ms while page delivery is pending; storage at deadline: ${JSON.stringify(durableAtDeadline)}`);
+  assert.equal(durableAtDeadline.enabled, false, 'the first setting should already be durable while page delivery is pending');
+  assert.equal(durableAtDeadline.preferredRate, 3, 'the immediately queued setting should already be durable while page delivery is pending');
+  assert.equal(durable.enabled, false);
+  assert.equal(durable.preferredRate, 3);
+  assert.equal(cached.settings.enabled, false);
+  assert.equal(cached.settings.preferredRate, 3);
+});
+
+test('a rejected settings storage write leaves the cached settings unchanged', async () => {
+  const fixture = createChromeFixture();
+  await import('../extension/background.js?test=settings-storage-rejection');
+  const sender = createPopupMessageSender();
+  const send = message => new Promise(resolve => fixture.events.runtimeMessage.listeners[0]({ scope: 'video-control', ...message }, sender, resolve));
+  const initial = (await send({ action: 'cachedState', tabId: 1 })).settings;
+  const storageSet = chrome.storage.local.set.bind(chrome.storage.local);
+  let response, cached, durable;
+
+  chrome.storage.local.set = async values => {
+    if (Object.hasOwn(values, 'settings')) throw new Error('injected settings storage rejection');
+    return storageSet(values);
+  };
+  try {
+    response = await within(send({ action: 'updateSettings', patch: { preferredRate: 3 } }), 'rejected settings write');
+    cached = await send({ action: 'cachedState', tabId: 1 });
+    durable = (await chrome.storage.local.get(['settings'])).settings;
+  } finally {
+    chrome.storage.local.set = storageSet;
+  }
+
+  assert.equal(response.ok, false, 'the popup should receive an explicit save failure');
+  assert.match(response.error, /injected settings storage rejection/);
+  assert.equal(durable.preferredRate, initial.preferredRate, 'storage should retain the previously saved settings');
+  assert.equal(cached.settings.preferredRate, initial.preferredRate, 'the in-memory cache should retain the previously saved settings');
 });
 
 test('a failed selection drops only a confirmed removed iframe and returns to the live video',async()=>{

@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載 ZIP（約 147 KB）](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip)** · 解壓約 462 KB · Chromium 120 以上
+**[下載ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip?sha=9a999481a4fc)** · 約 147 KB · 解壓約 463 KB · Chromium 120 以上
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 
@@ -87,6 +87,6 @@ npm run test:network-loading
 **已知問題**
 
 - 暫不支援縮圖預覽視窗調速；特殊播放器相容性仍待補強。
-- 曾出現更新後舊分頁報錯、長播卡死，完整觸發條件仍待追查。
+- 偶發與 Dark Reader 同時失去回應的原因仍待定位；本次等待與儲存修正不代表已解決。
 
 </details>

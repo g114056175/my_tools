@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRuntimeMessenger} from '../src/runtime.js';
+import {createRuntimeMessenger,setActionIcon} from '../src/runtime.js';
+
+test('setIcon waits for the native callback and consumes its closed-tab error',async()=>{
+ let callback,inside=false,reads=0,settled=false;
+ const runtime={get lastError(){assert.ok(inside,'lastError must be read in the callback');reads++;return {message:'No tab with id: 12.'};}};
+ const action={setIcon(_details,listener){callback=listener;return Promise.resolve();}};
+ const result=setActionIcon(action,runtime,{tabId:12,path:'icons/16.png'});
+ const checked=assert.rejects(result,/No tab with id: 12/).finally(()=>{settled=true;});
+ await Promise.resolve();await Promise.resolve();assert.equal(settled,false,'early native promise is not completion');
+ inside=true;callback();inside=false;await checked;assert.equal(reads,1);
+});
+
+test('setIcon succeeds through the callback and propagates binding failures',async()=>{
+ await setActionIcon({setIcon(_details,callback){callback();}},{},{path:'icons/16.png'});
+ await assert.rejects(setActionIcon({setIcon(){throw Error('invalid icon');}},{},{}),/invalid icon/);
+ await assert.rejects(setActionIcon({setIcon(){return Promise.reject(Error('binding failed'));}},{},{}),/binding failed/);
+});
 
 test('send catches synchronous context invalidation and disposes once',async()=>{
  let calls=0,disposed=0;

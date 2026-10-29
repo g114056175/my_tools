@@ -1,3 +1,25 @@
+# VideoSpeed 1.0.0 發布驗證
+
+2026-10-29。維持版本與下載檔名，更新本機修正並覆蓋既有發布檔。
+
+- popup 的活動同步與影片補查共用一秒等待額度；外框繪製不再阻塞綁定。超時先顯示快取，並不代表頁面或瀏覽器停頓已被修復。
+- 設定成功寫入本機後才更新快取並回覆；頁面通知另行處理，不拖住後續保存。延遲的頁面通知重新讀取已保存設定，舊讀取與舊啟動回覆不能覆蓋較新設定；寫入失敗不污染快取。
+- 工具列圖示改為在 setIcon 回呼內接收 runtime.lastError。隔離 Brave 可重現「分頁已關閉、原 Promise 卻先成功」的未處理錯誤；修正後三次同樣操作均無新增警告。
+- 發布回歸另抓到畫質排程缺少播放狀態檢查：延遲設定更新可能在手動改速後、影片仍暫停時提交畫質。排程及送出前現在都檢查播放狀態；第一次播放仍會套用，已提交的畫質不重複覆寫。
+
+本次最終成品通過 336 項單元／整合測試，以及隔離瀏覽器的 11 項除外與介面、9 項頁面暫停／設定保存／BFCache、8 項首次播放畫質檢查。一般手動倍速、暫停重播、新影片套用最新設定與 Full／Default 行為均納入檢查。
+
+Brave 156 與 Dark Reader 4.9.134 共存的本地 YouTube 結構測試，原生工具列 popup 持續開啟 12 秒、實際調速、Escape 返回、切窗恢復及未開 popup 的快捷鍵共五項通過。此為隔離 profile 與本地影片，沒有重現使用者的偶發共同停頓，不能作為已解決該問題的證據。
+
+測試曾抓到新分頁第一個請求早於測試攔截器就載入外部網頁，之後資源被錯誤回覆為 HTML。測試現先開空白頁，再導航至本地 fixture 並確認影片存在；修正前的那次結果未列為通過。
+
+成品含 25 檔；SHA-256：`9b49f9e45336524503a5d4b32a46b8b0354376b6fb6e578b5e9c9b102fd7b419`（相對路徑依大小寫排序，各檔 path + NUL + bytes + NUL）。沒有新增權限、介面、常駐輪詢或診斷蒐集。初始設定仍為速度／畫質關閉、偏好 2×、淺色英文。
+
+本機證據：`work/qa-090-publish/`、`work/qa-088-settings-stall/publish-final-browser.json`、`work/qa-086-final/quality-before-play/publish-fixed-results.json`、`work/qa-087-darkreader/native/qa090-final-brave-results.json`、`work/qa-089-root-cause/publish-final-background-tab-close.json`、`work/qa-069-exclusion/results.json`。
+
+<details>
+<summary>2026-10-28 歷史驗證</summary>
+
 # VideoSpeed 1.0.0 最後驗證
 
 2026-10-28。修正兩個已重現的邊界，精簡打包；名稱、版本與下載檔名維持不變。首頁下載標籤統一為「下載ZIP」，大小保留在子專案說明與發布內文。
@@ -374,6 +396,8 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
 
 </details>
 

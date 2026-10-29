@@ -158,9 +158,9 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  function queueQuality(video,id){
   const state=states.get(id);if(disposed||!state||!ready||id!==activeId||!state.rate.initialized&&!state.rate.initializationAttempts||!eligible(video)||!mediaCanInitialize(video))return;
   if(!settings.enabled||!settings.qualityEnabled){state.quality={status:'disabled'};return;}
-  if(video.readyState<1||state.timer||state.attempts>qualityDelays.length||['applied','requested','failed','preserved'].includes(state.quality.status))return;
+  if(video.paused||video.ended||video.readyState<1||state.timer||state.attempts>qualityDelays.length||['applied','requested','failed','preserved'].includes(state.quality.status))return;
   state.timer=setTimeout(async()=>{
-   state.timer=null;if(!video.isConnected||!settings.enabled||!settings.qualityEnabled||id!==activeId||!eligible(video)||!mediaCanInitialize(video))return;
+   state.timer=null;if(!video.isConnected||video.paused||video.ended||!settings.enabled||!settings.qualityEnabled||id!==activeId||!eligible(video)||!mediaCanInitialize(video))return;
    const generation=state.rate.mediaKey,revision=state.revision,requestId='q-'+Date.now()+'-'+(++requestSerial);state.attempts++;
    const result=await new Promise(resolve=>{
     const timer=setTimeout(()=>{pending.delete(requestId);resolve({status:'failed',reason:'bridge-timeout'});},1800);
@@ -335,6 +335,13 @@ function boot(){
   if(disposed)return;configuration++;settings=normalizeSettings(next);
   reconcile();
  }
+ let settingsReadSerial=0;
+ async function readSavedSettings(){
+  const serial=++settingsReadSerial,before=configuration;
+  const data=await messenger.call(chrome.storage.local,'get','settings');
+  if(disposed||!data||serial!==settingsReadSerial||configuration!==before)return;
+  localPolicyKnown=true;configure(data.settings);
+ }
  function reconcile(){
   if(disposed)return;
   if(!contextReady)return;
@@ -356,12 +363,13 @@ function boot(){
  function acceptConfiguration(response){
   if(!response?.settings||!validRate(response.lastRate)||!Number.isSafeInteger(response.rateRevision)||response.rateRevision<0||!Number.isSafeInteger(response.activity?.revision)||response.activity.revision<0||typeof response.activity.focused!=='boolean'||!Number.isSafeInteger(response.activity.until)||response.activity.until<0)return false;
   language=resolveLanguage(response.language);session?.updateLanguage(language);rateClient.accept(response);
-  const changed=acceptActivity(response.activity);
+  acceptActivity(response.activity);
   if(!contextReady||configuration===0)pageUrl=response.pageUrl||pageUrl;contextReady=true;localPolicyKnown=true;
-  if(configuration===0)configure(response.settings);else if(changed)reconcile();
+  if(configuration===0||response.configurationAtRequest===configuration)configure(response.settings);
+  else {reconcile();return false;}
   return true;
  }
- const startup=new StartupHandshake({request:()=>send({action:'settings'}),accept:acceptConfiguration,alive:messenger.alive,
+ const startup=new StartupHandshake({request:()=>{settingsReadSerial++;const at=configuration;return send({action:'settings'}).then(response=>response&&({...response,configurationAtRequest:at}));},accept:acceptConfiguration,alive:messenger.alive,
   mayRetry:()=>!disposed&&(isRecent()||isLoading()||document.visibilityState!=='hidden'),onError:error=>console.error('[VideoSpeed] startup failed',error)});
  const bridgeStartup=new StartupHandshake({request:()=>send({action:'repairBridge'}),accept:()=>{reconcile();return bridgeReady;},alive:messenger.alive,
   mayRetry:()=>!disposed&&(isRecent()||isLoading()||!!session),delays:[200,800],onError:error=>console.error('[VideoSpeed] page bridge failed',error)});
@@ -393,7 +401,7 @@ function boot(){
   startup.ensure({force:true,reason:'shortcut'}).then(async ok=>{if(!session&&bridgeStartup.task)await bridgeStartup.task;if(enabled&&ok&&session&&settingsForUrls(settings,location.href,window===window.top?location.href:pageUrl).enabled)session.handleKey(event);});
  };
  window.addEventListener('keydown',wakeKey,true);
- Promise.resolve().then(()=>messenger.call(chrome.storage.local,'get','settings')).then(messenger.guard(data=>{if(configuration===0&&data){settings=normalizeSettings(data.settings);localPolicyKnown=true;}})).catch(()=>{});
+ Promise.resolve().then(()=>messenger.call(chrome.storage.local,'get','settings')).then(messenger.guard(data=>{if(configuration===0&&data){localPolicyKnown=true;configure(data.settings);}})).catch(()=>{});
  const initial=startup.ensure();
  const storageChanged=(changes,area)=>{
   if(area!=='local'||disposed)return;
@@ -409,10 +417,16 @@ function boot(){
   if(message.action==='power'||message.action==='activity'){
    language=resolveLanguage(message.language);session?.updateLanguage(language);
    rateClient.accept(message);
-   if(!acceptActivity(message.activity)){respond({ok:true,version:VERSION,enabled:!!session});return;}
-   pageUrl=message.pageUrl||pageUrl;contextReady=true;localPolicyKnown=true;
-   if(message.action==='power'||configuration===0)configure(message.settings);else reconcile();
-   if(validRate(lastRate)&&configuration>0)startup.acknowledge();
+   const accepted=acceptActivity(message.activity);
+   if(accepted){pageUrl=message.pageUrl||pageUrl;contextReady=true;localPolicyKnown=true;}
+   if(message.action==='power'){
+    // A queued page message may predate several successful saves. Read the
+    // committed value; a newer storage event or read supersedes this result.
+    readSavedSettings().then(messenger.guard(()=>respond({ok:true,version:VERSION,enabled:!!session})),messenger.guard(error=>{startup.ensure({force:true,reason:'settings-read-failed'});respond({ok:false,error:error.message||'Could not read saved settings'});}));
+    return true;
+   }
+   if(!accepted){respond({ok:true,version:VERSION,enabled:!!session});return;}
+   if(configuration===0)configure(message.settings);else reconcile();
    respond({ok:true,version:VERSION,enabled:!!session});return;
   }
   if(session)return session.receive(message,sender,respond);

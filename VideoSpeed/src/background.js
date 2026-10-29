@@ -3,7 +3,7 @@ import {disabledOnUrl} from './site-rules.js';
 import {resolveLanguage,translate} from '../extension/i18n.js';
 import {RateMemory,RateWriteLedger} from './rate-memory.js';
 import {TabActivity,replayTabActivityEvents,TAB_ACTIVITY_GRACE_MS,TAB_LOADING_GRACE_MS} from './tab-activity.js';
-import {consumeRuntimeError} from './runtime.js';
+import {consumeRuntimeError,setActionIcon} from './runtime.js';
 const SCOPE='video-control',VERSION='1.0.0',frames=new Map(),pinned=new Map(),ports=new Map(),contentPorts=new Set(),announced=new Map(),markerQueues=new Map(),markedTargets=new Map(),refreshTasks=new Map();
 const currentTargets=new Map(),selectionEpoch=Date.now();let selectionRevision=0;
 const keyOf=(frame,id)=>frame.frameId+':'+(frame.documentId||'')+':'+id;
@@ -19,10 +19,10 @@ function sendSelection(tabId,message,options,timeoutMs=1000){
   Promise.resolve().then(()=>chrome.tabs.sendMessage(tabId,message,options)).then(response=>{clearTimeout(timer);resolve(response);},()=>{clearTimeout(timer);resolve(null);});
  });
 }
-function popupRefresh(task){
+function popupRefresh(task,timeoutMs=1000){
  return new Promise(resolve=>{
-  const timer=setTimeout(resolve,1000);
-  Promise.resolve(task).then(()=>{clearTimeout(timer);resolve();},()=>{clearTimeout(timer);resolve();});
+  const timer=setTimeout(()=>resolve(false),Math.max(0,timeoutMs));
+  Promise.resolve(task).then(()=>{clearTimeout(timer);resolve(true);},()=>{clearTimeout(timer);resolve(true);});
  });
 }
 let settingsCache,settingsTask,powerSignature,powerQueue=Promise.resolve(),settingsWrites=Promise.resolve(),language=resolveLanguage(null);
@@ -187,11 +187,13 @@ function notifyActivity(tabId){
  job.task=(async()=>{try{while(job.again){job.again=false;await sendActivityUpdate(tabId);}}catch{}finally{if(activityNoticeQueues.get(tabId)===job)activityNoticeQueues.delete(tabId);}})();
  return job.task;
 }
-async function pausedTarget(tabId){await powerQueue;const data=await chrome.storage.session.get('pausedTargets');return data.pausedTargets?.[tabId]||null;}
+async function pausedTarget(tabId){const data=await chrome.storage.session.get('pausedTargets');return data.pausedTargets?.[tabId]||null;}
 function syncPower(settings){
  powerQueue=powerQueue.catch(()=>{}).then(async()=>{
-  const enabled=settings.enabled,signature=JSON.stringify([enabled,settings.disabledSites,settings.siteModes]);if(powerSignature===signature)return;powerSignature=signature;
+  if(settings!==settingsCache)return;
+  const enabled=settings.enabled,signature=JSON.stringify(settings);if(powerSignature===signature)return;
   const cached=await chrome.storage.session.get('pausedTargets'),frozen={...cached.pausedTargets};
+  if(settings!==settingsCache)return;
   const tabs=new Set([...frames.keys(),...[...contentPorts].map(port=>port.sender?.tab?.id),...[...ports.values()].map(item=>item.tabId)].filter(Number.isInteger)),pendingTabs=new Set([...tabs].filter(hasPendingMedia));
   if(!enabled){
    for(const tabId of selectionDeliveries.keys())clearSelectionDelivery(tabId);
@@ -200,9 +202,12 @@ function syncPower(settings){
    frames.clear();announced.clear();pinned.clear();currentTargets.clear();
   }
   const rate=await optionalRateState();
+  if(settings!==settingsCache)return;
   await Promise.allSettled([...tabs].map(tabId=>applyPagePolicy(tabId,undefined,settings,rate,pendingTabs.has(tabId))));
-  await chrome.action.setIcon({path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
+  if(settings!==settingsCache)return;
+  await setActionIcon(chrome.action,chrome.runtime,{path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
   await chrome.action.setTitle({title:titleFor(settings)});
+  powerSignature=signature;
   for(const [port,item]of ports)try{port.postMessage({action:'updated',tabId:item.tabId});}catch{}
  });return powerQueue;
 }
@@ -212,9 +217,11 @@ async function applyPagePolicy(tabId,pageUrl,settings,rate,wasPending=false){
  const blocked=disabledOnUrl(pageUrl,settings.disabledSites,settings.siteModes),enabled=settings.enabled&&!blocked;
  if(!enabled){clearSelectionDelivery(tabId);frames.delete(tabId);announced.delete(tabId);pinned.delete(tabId);currentTargets.delete(tabId);}
  if(rate===undefined)rate=await optionalRateState();
+ if(settings!==settingsCache)return;
  const message={scope:SCOPE,action:'power',settings,pageUrl,language,activity:await activityFor(tabId)};if(rate)Object.assign(message,{lastRate:rate.lastRate,rateRevision:rate.rateRevision});
- if(contact)await chrome.tabs.sendMessage(tabId,message).catch(()=>{});
- await chrome.action.setIcon({tabId,path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
+ if(contact)await sendSelection(tabId,message);
+ if(settings!==settingsCache)return;
+ await setActionIcon(chrome.action,chrome.runtime,{tabId,path:Object.fromEntries([16,32,48,128].map(size=>[size,'icons/'+(enabled?'':'off-')+size+'.png']))});
  await chrome.action.setTitle({tabId,title:titleFor(settings,blocked)});
  for(const [port,item]of ports)if(item.tabId===tabId)try{port.postMessage({action:'updated',tabId});}catch{}
 }
@@ -231,9 +238,9 @@ function highlight(tabId,scroll=false,clear=false){
  const next=previous.catch(()=>{}).then(async()=>{
   if(!await mayContactPage(tabId)){markedTargets.delete(tabId);return;}
   const target=clear||!(await stored()).enabled?null:targetFor(tabId);
-  if(!target||markedTargets.get(tabId)?.key!==target.key)await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'highlight',options:{clear:true}}).catch(()=>{});
+  if(!target||markedTargets.get(tabId)?.key!==target.key)await sendSelection(tabId,{scope:SCOPE,action:'highlight',options:{clear:true}});
   if(!target){markedTargets.delete(tabId);return;}
-  const response=await chrome.tabs.sendMessage(tabId,{scope:SCOPE,action:'highlight',options:{mediaKey:target.id,title:target.title,scrollIntoView:scroll}},optionsOf(target)).catch(()=>null);
+  const response=await sendSelection(tabId,{scope:SCOPE,action:'highlight',options:{mediaKey:target.id,title:target.title,scrollIntoView:scroll}},optionsOf(target));
   if(response?.highlighted)markedTargets.set(tabId,{key:target.key,title:target.title});else markedTargets.delete(tabId);
  });
  markerQueues.set(tabId,next);return next;
@@ -393,7 +400,9 @@ async function persistRateMessage(message,token,targetMatches){
 }
 function changeSettings(patch){
  settingsWrites=settingsWrites.catch(()=>{}).then(async()=>{
-  const settings=validateSettings({...await stored(),...patch});settingsCache=settings;await chrome.storage.local.set({settings});await syncPower(settings);return settings;
+  const settings=validateSettings({...await stored(),...patch});
+  await chrome.storage.local.set({settings});settingsCache=settings;
+  syncPower(settings).catch(()=>{});return settings;
  });return settingsWrites;
 }
 async function run(message,sender){
@@ -440,8 +449,10 @@ async function run(message,sender){
    await ensureStartupActivity(tabId);
    // Send the current lease before asking the document to rescan. A worker
    // restart must not refresh using the document's previous blurred lease.
-   await notifyActivity(tabId);
-   await popupRefresh(refresh(tabId,message.refresh===true));
+   // Activity delivery and the following probe share the popup's page budget.
+   // A busy renderer must not keep the extension UI waiting indefinitely.
+   const deadline=Date.now()+1000;
+   if(await popupRefresh(notifyActivity(tabId)))await popupRefresh(refresh(tabId,message.refresh===true),deadline-Date.now());
   }
   const target=siteDisabled?null:settings.enabled?targetFor(tabId):await pausedTarget(tabId),rate=await rateState();return {tabId,pageUrl,siteDisabled,settings,loading:tab.status==='loading',lastRate:rate.lastRate,rateRevision:rate.rateRevision,videos:target?[target]:[],target};
  }
@@ -486,8 +497,9 @@ chrome.runtime.onConnect.addListener(port=>{
     if(!ports.has(port)||item.requestedTabId!==message.tabId||selected?.id!==tab.id||window?.id!==tab.windowId)return;
     item.tabId=tab.id;item.windowId=tab.windowId;popupFocusRevision++;
     const changed=tabActivity.reconcile({windowId:tab.windowId,tabId:tab.id});
-    if(changed.length){saveActivity().catch(()=>{});await Promise.allSettled(changed.map(notifyActivity));}
-    if(settingsCache?.enabled)await highlight(tab.id);
+    // Binding confirms ownership; page delivery and drawing are best effort.
+    if(changed.length){saveActivity().catch(()=>{});for(const tabId of changed)notifyActivity(tabId);}
+    if(settingsCache?.enabled)highlight(tab.id).catch(()=>{});
    })().catch(()=>{});
   }
   if(message.action==='renew'&&item.tabId&&settingsCache?.enabled){

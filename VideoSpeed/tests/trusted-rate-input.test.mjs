@@ -21,6 +21,11 @@ function event(type,path,{trusted=true,...extra}={}){
 }
 function setup(records=[{video:new FakeElement('VIDEO'),selected:true,mediaKey:'v1:k1'}]){
  const document=new EventTarget();let now=100;
+ const dispatch=document.dispatchEvent.bind(document);
+ document.dispatchEvent=value=>{
+  Object.defineProperty(value,'eventPhase',{configurable:true,value:2});
+  try{return dispatch(value);}finally{Object.defineProperty(value,'eventPhase',{configurable:true,value:0});}
+ };
  const helper=new TrustedRateInput(document,{getRecords:()=>records,now:()=>now});helper.start();
  return {document,helper,records,advance(ms){now+=ms;}};
 }
@@ -60,6 +65,34 @@ test('ordinary pointer and play controls do not authorize an unrelated rate chan
  state.document.dispatchEvent(event('click',[play,player,state.document]));
  assert.equal(state.helper.consume(video,userInfo('v1:k1',8)),false);
  state.helper.dispose();
+});
+
+test('a held speed-slider move authorizes only a synchronous actual write, never its stale ARIA value',()=>{
+ const state=setup(),video=state.records[0].video,player=new FakeElement('DIV');player.contains=node=>node===video;
+ const slider=new FakeElement('DIV',{'role':'slider','aria-label':'Playback speed','aria-valuenow':'2'});slider.parentElement=player;
+ let during=false;
+ state.document.addEventListener('pointermove',()=>{video.playbackRate=1.25;during=state.helper.consume(video,userInfo('v1:k1',1.25,'native-rate-control'));});
+ state.document.dispatchEvent(event('pointermove',[slider,player,state.document],{buttons:1}));
+ assert.equal(during,true);assert.equal(state.helper.consume(video,userInfo('v1:k1',2)),false);
+ video.playbackRate=1;assert.equal(state.helper.consume(video,userInfo('v1:k1',1,'native-rate-control')),false,'a later page reset is not the drag');state.helper.dispose();
+});
+
+test('hovering a slider creates no input proof or media lookup',()=>{
+ let lookups=0;const document=new EventTarget(),helper=new TrustedRateInput(document,{getRecords:()=>{lookups++;return [];}});helper.start();
+ const slider=new FakeElement('DIV',{'role':'slider','aria-label':'Playback speed','aria-valuenow':'2'});
+ document.dispatchEvent(event('pointermove',[slider,document],{buttons:0}));assert.equal(lookups,0);assert.equal(helper.proofs.length,0);helper.dispose();
+});
+
+test('a trusted range input exposes its current value for feedback before the player commits',()=>{
+ const video=new FakeElement('VIDEO'),player=new FakeElement('DIV'),slider=new FakeElement('INPUT',{'type':'range','role':'slider','class':'ytp-speedslider','aria-valuenow':'2','aria-valuetext':'2.00'});
+ player.contains=node=>node===video;slider.parentElement=player;slider.value='1.25';video.playbackRate=2;
+ const records=[{video,selected:true,mediaKey:'v1:k1'}],document=new EventTarget(),shown=[];
+ const helper=new TrustedRateInput(document,{getRecords:()=>records,onSliderInput:info=>shown.push(info)});helper.start();
+ document.dispatchEvent(event('input',[slider,player,document]));
+ assert.deepEqual(shown,[{video,mediaKey:'v1:k1',rate:1.25}]);
+ assert.equal(video.playbackRate,2,'visual feedback never changes the player itself');
+ assert.equal(helper.consume(video,userInfo('v1:k1',1.25)),false,'an uncommitted slider value is not a confirmed rate');
+ document.dispatchEvent(event('input',[slider,player,document],{trusted:false}));assert.equal(shown.length,1);helper.dispose();
 });
 
 test('trusted direct media keys preserve ! and @ only during the key event while blocking play and editable keys',async()=>{
@@ -114,4 +147,30 @@ test('the pending proof queue stays bounded',()=>{
  assert.equal(state.helper.proofs.length,16);
  state.helper.dispose();
  assert.equal(state.helper.proofs.length,0);
+});
+
+test('an observation from an earlier player capture listener waits for the same trusted input',()=>{
+ const state=setup(),video=state.records[0].video,{player,menu,option}=speedOption();player.contains=node=>node===video;video.playbackRate=1.5;
+ let accepted=0;state.helper.verify(video,userInfo('v1:k1',1.5),()=>accepted++);
+ assert.equal(accepted,0);
+ state.document.dispatchEvent(event('click',[option,menu,player,state.document]));
+ assert.equal(accepted,1);assert.equal(state.helper.pending.length,0);state.helper.dispose();
+});
+
+test('unverified page observations expire and cannot wait for an unrelated later choice',async()=>{
+ const state=setup(),video=state.records[0].video,{player,menu,option}=speedOption();player.contains=node=>node===video;video.playbackRate=1.5;
+ let accepted=0;state.helper.verify(video,userInfo('v1:k1',1.5),()=>accepted++);
+ await new Promise(resolve=>setTimeout(resolve,5));
+ state.document.dispatchEvent(event('click',[option,menu,player,state.document]));
+ assert.equal(accepted,0);assert.equal(state.helper.pending.length,0);state.helper.dispose();
+});
+
+test('direct-key proof survives listener microtasks but is invalid as soon as dispatch ends',async()=>{
+ const state=setup(),video=state.records[0].video,body=new FakeElement('BODY');video.playbackRate=1.75;
+ let accepted=0;state.helper.verify(video,userInfo('v1:k1',1.75,'direct-key-write'),()=>accepted++);
+ state.document.dispatchEvent(event('keydown',[body,state.document],{key:'!'}));
+ assert.equal(accepted,1);
+ state.document.dispatchEvent(event('keydown',[body,state.document],{key:'@'}));
+ video.playbackRate=2;assert.equal(state.helper.consume(video,userInfo('v1:k1',2,'direct-key-write')),false);
+ await new Promise(resolve=>setTimeout(resolve,5));assert.equal(state.helper.proofs.some(p=>p.kind==='key'),false);state.helper.dispose();
 });

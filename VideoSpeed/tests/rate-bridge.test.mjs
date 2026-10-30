@@ -84,6 +84,19 @@ function trustedEvent(type,path,extra={}){
 
 function observations(){const items=[];return {items,callback:(video,info)=>items.push({video,...info})};}
 
+test('a delayed range commit survives its pointerup and click without accepting a later page reset',async()=>{
+ const env=makeEnvironment(),seen=observations(),bridge=new RateBridge(env.target);bridge.start(seen.callback);
+ bridge.execute(env.video,{op:'apply',rate:2,mediaKey:'film',selected:true});
+ const slider=new FakeElement('INPUT',{'type':'range','role':'slider','class':'ytp-speedslider','aria-valuenow':'2','aria-valuetext':'2.00'});slider.value='1.25';
+ const path=[slider,env.player,env.document];
+ env.document.dispatchEvent(trustedEvent('input',path));
+ env.document.dispatchEvent(trustedEvent('pointerup',path,{button:0}));
+ env.document.dispatchEvent(trustedEvent('click',path));
+ await Promise.resolve();env.video.playbackRate=1.25;
+ assert.equal(seen.items.at(-1).origin,'user');assert.equal(seen.items.at(-1).evidence,'native-rate-option');assert.equal(seen.items.at(-1).actualRate,1.25);
+ env.video.playbackRate=1;assert.notEqual(seen.items.at(-1).origin,'user','the exact proof is consumed by the committed value');bridge.stop();
+});
+
 test('read reports native values without emitting observations; getter errors stay read-error',()=>{
  const env=makeEnvironment(),seen=observations(),bridge=new RateBridge(env.target);
  bridge.start(seen.callback);

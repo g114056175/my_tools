@@ -1,6 +1,6 @@
 # VideoSpeed｜影片倍速控制 <img src="extension/icons/48.png" width="32" height="32" alt="VideoSpeed icon">
 
-**[下載ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip?sha=9a999481a4fc)** · 約 147 KB · 解壓約 463 KB · Chromium 120 以上
+**[下載ZIP](https://github.com/g114056175/my_tools/releases/download/video-speed-v1.0.0/VideoSpeed.zip?sha=c99e9dd3e3ca)** · 約 152 KB · 解壓約 480 KB · Chromium 120 以上
 
 用滑桿、刻度與快捷鍵調整網頁影片倍速，依偏好設定下一部影片的起始速度。
 

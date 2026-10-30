@@ -1,4 +1,4 @@
-import {nativeRateFromEvent} from './native-rate-intent.js';
+import {nativeRateIntentFromEvent} from './native-rate-intent.js';
 
 const MAX_REFERENCES=64;
 const MAX_DIAGNOSTICS=32;
@@ -8,7 +8,7 @@ const POINTER_WINDOW=2600;
 const USER_TOKEN_WINDOW=1200;
 const EPSILON=0.001;
 const MEDIA_EVENTS=['ratechange','emptied','loadstart','loadedmetadata','play','playing','waiting','timeupdate'];
-const INPUT_EVENTS=['pointerdown','pointerup','click','input','change','keydown','keyup'];
+const INPUT_EVENTS=['pointerdown','pointermove','pointerup','click','input','change','keydown','keyup'];
 const EDITABLE_TAGS=new Set(['INPUT','TEXTAREA','SELECT']);
 const BLOCKED_KEYS=new Set([
  ' ','Space','Spacebar','Enter','ArrowLeft','ArrowRight','ArrowUp','ArrowDown',
@@ -518,8 +518,9 @@ export class RateBridge{
  _classifyCurrentEvent(record,key,attempted){
   let event;
   try{event=this.target?.event;}catch{return null;}
-  if(!event?.isTrusted||!(event.eventPhase>0)||!['click','input','change','keydown'].includes(String(event.type||'')))return null;
-  const path=pathFor(event),type=String(event.type),exactRate=nativeRateFromEvent(event);
+  if(!event?.isTrusted||!(event.eventPhase>0)||!['click','input','change','keydown','pointerdown','pointermove','pointerup'].includes(String(event.type||'')))return null;
+  const path=pathFor(event),type=String(event.type),intent=nativeRateIntentFromEvent(event),exactRate=intent?.rate??null;
+  if(type.startsWith('pointer')&&!intent)return null;
   const owner=this._resolveOwner(path,{allowRecentPointer:true,keydown:type==='keydown'});
   const touchesRecord=this._pathTouchesRecord(path,record);
   const nonRate=nonRateControl(path);
@@ -551,6 +552,7 @@ export class RateBridge{
   const direct={event,rate:attempted,epoch:record.epoch,seq,prepared:true};
   record.directEvent=direct;
   queueMicrotaskFor(this.target,()=>{if(record.directEvent===direct)record.directEvent=null;});
+  if(intent)return {origin:'user',evidence:'native-rate-control',seq};
   if(type==='keydown'&&!BLOCKED_KEYS.has(String(event.key||''))&&!isEditablePath(path))return {origin:'user',evidence:'direct-key-write',seq};
   return {origin:'ambiguous',evidence:'trusted-player-input-nearby',seq};
  }
@@ -686,8 +688,10 @@ export class RateBridge{
 
  _handleInput(event){
   if(!event?.isTrusted)return;
+  if(event.type==='pointermove'&&!(Number(event.buttons)>0))return;
   const path=pathFor(event),type=String(event.type||'');
-  const exactRate=nativeRateFromEvent(event);
+  const intent=nativeRateIntentFromEvent(event),exactRate=intent?.rate??null;
+  if(type==='pointermove'&&!intent)return;
   if(finite(exactRate)){
    const record=this._resolveOwner(path,{allowRecentPointer:true,keydown:type==='keydown'});
    if(!record)return;
@@ -709,7 +713,9 @@ export class RateBridge{
   }
   const now=safeNow(this.target),knownNonRate=nonRateControl(path),seq=this._nextSeq();
   record.tokens=record.tokens.filter(token=>!token.used&&token.epoch===record.epoch&&token.expires>=now);
-  record.tokens=[];
+  // A range's change is followed by pointerup/click before some players
+  // commit the rate asynchronously. Keep its last exact input until applied.
+  if(!intent||knownNonRate)record.tokens=[];
   if(type==='pointerdown'&&!isEditablePath(path))this.pointerOwner={record,epoch:record.epoch,at:now};
   record.lastInput={kind:knownNonRate?'non-rate':'general',at:now,epoch:record.epoch,seq};
   if(type==='keydown'&&!BLOCKED_KEYS.has(String(event.key||''))&&!isEditablePath(path)){

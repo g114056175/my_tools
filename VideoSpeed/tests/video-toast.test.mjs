@@ -34,3 +34,26 @@ test('popup hold reuses an existing transient toast and does not rewrite unchang
  video.playbackRate=1.75;toast.show(video,'1.75×');assert.equal(toast.label.textContent,'1.75×');assert.strictEqual(toast.host,host);
  toast.release();assert.equal(toast.host,null);assert.equal(toast.document.documentElement.children.length,0);
 });
+
+test('each adjustment restarts the visible lifetime without remounting the toast',t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval']});
+ const {video,toast}=fixture(t);
+ toast.show(video,'1.5×');const host=toast.host;t.mock.timers.tick(1000);
+ toast.show(video,'1.75×');assert.strictEqual(toast.host,host);assert.equal(toast.label.textContent,'1.75×');
+ t.mock.timers.tick(1099);assert.strictEqual(toast.host,host);
+ assert.equal(toast.document.documentElement.children.length,1);
+ t.mock.timers.tick(1);assert.equal(toast.host,null);
+});
+
+test('clearing a rapid sequence cannot resurrect an older notice',t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval']});
+ const {video,toast}=fixture(t);toast.show(video,'1.5×');t.mock.timers.tick(100);
+ toast.show(video,'2×');toast.clear();t.mock.timers.tick(2000);
+ assert.equal(toast.host,null);assert.equal(toast.document.documentElement.children.length,0);
+});
+
+test('detaching the current video removes its notice on the next paint',t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval']});
+ const {video,toast}=fixture(t);toast.show(video,'1.5×');video.isConnected=false;
+ t.mock.timers.tick(150);assert.equal(toast.host,null);assert.equal(toast.document.documentElement.children.length,0);
+});

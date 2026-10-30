@@ -4,6 +4,7 @@ import {MediaRegistry,mediaSignature,isMediaPreview,mediaCanInitialize} from './
 import {highlightMedia} from './media-highlight.js';
 import {createRuntimeMessenger,isContextInvalidatedError} from './runtime.js';
 import {VideoToast} from './video-toast.js';
+import {NativeRateToast} from './native-rate-toast.js';
 import {InitialRateNotice} from './initial-rate-notice.js';
 import {settingsForUrls} from './site-rules.js';
 import {RateClient} from './rate-client.js';
@@ -33,6 +34,11 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  let preference=null,hasOtherFrames=false,snapshotRevision=0;const selectionOrder=new SelectionOrder();
  const states=new Map(),interactions=new WeakMap(),pending=new Map(),rateResponses=new Map();
  let trustedRateInput=null,registry,graceTimer=null,initialScan=true,documentPending=initialDocument&&document.readyState==='loading',focused=isFocused();
+ const nativeToast=new NativeRateToast(document,{isActive:video=>{
+  const id=registry?.ids.get(video),state=states.get(id);
+  return !disposed&&settings.enabled&&isFocused()&&id===activeId&&!!state?.rate&&mediaSignature(video)===state.rate.mediaKey;
+ }});
+ const claimRateNotice=(video,rate)=>nativeToast.arm(video,rate,mediaSignature(video));
  const canDiscover=()=>initialScan||isRecent()||documentPending&&isLoading();
  const clearPending=video=>{video.removeAttribute('data-video-control-pending-until');video.removeAttribute('data-video-control-pending-key');};
  const pendingMarker=video=>Number(video.getAttribute('data-video-control-pending-until'))>Date.now()&&(!video.getAttribute('data-video-control-pending-key')||video.getAttribute('data-video-control-pending-key')===mediaSignature(video));
@@ -87,7 +93,13 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   let data;try{data=JSON.parse(event.detail);}catch{return;}
   const video=event.composedPath().find(node=>node?.tagName==='VIDEO'),id=video?.getAttribute('data-video-control-id');
   const state=id&&states.get(id);
-  if(data?.owner===rateClient.sessionId&&state?.rate&&!isMediaPreview(video)&&id===data.videoId&&data.info?.mediaKey===state.rateKeyToken&&(data.info?.origin!=='user'||trustedRateInput?.consume(video,data.info))){if(data.info.origin==='user')state.notice?.cancel();state.rate.observe({...data.info,mediaKey:state.rateKey});}
+  if(data?.owner!==rateClient.sessionId||!state?.rate||isMediaPreview(video)||id!==data.videoId||data.info?.mediaKey!==state.rateKeyToken)return;
+  const accept=()=>{
+   if(disposed||states.get(id)!==state||data.info.mediaKey!==state.rateKeyToken)return;
+   if(data.info.origin==='user')state.notice?.cancel();
+   state.rate.observe({...data.info,mediaKey:state.rateKey});
+  };
+  if(data.info.origin==='user')trustedRateInput?.verify(video,data.info,accept);else accept();
  },true);
  registry=new MediaRegistry(document,(video,id)=>{
   const signature=mediaSignature(video),initializedKey=video.getAttribute('data-video-control-initialized')||'';
@@ -106,14 +118,22 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
     clearTimeout(state.settleTimer);state.settled=false;state.backgroundApplied=!isFocused();
     state.settleTimer=setTimeout(()=>{state.settleTimer=null;state.settled=true;finishPending(state);},500);
    },lastRate,selected:id===activeId,onChange:report,
-   onDefaultApplied:()=>state.notice.request(),
+   onDefaultApplied:rate=>{claimRateNotice(video,rate);state.notice.request();},
    onRate:(rate,source)=>{
+    if(source==='native'){
+     state.notice.cancel();
+     if(!disposed&&settings.enabled&&isFocused()&&id===activeId&&video.isConnected&&states.get(id)===state&&mediaSignature(video)===state.rate.mediaKey&&Math.abs(video.playbackRate-rate)<1e-5){
+      claimRateNotice(video,rate);
+      videoToast.show(video,String(Number(rate.toFixed(2)))+'×');
+     }
+    }
     lastRate=rate;const rateWriteId=rateClient.begin(rate),hint={id,rate,source,rateWriteId,rateSessionId:rateClient.sessionId};rememberedRate=hint;
     for(const item of states.values())if(item.rate)item.rate.lastRate=rate;
     send({action:'rememberRate',...hint}).then(response=>rateClient.acknowledge(rateWriteId,response));
    },
    onMedia:()=>queueMicrotask(()=>{
     if(disposed||!states.has(id))return;
+    if(nativeToast.video===video&&nativeToast.key!==state.rate.mediaKey)nativeToast.stop();
     if(!isFocused()&&!eligible(video)){onIdle();return;}
     state.notice.wake();
     if(state.qualityKey!==state.rate.mediaKey){state.qualityKey=state.rate.mediaKey;state.attempts=0;state.revision++;clearTimeout(state.timer);state.timer=null;state.quality={status:'pending'};}
@@ -122,7 +142,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   });
   for(const name of ['pause','play','ended','resize','loadedmetadata'])listen(video,name,report);
   state.onPlayback=()=>{state.notice.wake();queueQuality(video,id);finishPending(state);};
-  state.onNoticeSource=()=>state.notice.cancelFrame();
+  state.onNoticeSource=()=>{state.notice.cancelFrame();nativeToast.stop(video);};
   for(const name of ['play','playing'])listen(video,name,state.onPlayback);
   for(const name of ['loadstart','emptied'])listen(video,name,state.onNoticeSource);
   queueMicrotask(()=>{if(!disposed&&video.isConnected&&states.has(id))video.dispatchEvent(new Event('video-control:media-bind-v1',{bubbles:true,composed:true}));});
@@ -133,6 +153,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  }});
  initialScan=false;
  registry.onRemove=(id,video)=>{
+  nativeToast.stop(video);
   clearPending(video);
   const state=states.get(id);state?.notice.dispose();state?.rate.dispose({preserveDefault:!isFocused()&&settings.enabled});clearTimeout(state?.timer);clearTimeout(state?.settleTimer);states.delete(id);
   if(videoToast.video===video)videoToast.clear();
@@ -141,7 +162,14 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   for(const name of ['play','playing'])video.removeEventListener(name,state?.onPlayback);
   for(const name of ['loadstart','emptied'])video.removeEventListener(name,state?.onNoticeSource);
  };
- trustedRateInput=new TrustedRateInput(document,{getRecords:()=>[...registry.videos].map(([id,video])=>({video,selected:id===activeId,mediaKey:states.get(id)?.rateKeyToken}))});
+ trustedRateInput=new TrustedRateInput(document,{
+  getRecords:()=>[...registry.videos].map(([id,video])=>({video,selected:id===activeId,mediaKey:states.get(id)?.rateKeyToken})),
+  onSliderInput:({video,mediaKey,rate})=>{
+   const id=registry.ids.get(video),state=states.get(id);
+   if(disposed||!settings.enabled||!isFocused()||id!==activeId||!video.isConnected||!state?.rate||mediaKey!==state.rateKeyToken||mediaSignature(video)!==state.rate.mediaKey)return;
+   state.notice.cancel();videoToast.show(video,String(Number(rate.toFixed(2)))+'×');
+  },
+ });
  trustedRateInput.start();
  globalThis[Symbol.for('video-control.identities')]={keys:registry.ids};
  const snapshot=(details=false,verify=false)=>registry.snapshot(states,interactions,{details,activeId,verify});
@@ -152,7 +180,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   const result=highlightMedia(options);
   if(options.clear)videoToast.release();
   else if(options.renew)videoToast.renew();
-  else if(result.highlighted)videoToast.hold(registry.videos.get(options.mediaKey));
+  else if(result.highlighted){const video=registry.videos.get(options.mediaKey);claimRateNotice(video,video.playbackRate);videoToast.hold(video);}
   return result;
  }
  function queueQuality(video,id){
@@ -193,6 +221,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  function updateLastRate(rate){if(!validRate(rate))return;lastRate=Number(rate);for(const state of states.values())state.rate.lastRate=lastRate;}
  function updateActivity(){
   const next=isFocused();
+  if(!next)nativeToast.stop();
   if(next!==focused){focused=next;clearTimeout(graceTimer);graceTimer=null;for(const state of states.values()){state.load.reset();clearPending(state.video);}}
   registry.setExploring(next);
   if(next)return true;
@@ -206,7 +235,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
   if(!isFocused()||!eligible(video))throw Error("Return to the video tab first");
   if(!settings.enabled)throw Error("VideoSpeed is disabled");
   if(activeId!==id){activeId=id;hasTarget=true;for(const [key,item]of states)item.rate.select(key===id);}
-  state.notice.cancel();const result=state.rate.command(command,value);interactions.set(video,Date.now());videoToast.show(video,result.rateStatus==='failed'?translateMessage(resolveLanguage(language),result.rateError):result.rate+'×');report();return result;
+  state.notice.cancel();const result=state.rate.command(command,value);interactions.set(video,Date.now());if(result.rateStatus==='ready')claimRateNotice(video,result.rate);videoToast.show(video,result.rateStatus==='failed'?translateMessage(resolveLanguage(language),result.rateError):result.rate+'×');report();return result;
  }
  function handleKey(event){
   if(!event.isTrusted||!isFocused())return false;
@@ -283,6 +312,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
     registry.prune();
     if(message.id&&!registry.videos.has(message.id)){report();respond({ok:false,activeId:null,error:'Video changed; select it again'});return;}
     activeId=message.id||null;hasTarget=!!message.hasTarget;preference=message.preference||null;hasOtherFrames=message.hasOtherFrames===true;rateClient.accept(message);updateLastRate(rateClient.rate);
+    if(nativeToast.video&&nativeToast.video!==registry.videos.get(activeId))nativeToast.stop();
     for(const [id,state]of states){state.rate.lastRate=lastRate;state.rate.select(id===activeId);state.notice.wake();if(id!==activeId){clearTimeout(state.timer);state.timer=null;}}
     if(activeId){const video=registry.videos.get(activeId);queueQuality(video,activeId);}respond({ok:true,activeId});
    }
@@ -300,7 +330,7 @@ function startSession(initialSettings,initialRate,send,alive,rateClient,{isFocus
  };
  function dispose({preserveDefault=false}={}){
   if(disposed)return;disposed=true;ready=false;abort.abort();
-  clearTimeout(reportTimer);clearTimeout(scrollTimer);clearTimeout(graceTimer);videoToast.clear();cancelPick();
+  clearTimeout(reportTimer);clearTimeout(scrollTimer);clearTimeout(graceTimer);videoToast.clear();nativeToast.stop();cancelPick();
   for(const state of states.values()){clearTimeout(state.timer);clearTimeout(state.settleTimer);state.notice.dispose();state.rate?.dispose({preserveDefault});}
   for(const job of pending.values()){clearTimeout(job.timer);job.resolve(null);}pending.clear();
   trustedRateInput?.dispose();registry.dispose();marker({clear:true});document.getElementById('video-control-toast')?.remove();

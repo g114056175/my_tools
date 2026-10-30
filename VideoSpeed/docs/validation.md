@@ -1,3 +1,82 @@
+# VideoSpeed 1.0.0 原生速度按鈕與拖曳提示修正
+
+2026-10-30。原生倍速提示修正與驗證。
+
+- YouTube 新版 `.ytp-variable-speed-panel-preset-button` 沒有 menu role 或速度 aria-label；補上 speed-panel 控制區辨識，點下方數字能記錄並提示。
+- 原生 range 優先讀目前的 value，避免取到延後更新的 ARIA。拖曳提示立即跟隨目前輸入值；真正播放速度及記憶仍以播放器確認結果為準，不把拖曳預覽寫入記憶。
+- YouTube 在放開後才延遲提交真實倍速，收尾 click 原本會清掉待確認輸入；現在保留同次調整的最後精確值，仍有 1200ms 期限、影片身分與來源限制，確認後只用一次。自訂滑桿直接改速的 pointermove 也補上同事件驗證；純滑鼠移動不做媒體查找。
+- Bilibili !／@ 真正使用 `.bpx-player-tooltip-item[data-name="shortcut"]` 與 `.bpx-player-tooltip-title`，前版僅處理 toast，漏了這套元件。本輪已補上；同一 shortcut 元件留下的舊倍率也保持隱藏，變成音量等非倍速訊息則還原。僅觀察播放器內已知的小提示區域，控制項 hover tooltip 不遮擋，沒有全頁輪詢。
+- Bilibili 純倍速 toast 即使包含關閉圖示也可一併遮擋；確認、登入、連結等行動通知保留。未知網站不加入遮擋。
+
+356 項單元／整合測試、Brave 的 14 項可信輸入案例與 Chromium 的 37 項提示遮擋／還原案例通過。新增新版數字按鈕、舊 ARIA、延遲提交、預覽不污染記憶、實際 shortcut tooltip、舊倍率、共用訊息還原，以及滑鼠懸停不查找媒體案例。提示立即顯示後，儲存仍非同步，瀏覽器驗證現已等待儲存完成再核對記憶。
+
+YouTube 實站 8 項通過：1.5／2.0 數字按鈕提示、拖曳依序顯示 1.75／1.45／1.25，放開後實際速度與記憶確認為 1.25。Bilibili 實站 5 項通過：!／@ 真正切換 1／2 倍，VS 提示與記憶同步；實際 `2.0x播放`／`1.0x播放` shortcut tooltip 均標記並隱藏，後續 VS 改為 1.25 時舊倍率仍不重現。另用官方 toast API 產生含關閉鈕的真實速度 toast，確認被遮擋且登入通知仍可見。兩站畫面已以真實尺寸檢查，專用暫存 profile 已清理，前後成品 hash 一致。
+
+限制：實站 ArrowDown 未在同一 shortcut 節點產生音量訊息，該探測未列為通過；共用節點改顯示音量、畫質、錯誤等通知的還原已由本地真實瀏覽器案例驗證。原始未觸發紀錄保留於 `bilibili-tooltip-final.json`，已確認案例另列於 `bilibili-verified.json`。
+
+成品含 25 檔；SHA-256：`7ce9d9ada5b58a5f4682afe5b55fb04d0543bd021b393eeb192440bce852a1b2`。證據：`work/qa-095-native-controls/`、`work/qa-091-native-rate/tooltip-brave-final-results.json`、`work/qa-093-native-suppression/tooltip-chromium-verified-results.json`。
+
+<details>
+<summary>先前驗證紀錄</summary>
+
+# VideoSpeed 1.0.0 即時倍速提示
+
+2026-10-30。移除原生手動調速提示的 500ms 等待佇列；選單、按鍵及滑桿確認有效改速後立即更新提示，連續操作重用同一個提示框並延長顯示時間。原有使用者操作驗證、記憶保護、預設首次載入時機，以及 YouTube／Bilibili 原生倍速提示遮擋維持不變。
+
+350 項單元／整合測試通過。隔離 Brave 的 11 項可信輸入回歸通過：原生選單、B 站 !／@、細調按鈕及自訂滑桿放開後，提示在操作確認後 0–9ms 讀取到；原生 range 拖曳每次有效變更均即時顯示。Chromium 的 32 項提示遮擋／還原回歸通過，未知網站及其他類型通知保持原生行為。此輪瀏覽器驗證使用本地播放器 fixture；額外的 YouTube 實站測試於頁面操作前遇到專用 profile 的 chrome.storage IO 錯誤，未列為實站驗收通過。專用 profile 均已清理。
+
+成品含 25 檔；SHA-256：`26c415c452d903b91e8aaa2cc1572bee7c06ce30100ee16a34702239d4bea42c`。證據：`work/qa-094-immediate-native-notice/`、`work/qa-091-native-rate/immediate-brave-final-results.json`、`work/qa-093-native-suppression/immediate-chromium-results.json`。GitHub 未更新。
+
+<details>
+<summary>先前驗證紀錄</summary>
+
+# VideoSpeed 1.0.0 原生倍速提示遮擋
+
+2026-10-30。本機修正，未知網站不加入提示遮擋；原生改速仍等待最後一次有效變更後 500ms 顯示 VS 提示。
+
+- 僅對目前控制影片的 YouTube／Bilibili 播放器辨識原生倍速文字。YouTube 另外辨識帶有明確速度 aria-label 的倍速圖示；播放與音量圖示保留。
+- Bilibili 共用 toast 只接受帶倍率單位／速度標籤的短文字；裸數字只在倍速專用提示中接受。文字須符合已確認的實際速度，整數倍率不以粗略四捨五入擴大比對。包含互動按鈕的通知保留。
+- 只添加可還原的顯示標記，不刪原生節點。提示改顯示錯誤、音量、畫質、換集內容，或停用、失焦、換片、卸載時，恢復原生顯示。
+- 連續改速重用已找到的小容器。播放器內新提示容器的探索最多兩秒，之後只保留已隱藏訊息所在小容器的文字／aria-label 觀察，確保共用節點改顯示警告時能還原；沒有常駐全頁輪詢。
+
+350 項單元／整合、Chromium 151 與 Brave 156 各 32 項提示遮擋／還原回歸、既有原生改速 11 項與首次播放提示／預覽排除 25 項通過。包含未知網站不處理、播放區外同文字不遮擋、共用訊息重用、互動通知保留、延遲建立、停用與換來源還原；暫時探索結束後，播放器內其他區域的 100 次 DOM 新增未觸發原生提示搜尋。
+
+YouTube 實站另以隔離 Chromium 暫時解除 VS 的加減速快捷鍵，使用 YouTube 原生 > 調至 1.25×：實際速度與記憶一致，原生倍速文字／圖示被隱藏，VS 提示約 533ms 出現；原生 100% 音量與暫停提示保留。前後成品 hash 一致，專用 profile 已清理。Bilibili 實站一次無影片、一次載入逾時，因此 B 站驗證範圍僅限已知 DOM 與實際可信輸入的本地 fixture，沒有宣稱實站驗收通過。
+
+成品含 25 檔；SHA-256：`48980df1e587793a23ff481d52f83da77efcc3cb801f3b7a60618fe8c0e4b2bd`（相對路徑依大小寫排序，各檔 path + NUL + bytes + NUL）。證據：`work/qa-093-native-suppression/`、`work/qa-075-main-qa093-final/results.json`、`work/qa-091-native-rate/suppression-final-results.json`。GitHub 未更新。
+
+<details>
+<summary>原生提示等待調整紀錄</summary>
+
+# VideoSpeed 1.0.0 原生提示等待調整
+
+2026-10-30。本機原生手動改速提示改為最後一次有效變更後 500ms 顯示；改速與記憶仍立即處理，擴充快捷鍵維持即時提示。尚未加入原生播放器提示遮擋。
+
+5 項提示單元檢查與隔離 Brave 156 的 11 項受信任操作情境通過，包含拖曳合併、B 站格式選項與 !／@、明確選回 1×、程式重設不污染記憶，以及下一部影片跟隨新速度。瀏覽器案例使用本地播放器，非實站驗收。測試啟動現在先等倍速記憶初始化、核對測試視窗聚焦，並為啟動保留六秒；初次等待不足的失敗紀錄另存，未列為通過。
+
+成品 SHA-256：`86d20fd2074864efa954bb554d35aca4dae0982f82e85ce56ac37c3500aac35e`（相對路徑依大小寫排序，各檔 path + NUL + bytes + NUL）。證據：`work/qa-092-half-second/`、`work/qa-091-native-rate/half-second-brave-final-results.json`。GitHub 未更新。
+
+<details>
+<summary>原生改速提示修正紀錄</summary>
+
+# VideoSpeed 1.0.0 原生改速提示修正
+
+2026-10-30。本機修正，尚未更新 GitHub。
+
+- 原生播放器改速原先沒有呼叫提示；現在確認使用者改速後仍立即更新記憶，提示則合併至最後一次調整後 300ms。擴充快捷鍵維持立即顯示，並取消較舊的待顯示原生提示。
+- 補上自訂滑桿、速度加減按鈕、ARIA 標籤及 Bilibili class/data-value 選項辨識；音量、進度等控制不納入。元件與目前影片的歸屬仍需確認。
+- 播放器較早的事件處理器可能先寫倍速，後續受信任事件證據尚未建立；觀察現在僅能等到同一事件回合結束，證據通過才記錄。按鍵證據在事件派送結束後立即失效。未確認的程式改速或載入重設不會升為跟隨記憶。
+- 換片、卸載、離開焦點、關閉功能或較新的調速會取消／拒絕過期提示。
+
+346 項單元／整合通過；Chromium 151、Brave 156 各 11 項受信任操作回歸通過，包含原生選單、連續 range 拖曳、自訂滑桿、B 站 !／@、加速按鈕、明確選回 1×、程式自動重設不污染記憶、擴充快捷鍵立即提示，以及下一部影片跟隨原生選擇的速度。原有主影片首次顯示與預覽排除 25 項也通過。
+
+修正前同一組原生操作案例只有 2/10 通過，原生選項與提示缺失已重現。測試使用隔離 profile、本地播放器結構與實際可信鍵鼠事件；未以此宣稱完成 YouTube／Bilibili 實站驗收。
+
+成品含 25 檔；SHA-256：`694d642fb356b76a5e7a726fdf5d5854f21966c4e0f468923c90e9baf3225244`（相對路徑依大小寫排序，各檔 path + NUL + bytes + NUL）。本機證據：`work/qa-091-native-rate/`、`work/qa-075-main-qa091-final-built/results.json`。
+
+<details>
+<summary>2026-10-29 歷史驗證</summary>
+
 # VideoSpeed 1.0.0 發布驗證
 
 2026-10-29。維持版本與下載檔名，更新本機修正並覆蓋既有發布檔。
@@ -396,6 +475,16 @@ YouTube 正片使用目前影片的 `yt:影片ID`，由同一個 content 工作�
 `Extension context invalidated` 涉及更新後舊頁面腳本仍使用失效的擴充 context。程式對此有停止監聽、計時器與 API 呼叫的處理，但先前持續新增錯誤的完整條件仍未重現，不能將這次事件回授修正當成該錯誤的確定答案。
 
 `An unknown error occurred when fetching the script.` 是 Chromium service worker 載入／註冊失敗；Chrome 官方也以缺少靜態 import 檔案示範此訊息。[官方說明](https://developer.chrome.com/docs/extensions/get-started/tutorial/service-worker-events#optional-debugging-the-service-worker) 當時六個本機成品副本與三種 ZIP 均完整，截圖又未提供檔名，因此沒有證據指定是哪個檔案讀取失敗。0.6.10 已改為單一 classic 背景腳本並加入成品完整性檢查；不能把減少載入依賴說成已確定那次錯誤的唯一原因。
+
+</details>
+
+</details>
+
+</details>
+
+</details>
+
+</details>
 
 </details>
 
